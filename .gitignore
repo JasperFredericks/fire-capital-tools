@@ -1,4 +1,13 @@
 *.xlsx
 __pycache__/
 *.pyc
+*.pyo
 .DS_Store
+.env
+uploads/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+

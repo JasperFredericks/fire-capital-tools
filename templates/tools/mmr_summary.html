@@ -1,0 +1,366 @@
+{% extends "base.html" %}
+{% block title %}MMR Summary Generator — FIRE Capital Tools{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <h1 class="page-title">MMR Summary Generator</h1>
+  <p class="page-subtitle">Upload a Resman MMR Excel file. A formatted Summary tab will be added and the file returned to you instantly.</p>
+</div>
+
+<!-- ── Upload card ───────────────────────────────────────────────────── -->
+<div class="card">
+
+  <div id="upload-zone" class="upload-zone" role="button" tabindex="0" aria-label="Upload MMR Excel file">
+    <input type="file" id="file-input" accept=".xlsx" aria-label="Choose .xlsx file">
+
+    <div class="upload-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775
+             5.25 5.25 0 0 1 10.338-2.32 5.25 5.25 0 0 1 5.086 5.57
+             A4.5 4.5 0 0 1 17.25 19.5H6.75Z"/>
+      </svg>
+    </div>
+    <div class="upload-title">Drop your MMR file here</div>
+    <div class="upload-hint">or click to browse &mdash; .xlsx files only, max 20&nbsp;MB</div>
+  </div>
+
+  <!-- Selected file pill -->
+  <div id="file-pill" class="file-pill" aria-live="polite">
+    <svg viewBox="0 0 20 20" fill="#2563eb" width="16" height="16" style="flex-shrink:0">
+      <path fill-rule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clip-rule="evenodd"/>
+    </svg>
+    <span id="file-name" class="file-pill-name"></span>
+    <button id="file-clear" class="file-pill-clear" aria-label="Remove file" type="button">&times;</button>
+  </div>
+
+  <!-- Inline error -->
+  <div id="error-panel" class="error-panel" role="alert" aria-live="assertive"></div>
+
+  <!-- Actions -->
+  <div class="upload-actions">
+    <button id="generate-btn" class="btn btn-primary" disabled type="button">
+      Generate Summary
+    </button>
+    <span id="spinner-wrap" style="display:none; align-items:center; gap:8px; color:#6b7280; font-size:13px;">
+      <span class="spinner" style="border-color:rgba(37,99,235,0.2); border-top-color:#2563eb;"></span>
+      Processing&hellip;
+    </span>
+  </div>
+</div>
+
+<!-- ── Results card ──────────────────────────────────────────────────── -->
+<div class="card result-panel" id="result-panel">
+  <div class="result-header">
+    <div>
+      <div class="result-property" id="res-property">&mdash;</div>
+      <div class="result-period" id="res-period"></div>
+    </div>
+    <button id="download-btn" class="btn btn-success" type="button">
+      <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+        <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
+      </svg>
+      Download Updated File
+    </button>
+  </div>
+
+  <hr class="divider">
+
+  <div class="stats-grid">
+    <div class="stat-box">
+      <div class="stat-box-label">Occupancy</div>
+      <div class="stat-box-value" id="res-occupancy">&mdash;</div>
+      <div class="stat-box-sub" id="res-units-sub"></div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Delinquency</div>
+      <div class="stat-box-value" id="res-delinquency">&mdash;</div>
+      <div class="stat-box-sub" id="res-delinquency-sub"></div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Total Rental Revenue</div>
+      <div class="stat-box-value" id="res-revenue">&mdash;</div>
+      <div class="stat-box-sub" id="res-revenue-sub"></div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Avg Rent / Unit</div>
+      <div class="stat-box-value" id="res-avg-rent">&mdash;</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Ready Units</div>
+      <div class="stat-box-value" id="res-ready">&mdash;</div>
+      <div class="stat-box-sub">available now</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Open Work Orders</div>
+      <div class="stat-box-value" id="res-wo">&mdash;</div>
+      <div class="stat-box-sub">emergency WOs</div>
+    </div>
+  </div>
+
+  <p class="result-note">Summary tab added. Download the file above to open in Excel.</p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── DOM refs ──────────────────────────────────────────────────────────
+  const zone       = document.getElementById("upload-zone");
+  const fileInput  = document.getElementById("file-input");
+  const filePill   = document.getElementById("file-pill");
+  const fileName   = document.getElementById("file-name");
+  const fileClear  = document.getElementById("file-clear");
+  const generateBtn= document.getElementById("generate-btn");
+  const spinnerWrap= document.getElementById("spinner-wrap");
+  const errorPanel = document.getElementById("error-panel");
+  const resultPanel= document.getElementById("result-panel");
+  const downloadBtn= document.getElementById("download-btn");
+
+  // Result stat elements
+  const resProperty   = document.getElementById("res-property");
+  const resPeriod     = document.getElementById("res-period");
+  const resOccupancy  = document.getElementById("res-occupancy");
+  const resUnitsSub   = document.getElementById("res-units-sub");
+  const resDelin      = document.getElementById("res-delinquency");
+  const resDelinSub   = document.getElementById("res-delinquency-sub");
+  const resRevenue    = document.getElementById("res-revenue");
+  const resRevenueSub = document.getElementById("res-revenue-sub");
+  const resAvgRent    = document.getElementById("res-avg-rent");
+  const resReady      = document.getElementById("res-ready");
+  const resWo         = document.getElementById("res-wo");
+
+  let currentFile  = null;
+  let downloadToken= null;
+
+  // ── CSRF helper ───────────────────────────────────────────────────────
+  function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute("content") : "";
+  }
+
+  // ── Number formatting ─────────────────────────────────────────────────
+  function fmtCurrency(n) {
+    if (n == null) return "—";
+    return "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  }
+  function fmtPct(n) {
+    if (n == null) return "—";
+    return Number(n).toFixed(1) + "%";
+  }
+  function fmtNum(n) {
+    if (n == null) return "—";
+    return String(n);
+  }
+
+  // ── UI state helpers ──────────────────────────────────────────────────
+  function showError(msg) {
+    errorPanel.textContent = msg;
+    errorPanel.classList.add("visible");
+  }
+  function clearError() {
+    errorPanel.textContent = "";
+    errorPanel.classList.remove("visible");
+  }
+  function setLoading(on) {
+    generateBtn.disabled = on || !currentFile;
+    spinnerWrap.style.display = on ? "flex" : "none";
+  }
+
+  // ── File selection ────────────────────────────────────────────────────
+  function selectFile(file) {
+    if (!file) return;
+    if (!file.name.endsWith(".xlsx")) {
+      showError("Please upload an .xlsx file.");
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      showError("File is too large. Max 20 MB.");
+      return;
+    }
+    clearError();
+    hideResults();
+    currentFile = file;
+    fileName.textContent = file.name;
+    filePill.classList.add("visible");
+    generateBtn.disabled = false;
+  }
+
+  function clearFile() {
+    currentFile = null;
+    fileInput.value = "";
+    filePill.classList.remove("visible");
+    fileName.textContent = "";
+    generateBtn.disabled = true;
+    clearError();
+    hideResults();
+  }
+
+  function hideResults() {
+    resultPanel.classList.remove("visible");
+    downloadToken = null;
+  }
+
+  // ── Upload zone interactions ───────────────────────────────────────────
+  zone.addEventListener("click", function (e) {
+    if (e.target === fileClear) return;
+    fileInput.click();
+  });
+
+  zone.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      fileInput.click();
+    }
+  });
+
+  fileInput.addEventListener("change", function () {
+    if (fileInput.files.length) selectFile(fileInput.files[0]);
+  });
+
+  fileClear.addEventListener("click", function (e) {
+    e.stopPropagation();
+    clearFile();
+  });
+
+  // Drag and drop
+  zone.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    zone.classList.add("drag-over");
+  });
+  zone.addEventListener("dragleave", function () {
+    zone.classList.remove("drag-over");
+  });
+  zone.addEventListener("drop", function (e) {
+    e.preventDefault();
+    zone.classList.remove("drag-over");
+    const dt = e.dataTransfer;
+    if (dt && dt.files.length) selectFile(dt.files[0]);
+  });
+
+  // ── Generate (upload + process) ───────────────────────────────────────
+  generateBtn.addEventListener("click", async function () {
+    if (!currentFile) return;
+    clearError();
+    setLoading(true);
+    hideResults();
+
+    const formData = new FormData();
+    formData.append("file", currentFile);
+
+    try {
+      const resp = await fetch("/tools/mmr-summary/upload", {
+        method: "POST",
+        headers: { "X-CSRFToken": getCsrfToken() },
+        body: formData,
+      });
+
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        throw new Error(data.error || "Upload failed. Please try again.");
+      }
+
+      downloadToken = data.token;
+      populateResults(data);
+
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  // ── Populate results ──────────────────────────────────────────────────
+  function populateResults(data) {
+    const s = data.stats || {};
+
+    resProperty.textContent  = s.property_name || data.original_name || "—";
+    resPeriod.textContent    = s.report_period  || "";
+
+    // Occupancy
+    resOccupancy.textContent = fmtPct(s.physical_occupancy_pct);
+    const occ = s.occupied_units != null && s.total_units != null
+      ? `${s.occupied_units} / ${s.total_units} units`
+      : "";
+    resUnitsSub.textContent  = occ;
+
+    // Delinquency
+    resDelin.textContent     = fmtCurrency(s.delinquency_total);
+    resDelinSub.textContent  = s.delinquency_count != null
+      ? `${s.delinquency_count} residents`
+      : "";
+
+    // Revenue
+    resRevenue.textContent   = fmtCurrency(s.total_rental_revenue);
+    resRevenueSub.textContent= s.revenue_per_unit != null
+      ? fmtCurrency(s.revenue_per_unit) + " / unit"
+      : "";
+
+    // Avg rent
+    resAvgRent.textContent   = fmtCurrency(s.avg_rent_per_unit);
+
+    // Ready units
+    resReady.textContent     = fmtNum(s.ready_units);
+
+    // Work orders
+    resWo.textContent        = fmtNum(s.emergency_wo_count);
+
+    resultPanel.classList.add("visible");
+    resultPanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  // ── Download ──────────────────────────────────────────────────────────
+  downloadBtn.addEventListener("click", async function () {
+    if (!downloadToken) return;
+
+    try {
+      const resp = await fetch(`/tools/mmr-summary/download/${downloadToken}`, {
+        method: "GET",
+        headers: { "X-CSRFToken": getCsrfToken() },
+      });
+
+      if (!resp.ok) {
+        const ct = resp.headers.get("Content-Type") || "";
+        if (ct.includes("json")) {
+          const err = await resp.json();
+          throw new Error(err.error || "Download failed.");
+        }
+        throw new Error("Download failed. Please regenerate the file.");
+      }
+
+      // Get filename from Content-Disposition header if available
+      const cd = resp.headers.get("Content-Disposition") || "";
+      const match = cd.match(/filename[^;=\n]*=["']?([^"';\n]+)["']?/);
+      const dlName = match ? match[1].trim() : (currentFile ? currentFile.name : "mmr_summary.xlsx");
+
+      const blob = await resp.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = dlName;
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      // Token is consumed — disable further downloads
+      downloadToken = null;
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = "Downloaded";
+
+    } catch (err) {
+      showError(err.message);
+    }
+  });
+
+})();
+</script>
+{% endblock %}

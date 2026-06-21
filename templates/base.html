@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <title>{% block title %}FIRE Capital Tools{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-name">FIRE Capital</div>
+      <span class="brand-tag">Tools Platform</span>
+    </div>
+
+    <nav class="sidebar-nav">
+
+      <div class="nav-section">
+        <span class="nav-section-label">Portfolio</span>
+        <a href="{{ url_for('mmr.index') }}"
+           class="nav-link {% if request.blueprint == 'mmr' %}active{% endif %}">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+            <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"/>
+            <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd"/>
+          </svg>
+          MMR Summary
+        </a>
+        <span class="nav-link disabled">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+            <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z"/>
+          </svg>
+          Property Dashboard
+          <span class="nav-badge">Soon</span>
+        </span>
+        <span class="nav-link disabled">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+            <path fill-rule="evenodd" d="M3 3a1 1 0 000 2v8a2 2 0 002 2h2.586l-1.293 1.293a1 1 0 101.414 1.414L10 15.414l2.293 2.293a1 1 0 001.414-1.414L12.414 15H15a2 2 0 002-2V5a1 1 0 100-2H3zm11 4a1 1 0 10-2 0v4a1 1 0 102 0V7zm-3 1a1 1 0 10-2 0v3a1 1 0 102 0V8zM8 9a1 1 0 00-2 0v2a1 1 0 102 0V9z" clip-rule="evenodd"/>
+          </svg>
+          Delinquency Tracker
+          <span class="nav-badge">Soon</span>
+        </span>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-section-label">Acquisitions</span>
+        <span class="nav-link disabled">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+            <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"/>
+            <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm9.707 5.707a1 1 0 00-1.414-1.414L9 12.586l-1.293-1.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+          </svg>
+          Deal Analyzer
+          <span class="nav-badge">Soon</span>
+        </span>
+        <span class="nav-link disabled">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+            <path fill-rule="evenodd" d="M6 2a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V7.414A2 2 0 0015.414 6L12 2.586A2 2 0 0010.586 2H6zm2 10a1 1 0 10-2 0v3a1 1 0 102 0v-3zm2-3a1 1 0 011 1v5a1 1 0 11-2 0v-5a1 1 0 011-1zm4-1a1 1 0 10-2 0v6a1 1 0 102 0V8z" clip-rule="evenodd"/>
+          </svg>
+          Underwriting Model
+          <span class="nav-badge">Soon</span>
+        </span>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-section-label">Markets</span>
+        <span class="nav-link disabled">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+            <path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/>
+          </svg>
+          Rent Comps
+          <span class="nav-badge">Soon</span>
+        </span>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-section-label">Investors</span>
+        <span class="nav-link disabled">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+            <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/>
+          </svg>
+          Investor Report
+          <span class="nav-badge">Soon</span>
+        </span>
+      </div>
+
+    </nav>
+
+    <div class="sidebar-footer">
+      <span class="sidebar-user">{{ current_user.id }}</span>
+      <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end; flex-shrink:0;">
+        <a href="{{ url_for('auth.change_password') }}" class="logout-btn">Change password</a>
+        <a href="{{ url_for('auth.logout') }}" class="logout-btn">Log out</a>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main content ──────────────────────────────────────── -->
+  <main class="main-content">
+    <div class="content-wrapper">
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}{% endblock %}
+
+    </div>
+  </main>
+
+</div>
+</body>
+</html>
