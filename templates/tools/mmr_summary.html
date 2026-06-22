@@ -59,7 +59,10 @@
 <div class="card result-panel" id="result-panel">
   <div class="result-header">
     <div>
-      <div class="result-property" id="res-property">&mdash;</div>
+      <div class="result-title-line">
+        <div class="result-property" id="res-property">&mdash;</div>
+        <span class="source-badge source-badge-unknown" id="res-source-system">Unrecognized Format</span>
+      </div>
       <div class="result-period" id="res-period"></div>
     </div>
     <button id="download-btn" class="btn btn-success" type="button">
@@ -125,6 +128,7 @@
 
   // Result stat elements
   const resProperty   = document.getElementById("res-property");
+  const resSource     = document.getElementById("res-source-system");
   const resPeriod     = document.getElementById("res-period");
   const resOccupancy  = document.getElementById("res-occupancy");
   const resUnitsSub   = document.getElementById("res-units-sub");
@@ -283,6 +287,15 @@
 
     resProperty.textContent  = s.property_name || data.original_name || "—";
     resPeriod.textContent    = s.report_period  || "";
+    const sourceSystem = s.source_system || "Unrecognized Format";
+    resSource.textContent = sourceSystem;
+    resSource.className = "source-badge " + (
+      sourceSystem === "Resman"
+        ? "source-badge-resman"
+        : sourceSystem === "Placeholder(Maple)"
+          ? "source-badge-maple"
+          : "source-badge-unknown"
+    );
 
     // Occupancy
     resOccupancy.textContent = fmtPct(s.physical_occupancy_pct);

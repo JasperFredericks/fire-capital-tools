@@ -49,6 +49,10 @@ parse_expiring_leases = _gs.parse_expiring_leases
 parse_prospect_sources = _gs.parse_prospect_sources
 parse_work_orders     = _gs.parse_work_orders
 build_summary         = _gs.build_summary
+detect_source_system  = _gs.detect_source_system
+default_box_score     = _gs.default_box_score
+extract_placeholder_box_score = _gs.extract_placeholder_box_score
+parse_maple           = _gs.parse_maple
 
 import openpyxl  # already required by generate_summary
 
@@ -60,23 +64,44 @@ def process_mmr(filepath: Path) -> dict:
     key stats as a plain dict for JSON serialisation.
     """
     wb = openpyxl.load_workbook(str(filepath), data_only=True)
+    source_system = detect_source_system(wb)
+    if source_system == "Unrecognized Format":
+        print("WARNING: Workbook format is not recognized. Summary will contain placeholder values.")
 
-    required = {
-        "Box Score", "Delinquency", "Rent Roll",
-        "Available Units", "Expiring Leases",
-        "Prospect Source Summary", "Work Order Summary",
-    }
-    missing = required - set(wb.sheetnames)
-    if missing:
-        raise ValueError(f"Missing required tabs: {', '.join(sorted(missing))}")
+    if source_system == "Resman":
+        required = {
+            "Box Score", "Delinquency", "Rent Roll",
+            "Available Units", "Expiring Leases",
+            "Prospect Source Summary", "Work Order Summary",
+        }
+        missing = required - set(wb.sheetnames)
+        if missing:
+            raise ValueError(f"Missing required tabs: {', '.join(sorted(missing))}")
 
-    bs = parse_box_score(wb["Box Score"])
-    dl = parse_delinquency(wb["Delinquency"])
-    rr = parse_rent_roll(wb["Rent Roll"], bs["occupied"])
-    au = parse_available_units(wb["Available Units"])
-    el = parse_expiring_leases(wb["Expiring Leases"], bs["date_range"])
-    ps = parse_prospect_sources(wb["Prospect Source Summary"])
-    wo = parse_work_orders(wb["Work Order Summary"])
+        bs = parse_box_score(wb["Box Score"])
+        dl = parse_delinquency(wb["Delinquency"])
+        rr = parse_rent_roll(wb["Rent Roll"], bs["occupied"])
+        au = parse_available_units(wb["Available Units"])
+        el = parse_expiring_leases(wb["Expiring Leases"], bs["date_range"])
+        ps = parse_prospect_sources(wb["Prospect Source Summary"])
+        wo = parse_work_orders(wb["Work Order Summary"])
+    elif source_system == "Placeholder(Maple)":
+        maple = parse_maple(wb)
+        bs = maple["box_score"]
+        dl = maple["delinquency"]
+        rr = maple["rent_roll"]
+        au = maple["available_units"]
+        el = maple["expiring_leases"]
+        ps = maple["prospect_sources"]
+        wo = maple["work_orders"]
+    else:
+        bs = extract_placeholder_box_score(wb, source_system)
+        dl = {"total": 0.0}
+        rr = {"total_rental": 0.0, "avg_rent": 0.0}
+        au = {"ready_units": [], "prelease_count": 0}
+        el = []
+        ps = {}
+        wo = {"work_orders": [], "issue_counts": {}}
 
     data = {
         "box_score":        bs,
@@ -86,27 +111,33 @@ def process_mmr(filepath: Path) -> dict:
         "expiring_leases":  el,
         "prospect_sources": ps,
         "work_orders":      wo,
+        "source_system":    source_system,
     }
 
     build_summary(wb, data)
     wb.save(str(filepath))
 
-    total_units = bs["total_units"]
+    total_units  = bs["total_units"]
     total_rental = round(float(rr["total_rental"]), 2)
 
+    # Return real stats for both Resman and Maple Valley; show dashes only for
+    # truly unrecognized formats where we have no data.
+    has_stats = source_system in ("Resman", "Placeholder(Maple)")
+
     return {
-        "property_name":         bs["property_name"],
-        "report_period":         bs["date_range"],
-        "total_units":           total_units,
-        "occupied_units":        bs["occupied"],
-        "physical_occupancy_pct": round(bs["pct_occ"] * 100, 1),
-        "delinquency_total":     round(float(dl["total"]), 2),
-        "delinquency_count":     dl.get("count"),
-        "total_rental_revenue":  total_rental,
-        "revenue_per_unit":      round(total_rental / total_units, 2) if total_units else None,
-        "avg_rent_per_unit":     round(float(rr["avg_rent"]), 2),
-        "ready_units":           len(au["ready_units"]),
-        "emergency_wo_count":    len(wo["work_orders"]),
+        "property_name":          bs["property_name"],
+        "report_period":          bs["date_range"],
+        "source_system":          source_system,
+        "total_units":            total_units,
+        "occupied_units":         bs["occupied"],
+        "physical_occupancy_pct": round(bs["pct_occ"] * 100, 1) if has_stats else None,
+        "delinquency_total":      round(float(dl["total"]), 2) if has_stats else None,
+        "delinquency_count":      dl.get("count"),
+        "total_rental_revenue":   total_rental if has_stats else None,
+        "revenue_per_unit":       round(total_rental / total_units, 2) if has_stats and total_units else None,
+        "avg_rent_per_unit":      round(float(rr["avg_rent"]), 2) if has_stats else None,
+        "ready_units":            len(au["ready_units"]) if has_stats else None,
+        "emergency_wo_count":     len(wo["work_orders"]) if has_stats else None,
     }
 
 # ── Upload folder helpers ──────────────────────────────────────────────────
