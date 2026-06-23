@@ -400,7 +400,7 @@ def find_first_text(wb, predicate, max_rows=30, max_cols=12):
 def detect_resman(wb):
     """
     Detect ResMan exports using high-confidence sheet and header fingerprints.
-    Rent Roll and Delinquency alone are not enough because Maple/AppFolio exports
+    Rent Roll and Delinquency alone are not enough because Maple/Appfolio exports
     can use those same sheet names.
     """
     sheetnames = set(wb.sheetnames)
@@ -430,8 +430,8 @@ def detect_resman(wb):
     return has_resman_anchor and fingerprints >= 2
 
 
-def detect_maple(wb):
-    """Detect the Maple Valley/AppFolio-style placeholder workbook."""
+def detect_appfolio(wb):
+    """Detect the Maple Valley/Appfolio-style workbook."""
     sheetnames = set(wb.sheetnames)
     expected_sheets = {
         "Cash Flow", "Work Order", "Tenant Tickler", "Vacancy",
@@ -477,22 +477,22 @@ def detect_maple(wb):
 def detect_source_system(wb):
     if detect_resman(wb):
         return "Resman"
-    if detect_maple(wb):
-        return "Placeholder(Maple)"
+    if detect_appfolio(wb):
+        return "Appfolio"
     return "Unrecognized Format"
 
 
 def source_system_display(source_system):
     if source_system == "Resman":
         return "✓ Resman Format", GREEN, PALE_GREEN
-    if source_system == "Placeholder(Maple)":
-        return "⚠ Placeholder(Maple) Format", AMBER, PALE_AMBER
+    if source_system == "Appfolio":
+        return "⚠ Appfolio Format", AMBER, PALE_AMBER
     return "✗ Unrecognized Format", RED, PALE_RED
 
 
-def extract_placeholder_box_score(wb, source_system):
+def extract_appfolio_box_score(wb, source_system):
     bs = default_box_score()
-    if source_system == "Placeholder(Maple)":
+    if source_system == "Appfolio":
         prop = find_first_text(
             wb,
             lambda t: "Maple Valley Apartments" in t,
@@ -1123,9 +1123,14 @@ _EMERGENCY_WO_PATTERNS = [
         r"\bdrip(?:ping|s)?\b",
     ]),
     ("Fire/Smoke", [
-        r"\bfire\b",
-        r"\bsmoke\b",
-        r"\balarm\b",
+        r"\bactive\s+fire\b",
+        r"\bon\s+fire\b",
+        r"\bfire\s+(?:in|inside|at|coming|started|burning)\b",
+        r"\b(?:fire|smoke)\s+(?:alarm|detector)s?\s+(?:is\s+|are\s+|was\s+|were\s+|keeps?\s+|keep\s+)?(?:going\s+off|went\s+off|ringing|beeping|sounding|trigger(?:ed|ing)|activated)\b",
+        r"\b(?:smell(?:s|ing)?|odor(?:s)?)\s+(?:like\s+)?smoke\b",
+        r"\bsmoke\s+(?:smell|odor|coming|visible|inside|in)\b",
+        r"\bsomething\s+(?:is\s+)?burning\b",
+        r"\bburning\s+(?:smell|odor)\b",
     ]),
     ("Broken Windows", [
         r"\bwindows?\b",
@@ -1154,6 +1159,23 @@ def wo_matches(text, patterns):
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
 
 
+def is_broken_appliance_emergency(order, text):
+    source_category = str(order.get("source_category") or order.get("category") or "").lower()
+    if "appliance" in source_category:
+        return True
+
+    appliance = r"(?:fridge|refrigerator|stove|washer|dryer|dishwasher|oven|appliance)"
+    issue = (
+        r"(?:not working|won't|wont|doesn't|doesnt|broken|damaged|leak(?:ing)?|"
+        r"repair|replace|out|stopped|isn[’']?t draining|is not draining|"
+        r"not draining|won't drain|wont drain|doesn[’']?t drain|doesnt drain)"
+    )
+    return wo_matches(text, [
+        rf"\b{appliance}s?\b.{{0,60}}\b{issue}\b",
+        rf"\b{issue}\b.{{0,60}}\b{appliance}s?\b",
+    ])
+
+
 def classify_emergency_work_order(order):
     text = " ".join(
         str(order.get(key) or "")
@@ -1167,6 +1189,8 @@ def classify_emergency_work_order(order):
             continue
         if category == "Broken Doors" and wo_matches(text, [r"\bblinds?\b", r"\bscreens?\b"]):
             return None
+        if category == "Broken Appliances" and not is_broken_appliance_emergency(order, text):
+            continue
         return category
     return None
 
@@ -1715,6 +1739,13 @@ def make_download_filename(property_name: str, date_range: str, printed: str = "
     """Return e.g. 'OXPT Summary 06.22.26.xlsx' from property name + date range."""
     pn = (property_name or "").strip()
     pn_lower = pn.lower()
+    range_text = str(date_range or "")
+    range_lower = range_text.lower()
+    is_appfolio_range = (
+        "maple valley" in pn_lower
+        or (" to " in range_lower and "trailing" in range_lower)
+        or range_lower.startswith("period range:")
+    )
 
     abbrev = None
     for key, val in _PROPERTY_ABBREVS.items():
@@ -1726,41 +1757,49 @@ def make_download_filename(property_name: str, date_range: str, printed: str = "
         words = pn.split()
         abbrev = words[1] if words and words[0].lower() == "the" and len(words) > 1 else (words[0] if words else "Property")
 
-    date_str = ""
-    if printed:
-        clean_printed = str(printed).replace("Printed", "").replace("Exported On:", "").strip()
+    def parse_printed_date(value):
+        clean_printed = str(value or "").replace("Printed", "").replace("Exported On:", "").strip()
         date_match = re.search(r"\d{1,2}/\d{1,2}/\d{4}", clean_printed)
         if date_match:
-            try:
-                dt = datetime.strptime(date_match.group(0), "%m/%d/%Y")
-                date_str = dt.strftime("%m.%d.%y")
-            except Exception:
-                pass
-    if date_range:
-        # Resman format: "6/14/2026 - 6/21/2026"
-        if not date_str:
-            try:
-                end_str = date_range.split(" - ")[-1].strip()
-                dt = datetime.strptime(end_str, "%m/%d/%Y")
-                date_str = dt.strftime("%m.%d.%y")
-            except Exception:
-                pass
-        # AppFolio/Maple format: "Period Range: Mar 2026 to May 2026 (Trailing...)"
-        if not date_str:
-            try:
-                import re as _re
-                import calendar as _cal
-                m = _re.search(r"to\s+([A-Za-z]+\s+\d{4})", date_range)
-                if m:
-                    dt = datetime.strptime(m.group(1).strip(), "%b %Y")
-                    last_day = _cal.monthrange(dt.year, dt.month)[1]
-                    date_str = dt.replace(day=last_day).strftime("%m.%d.%y")
-            except Exception:
-                pass
+            return datetime.strptime(date_match.group(0), "%m/%d/%Y")
+        return None
 
-    if date_str:
-        return f"{abbrev} Summary {date_str}.xlsx"
-    return f"{abbrev} Summary.xlsx"
+    def parse_resman_range_end(value):
+        end_str = str(value or "").split(" - ")[-1].strip()
+        return datetime.strptime(end_str, "%m/%d/%Y")
+
+    def parse_appfolio_range_end(value):
+        import calendar as _cal
+        match = re.search(r"to\s+([A-Za-z]+\s+\d{4})", str(value or ""))
+        if not match:
+            return None
+        month_label = match.group(1).strip()
+        for fmt in ("%b %Y", "%B %Y"):
+            try:
+                dt = datetime.strptime(month_label, fmt)
+                last_day = _cal.monthrange(dt.year, dt.month)[1]
+                return dt.replace(day=last_day)
+            except ValueError:
+                pass
+        return None
+
+    dt = None
+    for parser, value in (
+        (parse_printed_date, printed),
+        (parse_resman_range_end, None if is_appfolio_range else range_text),
+        (parse_appfolio_range_end, None if not is_appfolio_range else range_text),
+    ):
+        if dt is not None or not value:
+            continue
+        try:
+            dt = parser(value)
+        except Exception:
+            dt = None
+
+    if dt is None:
+        dt = datetime.now()
+
+    return f"{abbrev} Summary {dt.strftime('%m.%d.%y')}.xlsx"
 
 
 def build_summary(wb, data):
@@ -1937,9 +1976,9 @@ def default_box_score():
     }
 
 
-def parse_maple(wb):
+def parse_appfolio(wb):
     """
-    Parse an AppFolio-style Maple Valley MMR workbook and return a data dict
+    Parse an Appfolio-style Maple Valley MMR workbook and return a data dict
     whose structure exactly matches the format expected by build_summary() and
     process_mmr():  box_score / delinquency / rent_roll / available_units /
     expiring_leases / prospect_sources / work_orders.
@@ -2186,16 +2225,16 @@ def main():
         for k, v in wo["issue_counts"].items():
             if v:
                 print(f"    {k}: {v}")
-    elif source_system == "Placeholder(Maple)":
-        print("Maple Valley / AppFolio format detected — parsing available data ...")
-        maple = parse_maple(wb)
-        bs = maple["box_score"]
-        dl = maple["delinquency"]
-        rr = maple["rent_roll"]
-        au = maple["available_units"]
-        el = maple["expiring_leases"]
-        ps = maple["prospect_sources"]
-        wo = maple["work_orders"]
+    elif source_system == "Appfolio":
+        print("Appfolio format detected — parsing available data ...")
+        appfolio = parse_appfolio(wb)
+        bs = appfolio["box_score"]
+        dl = appfolio["delinquency"]
+        rr = appfolio["rent_roll"]
+        au = appfolio["available_units"]
+        el = appfolio["expiring_leases"]
+        ps = appfolio["prospect_sources"]
+        wo = appfolio["work_orders"]
         print(f"  Property  : {bs['property_name']}")
         print(f"  Period    : {bs['date_range']}")
         print(f"  Occupancy : {bs['occupied']}/{bs['total_units']} units  ({fmt_pct(bs['pct_occ'])})")
@@ -2204,7 +2243,7 @@ def main():
         print(f"  Ready Units : {len(au['ready_units'])}")
         print(f"  Emergency WOs: {len(wo['work_orders'])}")
     else:
-        bs = extract_placeholder_box_score(wb, source_system)
+        bs = extract_appfolio_box_score(wb, source_system)
         dl = {"total": 0.0}
         rr = {"total_rental": 0.0, "avg_rent": 0.0}
         au = {"ready_units": [], "prelease_count": 0}

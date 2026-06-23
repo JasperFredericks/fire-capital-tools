@@ -51,8 +51,8 @@ parse_work_orders     = _gs.parse_work_orders
 build_summary         = _gs.build_summary
 detect_source_system  = _gs.detect_source_system
 default_box_score     = _gs.default_box_score
-extract_placeholder_box_score = _gs.extract_placeholder_box_score
-parse_maple              = _gs.parse_maple
+extract_appfolio_box_score = _gs.extract_appfolio_box_score
+parse_appfolio           = _gs.parse_appfolio
 make_download_filename   = _gs.make_download_filename
 
 import openpyxl  # already required by generate_summary
@@ -86,17 +86,17 @@ def process_mmr(filepath: Path) -> dict:
         el = parse_expiring_leases(wb["Expiring Leases"], bs["date_range"])
         ps = parse_prospect_sources(wb["Prospect Source Summary"])
         wo = parse_work_orders(wb["Work Order Summary"])
-    elif source_system == "Placeholder(Maple)":
-        maple = parse_maple(wb)
-        bs = maple["box_score"]
-        dl = maple["delinquency"]
-        rr = maple["rent_roll"]
-        au = maple["available_units"]
-        el = maple["expiring_leases"]
-        ps = maple["prospect_sources"]
-        wo = maple["work_orders"]
+    elif source_system == "Appfolio":
+        appfolio = parse_appfolio(wb)
+        bs = appfolio["box_score"]
+        dl = appfolio["delinquency"]
+        rr = appfolio["rent_roll"]
+        au = appfolio["available_units"]
+        el = appfolio["expiring_leases"]
+        ps = appfolio["prospect_sources"]
+        wo = appfolio["work_orders"]
     else:
-        bs = extract_placeholder_box_score(wb, source_system)
+        bs = extract_appfolio_box_score(wb, source_system)
         dl = {"total": 0.0}
         rr = {"total_rental": 0.0, "avg_rent": 0.0}
         au = {"ready_units": [], "prelease_count": 0}
@@ -121,9 +121,9 @@ def process_mmr(filepath: Path) -> dict:
     total_units  = bs["total_units"]
     total_rental = round(float(rr["total_rental"]), 2)
 
-    # Return real stats for both Resman and Maple Valley; show dashes only for
+    # Return real stats for both Resman and Appfolio; show dashes only for
     # truly unrecognized formats where we have no data.
-    has_stats = source_system in ("Resman", "Placeholder(Maple)")
+    has_stats = source_system in ("Resman", "Appfolio")
 
     return {
         "property_name":          bs["property_name"],
