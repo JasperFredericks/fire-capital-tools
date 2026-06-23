@@ -52,7 +52,8 @@ build_summary         = _gs.build_summary
 detect_source_system  = _gs.detect_source_system
 default_box_score     = _gs.default_box_score
 extract_placeholder_box_score = _gs.extract_placeholder_box_score
-parse_maple           = _gs.parse_maple
+parse_maple              = _gs.parse_maple
+make_download_filename   = _gs.make_download_filename
 
 import openpyxl  # already required by generate_summary
 
@@ -138,6 +139,7 @@ def process_mmr(filepath: Path) -> dict:
         "avg_rent_per_unit":      round(float(rr["avg_rent"]), 2) if has_stats else None,
         "ready_units":            len(au["ready_units"]) if has_stats else None,
         "emergency_wo_count":     len(wo["work_orders"]) if has_stats else None,
+        "download_name":          make_download_filename(bs["property_name"], bs["date_range"]),
     }
 
 # ── Upload folder helpers ──────────────────────────────────────────────────
@@ -212,7 +214,7 @@ def upload():
         oldest = next(iter(pending))
         (save_path.parent / f"{oldest}.xlsx").unlink(missing_ok=True)
         del pending[oldest]
-    pending[token] = original_name
+    pending[token] = stats.get("download_name") or original_name
     session["pending_downloads"] = pending
     session.modified = True
 
