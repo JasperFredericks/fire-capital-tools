@@ -33,8 +33,8 @@ def create_app(config_class: type = Config) -> Flask:
     # ── User loader ────────────────────────────────────────────────────────
     @login_manager.user_loader
     def load_user(user_id: str) -> User | None:
-        if user_id == app.config["ADMIN_USERNAME"]:
-            return User(user_id)
+        if User.matches_configured_user(user_id, app.config):
+            return User(User.admin_username(app.config))
         return None
 
     # ── Blueprints ─────────────────────────────────────────────────────────
