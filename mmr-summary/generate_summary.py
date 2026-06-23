@@ -1114,6 +1114,14 @@ _EMERGENCY_WO_PATTERNS = [
         r"\bheat\b",
         r"\bventilation\b",
         r"\bair condition(?:er|ing)?\b",
+        r"\bthermostat\b",
+        r"\bnot cooling\b",
+        r"\bblowing warm\b",
+    ]),
+    ("Water Heater", [
+        r"\bno hot water\b",
+        r"\bhot water heater\b",
+        r"\bwater heater\s+(?:is\s+)?(?:out|not working|broken|failed|leaking|dead)\b",
     ]),
     ("Water Leak", [
         r"\bleak(?:ing|s)?\b",
@@ -1121,6 +1129,16 @@ _EMERGENCY_WO_PATTERNS = [
         r"\bplumbing\b",
         r"\bflood(?:ing)?\b",
         r"\bdrip(?:ping|s)?\b",
+        r"\bclog(?:ged)?\b",
+        r"\bsewage\b",
+        r"\bback(?:ing)?\s+up\b",
+        r"\btoilet tank\b",
+        r"\btoilet is running\b",
+        r"\btoilet.*not.*refill\b",
+        r"\bnot draining\b",
+        r"\bnot containable\b",
+        r"\bconstant flow\b",
+        r"\bwasher hookup\b",
     ]),
     ("Fire/Smoke", [
         r"\bactive\s+fire\b",
@@ -1131,12 +1149,17 @@ _EMERGENCY_WO_PATTERNS = [
         r"\bsmoke\s+(?:smell|odor|coming|visible|inside|in)\b",
         r"\bsomething\s+(?:is\s+)?burning\b",
         r"\bburning\s+(?:smell|odor)\b",
+        r"\bdryer vent\b",
+        r"\bfire hazard\b",
     ]),
     ("Broken Windows", [
         r"\bwindows?\b",
     ]),
     ("Broken Doors", [
         r"\bdoors?\b",
+        r"\boff (?:the )?hinges?\b",
+        r"\bcoming off (?:the )?hinges?\b",
+        r"\bcannot secure\b",
     ]),
     ("Broken Appliances", [
         r"\bfridge\b",
@@ -1147,10 +1170,17 @@ _EMERGENCY_WO_PATTERNS = [
         r"\bdishwasher\b",
         r"\boven\b",
         r"\bappliance(?:s)?\b",
+        r"\bsink\b",
+        r"\bfaucet\b",
     ]),
     ("Mold/Mildew", [
         r"\bmold\b",
         r"\bmildew\b",
+        r"\bblack mold\b",
+    ]),
+    ("Structural", [
+        r"\bdetached from (?:the )?wall\b",
+        r"\balmost detached\b",
     ]),
 ]
 
@@ -1161,14 +1191,26 @@ def wo_matches(text, patterns):
 
 def is_broken_appliance_emergency(order, text):
     source_category = str(order.get("source_category") or order.get("category") or "").lower()
+    issue_type = str(order.get("issue_type") or "").lower()
+
     if "appliance" in source_category:
         return True
 
-    appliance = r"(?:fridge|refrigerator|stove|washer|dryer|dishwasher|oven|appliance)"
+    # Work Order Issue column directly naming a known appliance is sufficient
+    _KNOWN_APPLIANCES = {
+        "stove", "washer", "dryer", "dishwasher",
+        "refrigerator", "fridge", "oven", "microwave",
+        "freezer",
+    }
+    if any(name in issue_type for name in _KNOWN_APPLIANCES):
+        return True
+
+    appliance = r"(?:fridge|refrigerator|stove|washer|dryer|dishwasher|oven|appliance|sink|faucet)"
     issue = (
-        r"(?:not working|won't|wont|doesn't|doesnt|broken|damaged|leak(?:ing)?|"
-        r"repair|replace|out|stopped|isn[’']?t draining|is not draining|"
-        r"not draining|won't drain|wont drain|doesn[’']?t drain|doesnt drain)"
+        r"(?:not working|won’t|wont|doesn’t|doesnt|broken|damaged|leak(?:ing)?|"
+        r"repair|replace|out|stopped|isn[‘’]?t draining|is not draining|"
+        r"not draining|won’t drain|wont drain|doesn[‘’]?t drain|doesnt drain|"
+        r"not turning on|not turn on|detached from)"
     )
     return wo_matches(text, [
         rf"\b{appliance}s?\b.{{0,60}}\b{issue}\b",
@@ -1179,14 +1221,39 @@ def is_broken_appliance_emergency(order, text):
 def classify_emergency_work_order(order):
     text = " ".join(
         str(order.get(key) or "")
-        for key in ("source_category", "category", "description", "notes")
+        for key in ("source_category", "category", "description", "notes", "issue_type")
     ).lower()
+
+    # Work Order Issue column is the highest-precision signal for certain categories.
+    # Check it directly before any keyword matching to avoid false positives from
+    # incidental mentions in description text (e.g. tenant mentioning water heater
+    # as one of several things they checked when the real issue is noise).
+    _ISSUE_TYPE_OVERRIDES = {
+        "water heater":     "Water Heater",
+        "hot water heater": "Water Heater",
+        "mold/mildew":      "Mold/Mildew",
+        "mold":             "Mold/Mildew",
+    }
+    issue_type_val = str(order.get("issue_type") or "").strip().lower()
+    if issue_type_val in _ISSUE_TYPE_OVERRIDES:
+        return _ISSUE_TYPE_OVERRIDES[issue_type_val]
+
+    # Mold/mildew bypasses the non-emergency filter — incidental words like
+    # "carpet" in the description must not suppress a genuine mold WO.
+    mold_patterns = next(p for c, p in _EMERGENCY_WO_PATTERNS if c == "Mold/Mildew")
+    if wo_matches(text, mold_patterns):
+        return "Mold/Mildew"
+
     if wo_matches(text, _NON_EMERGENCY_WO_PATTERNS):
         return None
 
     for category, patterns in _EMERGENCY_WO_PATTERNS:
+        if category == "Mold/Mildew":
+            continue  # already handled above
         if not wo_matches(text, patterns):
             continue
+        if category == "Broken Windows" and wo_matches(text, [r"\bscreens?\b"]):
+            continue  # screen replacements are not emergency broken windows
         if category == "Broken Doors" and wo_matches(text, [r"\bblinds?\b", r"\bscreens?\b"]):
             return None
         if category == "Broken Appliances" and not is_broken_appliance_emergency(order, text):
@@ -2077,20 +2144,21 @@ def parse_appfolio(wb):
              "in progress", "waiting on parts", "estimate"}
     if "Work Order" in wb.sheetnames:
         header_seen = False
-        s_col = wo_type_col = wo_num_col = unit_col = desc_col = notes_col = created_col = None
+        s_col = wo_type_col = wo_num_col = unit_col = desc_col = notes_col = created_col = issue_col = None
         for row in wb["Work Order"].iter_rows(min_row=1, max_row=2000, values_only=True):
             if not header_seen:
                 if row[0] == "Property":
                     header_seen = True
                     for idx, v in enumerate(row):
                         sv = str(v or "")
-                        if sv == "Status":           s_col       = idx
-                        elif sv == "Work Order Type": wo_type_col = idx
-                        elif sv == "Work Order Number": wo_num_col = idx
-                        elif sv == "Job Description": desc_col    = idx
+                        if sv == "Status":             s_col       = idx
+                        elif sv == "Work Order Type":  wo_type_col = idx
+                        elif sv == "Work Order Number":wo_num_col  = idx
+                        elif sv == "Job Description":  desc_col    = idx
                         elif sv == "Instructions":     notes_col   = idx
-                        elif sv == "Unit":            unit_col    = idx
-                        elif sv == "Created At":      created_col = idx
+                        elif sv == "Unit":             unit_col    = idx
+                        elif sv == "Created At":       created_col = idx
+                        elif sv == "Work Order Issue": issue_col   = idx
                     s_col       = s_col       or 7
                     wo_type_col = wo_type_col or 2
                     wo_num_col  = wo_num_col  or 4
@@ -2098,6 +2166,7 @@ def parse_appfolio(wb):
                     notes_col   = notes_col   or 6
                     unit_col    = unit_col    or 9
                     created_col = created_col or 11
+                    issue_col   = issue_col   if issue_col is not None else 26
                 continue
             if not (row[0] and "Maple Valley" in str(row[0] or "")):
                 continue
@@ -2105,13 +2174,14 @@ def parse_appfolio(wb):
             if status in _OPEN:
                 wo_type = str(row[wo_type_col] or "").strip()
                 wo_list.append({
-                    "number":   str(row[wo_num_col] or "").strip(),
-                    "location": str(row[unit_col]   or "").strip(),
-                    "reported": row[created_col] if created_col is not None and len(row) > created_col else None,
-                    "category": wo_type,
-                    "description": str(row[desc_col] or "").strip() if desc_col is not None and len(row) > desc_col else "",
-                    "notes": str(row[notes_col] or "").strip() if notes_col is not None and len(row) > notes_col else "",
-                    "status":   status,
+                    "number":     str(row[wo_num_col] or "").strip(),
+                    "location":   str(row[unit_col]   or "").strip(),
+                    "reported":   row[created_col] if created_col is not None and len(row) > created_col else None,
+                    "category":   wo_type,
+                    "description":str(row[desc_col]   or "").strip() if desc_col is not None and len(row) > desc_col else "",
+                    "notes":      str(row[notes_col]  or "").strip() if notes_col is not None and len(row) > notes_col else "",
+                    "issue_type": str(row[issue_col]  or "").strip() if len(row) > issue_col else "",
+                    "status":     status,
                 })
 
         filtered_wo_list = []
@@ -2242,6 +2312,9 @@ def main():
         print(f"  Total Rental: ${rr['total_rental']:,.2f}   Avg Rent: ${rr['avg_rent']:,.2f}")
         print(f"  Ready Units : {len(au['ready_units'])}")
         print(f"  Emergency WOs: {len(wo['work_orders'])}")
+        for w in wo["work_orders"]:
+            src = w.get("source_category") or w.get("issue_type") or ""
+            print(f"    {w['number']:12s} -> {w['category']:<22s} | issue_type={src}")
     else:
         bs = extract_appfolio_box_score(wb, source_system)
         dl = {"total": 0.0}
