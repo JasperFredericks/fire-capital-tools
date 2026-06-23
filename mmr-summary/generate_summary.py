@@ -420,19 +420,22 @@ def parse_box_score(ws):
         row_norms = [norm(h) for h in row]
         if "unit type" not in row_norms or "total units" not in row_norms:
             continue
-        c_units = find_col(row, "total units")
-        c_occ   = find_col(row, "occ", "occupied")
-        c_pct   = find_col(row, "% occ", "% occupied", "occ %", "pct occ", "% occ.")
+        c_units    = find_col(row, "total units")
+        c_occ      = find_col(row, "occ", "occupied")
+        c_pct      = find_col(row, "% occ", "% occupied", "occ %", "pct occ", "% occ.")
+        c_prelease = find_col(row, "vacant pre-leased", "vacant preleased",
+                              "pre-leased", "preleased", "pre leased")
         if c_units is None or c_occ is None:
             continue
         for trow in rows[i + 1:]:
             units_val = coerce_num(safe_get(trow, c_units), default=None)
             if norm(safe_get(trow, 0)) == "total" and units_val is not None:
-                total_units = int(units_val)
-                occupied    = int(coerce_num(safe_get(trow, c_occ),   default=0))
-                raw_pct     = safe_get(trow, c_pct) if c_pct is not None else None
-                pct         = coerce_pct(raw_pct)
-                pct_occ     = pct if pct is not None else (occupied / total_units if total_units else 0.0)
+                total_units    = int(units_val)
+                occupied       = int(coerce_num(safe_get(trow, c_occ), default=0))
+                raw_pct        = safe_get(trow, c_pct) if c_pct is not None else None
+                pct            = coerce_pct(raw_pct)
+                pct_occ        = pct if pct is not None else (occupied / total_units if total_units else 0.0)
+                prelease_count = int(coerce_num(safe_get(trow, c_prelease), default=0)) if c_prelease is not None else None
                 found_occ_table = True
                 break
         if found_occ_table:
@@ -440,6 +443,7 @@ def parse_box_score(ws):
 
     if not found_occ_table:
         print("WARNING: Occupancy table not found in Box Score.")
+        prelease_count = None
 
     vacant = total_units - occupied
 
@@ -501,18 +505,19 @@ def parse_box_score(ws):
             break
 
     return {
-        "property_name": prop_name,
-        "date_range":    date_range,
-        "printed":       printed,
-        "total_units":   total_units,
-        "occupied":      occupied,
-        "vacant":        vacant,
-        "pct_occ":       pct_occ,
-        "on_notice":     on_notice,
-        "applied":       applied,
-        "approved":      approved,
-        "signed":        signed,
-        "proj_occ":      proj_occ[:20],
+        "property_name":   prop_name,
+        "date_range":      date_range,
+        "printed":         printed,
+        "total_units":     total_units,
+        "occupied":        occupied,
+        "vacant":          vacant,
+        "pct_occ":         pct_occ,
+        "prelease_count":  prelease_count,   # from Box Score "Vacant Pre-Leased" column
+        "on_notice":       on_notice,
+        "applied":         applied,
+        "approved":        approved,
+        "signed":          signed,
+        "proj_occ":        proj_occ[:20],
     }
 
 
@@ -754,12 +759,9 @@ def parse_available_units(ws):
                     "status":  str(sval or "").strip(),
                 })
 
-    # Ready: normalized status == "ready", from physically vacant sections only
-    # "Not Ready" and "Not Ready *" both normalize to something != "ready"
-    ready_units = [
-        u for u in all_units
-        if is_ready_status(u["status"]) and u["section"] in _VACANT_SECTIONS
-    ]
+    # Ready: normalized status == "ready", across ALL sections
+    # (Vacant, Notice to Vacate, Vacant PreLeased, Notice To Vacate PreLeased)
+    ready_units = [u for u in all_units if is_ready_status(u["status"])]
     prelease_count = sum(1 for u in all_units if u["section"] in _PRELEASE_SECTIONS)
 
     return {"ready_units": ready_units, "prelease_count": prelease_count}
@@ -1012,21 +1014,23 @@ def parse_work_orders(ws):
                 "status":      current_status,
             })
 
-    # Keyword classification
-    KEYWORDS = {
-        "Water Leak":  ["leak", "water damage", "drip"],
-        "HVAC/AC":     ["hvac", " ac ", "a/c", "ac leak", "air filter", "heating",
-                        "ventilation", "air condition"],
-        "Broken":      ["broken", "broke ", "came off", "off the hinge", "fell off"],
-        "Mold/Mildew": ["mold", "mildew"],
-        "Fire":        ["fire"],
-    }
-    issue_counts = {k: 0 for k in KEYWORDS}
+    # Priority-ordered keyword classification — first match wins
+    KEYWORDS = [
+        ("HVAC/AC",     ["hvac", "a/c", " ac ", "heating", "ventilation",
+                         "air condition", " heat "]),
+        ("Water Leak",  ["leak", "water", "plumbing", "flood", "drip"]),
+        ("Mold/Mildew", ["mold", "mildew", "fungus"]),
+        ("Fire",        ["fire", "smoke", "alarm"]),
+        ("Broken",      ["broken", "damaged", "won't", "not working",
+                         "not turn on", "door", "blind", "appliance"]),
+    ]
+    issue_counts = {k: 0 for k, _ in KEYWORDS}
     for wo in work_orders:
         text = f"{wo['description']} {wo['category']}".lower()
-        for issue, kws in KEYWORDS.items():
+        for issue, kws in KEYWORDS:
             if any(k in text for k in kws):
                 issue_counts[issue] += 1
+                break  # one category only
 
     return {"work_orders": work_orders, "issue_counts": issue_counts}
 
@@ -1355,7 +1359,7 @@ def setup_summary_print(ws):
     ws.sheet_view.showGridLines = False
     ws.freeze_panes     = None   # BUG2: no frozen rows
     ws.print_title_rows = None   # BUG2: no repeated header on print
-    ws.print_area = "A1:P45"
+    ws.print_area = "A1:P48"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 1
@@ -1411,6 +1415,7 @@ def add_projected_occupancy_chart(ws, entries):
     ax.plot(range(len(labels)), values, color=_NAVY, linewidth=2)
     ax.set_xticks(range(len(labels)))
     ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=7)
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", fontsize=7)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0%}"))
     ax.set_ylim(0.87, 1.00)
     ax.yaxis.grid(True, alpha=0.3)
@@ -1419,6 +1424,7 @@ def add_projected_occupancy_chart(ws, entries):
     ax.spines[["top", "right"]].set_visible(False)
     fig.patch.set_facecolor("white")
     plt.tight_layout()
+    fig.canvas.draw()   # force label render before saving to buffer
 
     img = _fig_to_xl_image(fig)
     ws.add_image(img, "I7")
@@ -1465,6 +1471,57 @@ def add_expiring_leases_chart(ws, months):
     ws.add_image(img, "I22")
 
 
+_PROPERTY_ABBREVS = {
+    "oxford pointe":  "OXPT",
+    "eagle rock":     "ERA",
+    "the canyon":     "Canyon",
+    "canyon":         "Canyon",
+    "maple valley":   "Maple Valley",
+}
+
+
+def make_download_filename(property_name: str, date_range: str) -> str:
+    """Return e.g. 'OXPT Summary 06.22.26.xlsx' from property name + date range."""
+    pn = (property_name or "").strip()
+    pn_lower = pn.lower()
+
+    abbrev = None
+    for key, val in _PROPERTY_ABBREVS.items():
+        if key in pn_lower:
+            abbrev = val
+            break
+    if abbrev is None:
+        # First word, skipping "The" prefix
+        words = pn.split()
+        abbrev = words[1] if words and words[0].lower() == "the" and len(words) > 1 else (words[0] if words else "Property")
+
+    date_str = ""
+    if date_range:
+        # Resman format: "6/14/2026 - 6/21/2026"
+        try:
+            end_str = date_range.split(" - ")[-1].strip()
+            dt = datetime.strptime(end_str, "%m/%d/%Y")
+            date_str = dt.strftime("%m.%d.%y")
+        except Exception:
+            pass
+        # AppFolio/Maple format: "Period Range: Mar 2026 to May 2026 (Trailing...)"
+        if not date_str:
+            try:
+                import re as _re
+                import calendar as _cal
+                m = _re.search(r"to\s+([A-Za-z]+\s+\d{4})", date_range)
+                if m:
+                    dt = datetime.strptime(m.group(1).strip(), "%b %Y")
+                    last_day = _cal.monthrange(dt.year, dt.month)[1]
+                    date_str = dt.replace(day=last_day).strftime("%m.%d.%y")
+            except Exception:
+                pass
+
+    if date_str:
+        return f"{abbrev} Summary {date_str}.xlsx"
+    return f"{abbrev} Summary.xlsx"
+
+
 def build_summary(wb, data):
     if "Summary" in wb.sheetnames:
         del wb["Summary"]
@@ -1485,13 +1542,13 @@ def build_summary(wb, data):
     source_text, source_color, source_fill = source_system_display(source_system)
 
     setup_summary_print(ws)
-    for row in range(1, 46):
+    for row in range(1, 49):
         ws.row_dimensions[row].height = 15
     ws.row_dimensions[1].height = 22
     ws.row_dimensions[3].height = 19
     ws.row_dimensions[5].height = 4
-    ws.row_dimensions[23].height = 4
-    ws.row_dimensions[44].height = 4
+    ws.row_dimensions[26].height = 4
+    ws.row_dimensions[47].height = 4
 
     title = bs.get("property_name") or "MMR Summary"
     period = bs.get("date_range") or ""
@@ -1516,7 +1573,9 @@ def build_summary(wb, data):
     section_band(ws, 6, "OCCUPANCY", 2, 7)
     write_pair_row(ws, 7, "% Occupancy", fmt_pct(bs.get("pct_occ")), "Occupied", bs.get("occupied"))
     write_pair_row(ws, 8, "Vacant", bs.get("vacant"), "Total Units", bs.get("total_units"))
-    write_pair_row(ws, 9, "Preleases", au.get("prelease_count", 0), "On-Notice", bs.get("on_notice"))
+    # Prefer Box Score "Vacant Pre-Leased" column value; fall back to Available Units count
+    prelease_val = bs.get("prelease_count") if bs.get("prelease_count") is not None else au.get("prelease_count", 0)
+    write_pair_row(ws, 9, "Preleases", prelease_val, "On-Notice", bs.get("on_notice"))
 
     section_band(ws, 11, "LEASING / FINANCIAL", 2, 7)
     write_pair_row(ws, 12, "Applied", bs.get("applied"), "Approved", bs.get("approved"))
@@ -1529,7 +1588,7 @@ def build_summary(wb, data):
         col_hdr(ws, 17, col, label)
     ready_units = au.get("ready_units", [])
     if ready_units:
-        for i, unit in enumerate(ready_units[:5], 18):
+        for i, unit in enumerate(ready_units[:8], 18):
             z = (i - 18) % 2 == 0
             data_row(ws, i, 2, unit.get("unit", ""), zebra=z, align=C)
             data_row(ws, i, 3, unit.get("type", ""), zebra=z, align=L)
@@ -1538,50 +1597,50 @@ def build_summary(wb, data):
     else:
         merge_band(ws, 18, 2, 7, "No ready units found", font="data", fill_color=None, align=C, border=_box())
 
-    section_band(ws, 24, "TOP 2 PROSPECT SOURCES", 2, 7)
+    section_band(ws, 27, "TOP 2 PROSPECT SOURCES", 2, 7)
     for col, label in zip([2, 3, 4, 5, 7], ["Category", "#1 Source", "#1 Count", "#2 Source", "#2 Count"]):
-        col_hdr(ws, 25, col, label)
+        col_hdr(ws, 28, col, label)
     metric_labels = {
         "New Prospects": "New Prospects",
         "Return Prospects": "Return Prospects",
         "New Apps": "New Applications",
         "Net Leases": "Net Leases",
     }
-    for i, (key, label) in enumerate(metric_labels.items(), 26):
+    for i, (key, label) in enumerate(metric_labels.items(), 29):
         ranked = ps.get(key, [])
         s1, c1_v = ranked[0] if len(ranked) > 0 else ("—", 0)
         s2, c2_v = ranked[1] if len(ranked) > 1 else ("—", 0)
-        z = (i - 26) % 2 == 0
+        z = (i - 29) % 2 == 0
         data_row(ws, i, 2, label, zebra=z, align=L)
         data_row(ws, i, 3, s1, zebra=z, align=L)
         data_row(ws, i, 4, c1_v, zebra=z, align=C)
         data_row(ws, i, 5, s2, zebra=z, align=L)
         data_row(ws, i, 7, c2_v, zebra=z, align=C)
 
-    section_band(ws, 32, f"OPEN WORK ORDERS ({len(wo.get('work_orders', []))} total)", 2, 7)
-    wc(ws, 33, 2, "Issue Type", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
-    wc(ws, 33, 3, "Count", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
+    section_band(ws, 35, f"OPEN WORK ORDERS ({len(wo.get('work_orders', []))} total)", 2, 7)
+    wc(ws, 36, 2, "Issue Type", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
+    wc(ws, 36, 3, "Count", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
     issue_counts = wo.get("issue_counts", {})
     issue_rows = list(issue_counts.items())[:5] or [("No classified issues", 0)]
-    for i, (issue, count) in enumerate(issue_rows, 34):
-        z = (i - 34) % 2 == 0
+    for i, (issue, count) in enumerate(issue_rows, 37):
+        z = (i - 37) % 2 == 0
         data_row(ws, i, 2, issue, zebra=z, align=L)
         data_row(ws, i, 3, count, zebra=z, align=C)
 
-    wc(ws, 33, 5, "Recent WO", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
-    wc(ws, 33, 6, "Location", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
-    wc(ws, 33, 7, "Category", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
+    wc(ws, 36, 5, "Recent WO", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
+    wc(ws, 36, 6, "Location", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
+    wc(ws, 36, 7, "Category", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
     work_orders = wo.get("work_orders", [])
     if work_orders:
-        for i, order in enumerate(work_orders[:5], 34):
-            z = (i - 34) % 2 == 0
+        for i, order in enumerate(work_orders[:5], 37):
+            z = (i - 37) % 2 == 0
             data_row(ws, i, 5, order.get("number", ""), zebra=z, align=C)
             data_row(ws, i, 6, order.get("location", ""), zebra=z, align=C)
             data_row(ws, i, 7, order.get("category", ""), zebra=z, align=L)
     else:
-        merge_band(ws, 34, 5, 7, "No open work orders", font="data", fill_color=None, align=C, border=_box())
+        merge_band(ws, 37, 5, 7, "No open work orders", font="data", fill_color=None, align=C, border=_box())
 
-    merge_band(ws, 43, 2, 7, f"Generated by FIRE Capital MMR Summary Tool | {datetime.now().strftime('%m/%d/%Y %I:%M %p')}",
+    merge_band(ws, 46, 2, 7, f"Generated by FIRE Capital MMR Summary Tool | {datetime.now().strftime('%m/%d/%Y %I:%M %p')}",
                font=_FONTS["meta"], fill_color=None, align=C)
 
     # Clean up any leftover chart_data sheet from previous runs
