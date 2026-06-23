@@ -28,5 +28,5 @@ class Config:
     MAX_CONTENT_LENGTH: int = 20 * 1024 * 1024   # 20 MB
 
     # ── Admin credentials (loaded from .env) ──────────────────────────────
-    ADMIN_USERNAME: str = os.environ.get("ADMIN_USERNAME", "admin")
+    ADMIN_USERNAME: str = os.environ.get("ADMIN_USERNAME", "michelle")
     ADMIN_PASSWORD_HASH: str = os.environ.get("ADMIN_PASSWORD_HASH", "")
