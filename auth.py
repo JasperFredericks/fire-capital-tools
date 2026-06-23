@@ -65,6 +65,11 @@ def change_password():
             error = "New password must be at least 6 characters."
         elif new_pw != confirm_pw:
             error = "New passwords do not match."
+        elif _is_managed_runtime():
+            error = (
+                "Password changes must be made in the production environment "
+                "variables so they survive deploys and restarts."
+            )
         else:
             new_hash = bcrypt.hashpw(new_pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
             _write_env_hash(new_hash)
@@ -97,6 +102,18 @@ def _write_env_hash(new_hash: str) -> None:
             f.writelines(updated)
     except OSError:
         pass  # If .env isn't writable (e.g. cloud deploy), the in-memory update still works this session
+
+
+def _is_managed_runtime() -> bool:
+    return any(
+        os.environ.get(name)
+        for name in (
+            "RAILWAY_ENVIRONMENT",
+            "RAILWAY_ENVIRONMENT_NAME",
+            "RAILWAY_PROJECT_ID",
+            "RAILWAY_SERVICE_ID",
+        )
+    )
 
 
 def _now() -> str:
