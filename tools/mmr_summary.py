@@ -139,7 +139,7 @@ def process_mmr(filepath: Path) -> dict:
         "avg_rent_per_unit":      round(float(rr["avg_rent"]), 2) if has_stats else None,
         "ready_units":            len(au["ready_units"]) if has_stats else None,
         "emergency_wo_count":     len(wo["work_orders"]) if has_stats else None,
-        "download_name":          make_download_filename(bs["property_name"], bs["date_range"]),
+        "download_name":          make_download_filename(bs["property_name"], bs["date_range"], bs.get("printed", "")),
     }
 
 # ── Upload folder helpers ──────────────────────────────────────────────────

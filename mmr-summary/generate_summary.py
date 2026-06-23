@@ -23,6 +23,7 @@ import numpy as np
 import openpyxl
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils.datetime import from_excel
 from openpyxl.utils import get_column_letter
 
 # ── Colours ────────────────────────────────────────────────────────────────
@@ -110,6 +111,11 @@ def fmt_pct(v):
 def fmt_date(v):
     if isinstance(v, datetime):
         return v.strftime("%m/%d/%Y")
+    if isinstance(v, (int, float)) and v > 0:
+        try:
+            return from_excel(v).strftime("%m/%d/%Y")
+        except Exception:
+            pass
     if isinstance(v, str) and re.match(r"\d{1,2}/\d{1,2}/\d{4}", v):
         return v
     return str(v or "")
@@ -204,6 +210,23 @@ def find_col_contains(header_row, *substrings):
         if any(sub in hn for sub in subs):
             return c
     return None
+
+def debug_box_score_preleases(header_row, total_row, prelease_col):
+    """Print Box Score occupancy headers and the chosen Preleases source."""
+    print("  Box Score occupancy headers:")
+    for c, header in enumerate(header_row, 1):
+        if header is not None and str(header).strip():
+            print(f"    {get_column_letter(c)}: {str(header).replace(chr(10), ' ')}")
+    if prelease_col is None:
+        print("  Preleases picked: no Vacant Pre-Leased column found")
+        return
+    header = safe_get(header_row, prelease_col)
+    value = safe_get(total_row, prelease_col)
+    print(
+        "  Preleases picked: "
+        f"{value!r} from {get_column_letter(prelease_col + 1)} "
+        f"({str(header).replace(chr(10), ' ')})"
+    )
 
 def is_junk_row(row):
     """True for blank rows, copyright lines, or ResMan footer rows."""
@@ -414,6 +437,7 @@ def parse_box_score(ws):
     # ── Occupancy table ───────────────────────────────────────────────────
     total_units = occupied = 0
     pct_occ = 0.0
+    prelease_count = None
 
     found_occ_table = False
     for i, row in enumerate(rows):
@@ -423,8 +447,7 @@ def parse_box_score(ws):
         c_units    = find_col(row, "total units")
         c_occ      = find_col(row, "occ", "occupied")
         c_pct      = find_col(row, "% occ", "% occupied", "occ %", "pct occ", "% occ.")
-        c_prelease = find_col(row, "vacant pre-leased", "vacant preleased",
-                              "pre-leased", "preleased", "pre leased")
+        c_prelease = find_col(row, "vacant pre-leased", "vacant preleased", "vacant pre leased")
         if c_units is None or c_occ is None:
             continue
         for trow in rows[i + 1:]:
@@ -436,6 +459,7 @@ def parse_box_score(ws):
                 pct            = coerce_pct(raw_pct)
                 pct_occ        = pct if pct is not None else (occupied / total_units if total_units else 0.0)
                 prelease_count = int(coerce_num(safe_get(trow, c_prelease), default=0)) if c_prelease is not None else None
+                debug_box_score_preleases(row, trow, c_prelease)
                 found_occ_table = True
                 break
         if found_occ_table:
@@ -443,7 +467,6 @@ def parse_box_score(ws):
 
     if not found_occ_table:
         print("WARNING: Occupancy table not found in Box Score.")
-        prelease_count = None
 
     vacant = total_units - occupied
 
@@ -704,11 +727,39 @@ _VACANT_SECTIONS   = {"vacant", "vacant preleased", "vacant pre-leased"}
 _NOTICE_SECTIONS   = {"notice to vacate", "notice to vacate preleased", "notice to vacate pre-leased"}
 _ALL_AU_SECTIONS   = _VACANT_SECTIONS | _NOTICE_SECTIONS
 _PRELEASE_SECTIONS = {"vacant preleased", "vacant pre-leased", "notice to vacate preleased", "notice to vacate pre-leased"}
+_AU_NON_SECTION_HEADERS = {
+    "available units",
+    "unit",
+    "total",
+    "totals",
+    "grand total",
+}
 
 
 def is_ready_status(status):
     s = re.sub(r"\s*\*+$", "", norm(status)).strip()
     return s == "ready"
+
+
+def display_section_label(value):
+    return re.sub(r"\s+", " ", str(value or "").replace("\xa0", " ")).strip()
+
+
+def is_available_units_section_header(row):
+    first = safe_get(row, 0)
+    if not isinstance(first, str) or not first.strip():
+        return False
+    text = display_section_label(first)
+    sn = norm(text)
+    if sn in _AU_NON_SECTION_HEADERS:
+        return False
+    if sn.startswith("printed") or sn.startswith("copyright") or sn.startswith("*"):
+        return False
+    if "resman" in sn:
+        return False
+    if re.match(r"^\d{1,2}/\d{1,2}/\d{4}\b", text):
+        return False
+    return looks_like_group_header(row)
 
 
 def parse_available_units(ws):
@@ -726,13 +777,11 @@ def parse_available_units(ws):
         first = safe_get(row, 0)
 
         # ── Section header ─────────────────────────────────────────────
-        if isinstance(first, str):
-            sn = norm(first)
-            if sn in _ALL_AU_SECTIONS:
-                current_section = sn
-                unit_col = type_col = status_col = None
-                in_data  = False
-                continue
+        if is_available_units_section_header(row):
+            current_section = display_section_label(first)
+            unit_col = type_col = status_col = None
+            in_data  = False
+            continue
 
         # ── Column header row ─────────────────────────────────────────
         if (current_section
@@ -759,10 +808,9 @@ def parse_available_units(ws):
                     "status":  str(sval or "").strip(),
                 })
 
-    # Ready: normalized status == "ready", across ALL sections
-    # (Vacant, Notice to Vacate, Vacant PreLeased, Notice To Vacate PreLeased)
+    # Ready: normalized status == "ready", across all ResMan sections.
     ready_units = [u for u in all_units if is_ready_status(u["status"])]
-    prelease_count = sum(1 for u in all_units if u["section"] in _PRELEASE_SECTIONS)
+    prelease_count = sum(1 for u in all_units if norm(u["section"]) in _PRELEASE_SECTIONS)
 
     return {"ready_units": ready_units, "prelease_count": prelease_count}
 
@@ -948,6 +996,95 @@ def coerce_work_order_number(value):
     return int(m.group(0)) if m else None
 
 
+_NON_EMERGENCY_WO_PATTERNS = [
+    r"\bbroken blinds?\b",
+    r"\bblinds?\b",
+    r"\broutine maintenance\b",
+    r"\bpest\b",
+    r"\broach(?:es)?\b",
+    r"\bants?\b",
+    r"\bbugs?\b",
+    r"\brodent(?:s)?\b",
+    r"\bgrounds?\b",
+    r"\blandscap(?:e|ing)?\b",
+    r"\bclean(?:ing)?\b",
+    r"\bpaint(?:ing)?\b",
+    r"\bcosmetic\b",
+    r"\bfilters?\b",
+    r"\bflooring\b",
+    r"\bcarpet\b",
+    r"\block changes?\b",
+    r"\bchange locks?\b",
+    r"\bkey replacements?\b",
+    r"\breplace keys?\b",
+]
+
+_EMERGENCY_WO_PATTERNS = [
+    ("HVAC/AC", [
+        r"\bhvac\b",
+        r"\ba\s*/\s*c\b",
+        r"\ba\.?\s*c\.?\b",
+        r"\bheating\b",
+        r"\bheat\b",
+        r"\bventilation\b",
+        r"\bair condition(?:er|ing)?\b",
+    ]),
+    ("Water Leak", [
+        r"\bleak(?:ing|s)?\b",
+        r"\bwater damage\b",
+        r"\bplumbing\b",
+        r"\bflood(?:ing)?\b",
+        r"\bdrip(?:ping|s)?\b",
+    ]),
+    ("Fire/Smoke", [
+        r"\bfire\b",
+        r"\bsmoke\b",
+        r"\balarm\b",
+    ]),
+    ("Broken Windows", [
+        r"\bwindows?\b",
+    ]),
+    ("Broken Doors", [
+        r"\bdoors?\b",
+    ]),
+    ("Broken Appliances", [
+        r"\bfridge\b",
+        r"\brefrigerator\b",
+        r"\bstove\b",
+        r"\bwasher\b",
+        r"\bdryer\b",
+        r"\bdishwasher\b",
+        r"\boven\b",
+        r"\bappliance(?:s)?\b",
+    ]),
+    ("Mold/Mildew", [
+        r"\bmold\b",
+        r"\bmildew\b",
+    ]),
+]
+
+
+def wo_matches(text, patterns):
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def classify_emergency_work_order(order):
+    text = " ".join(
+        str(order.get(key) or "")
+        for key in ("source_category", "category", "description", "notes")
+    ).lower()
+    if wo_matches(text, _NON_EMERGENCY_WO_PATTERNS):
+        return None
+
+    for category, patterns in _EMERGENCY_WO_PATTERNS:
+        if not wo_matches(text, patterns):
+            continue
+        if category == "Broken Doors" and wo_matches(text, [r"\bblinds?\b", r"\bscreens?\b"]):
+            return None
+        return category
+    return None
+
+
 def parse_work_orders(ws):
     rows = rows_of(ws)
 
@@ -955,13 +1092,18 @@ def parse_work_orders(ws):
     col_map: dict = {}
     for i, row in enumerate(rows):
         number_col = find_col(row, "number", "wo #", "work order #", "work order number")
-        if number_col is not None and (find_col(row, "location") is not None or find_col(row, "reported") is not None):
+        reported_col = find_col(row, "reported", "date reported", "reported date")
+        if number_col is not None and (find_col(row, "location") is not None or reported_col is not None):
             header_idx = i
             for c, h in enumerate(row):
                 hn = norm(h)
                 if hn in ("number", "wo #", "work order #", "work order number"):
                     col_map["number"] = c
-                elif hn in ("location", "reported", "category", "description"):
+                elif hn == "location":
+                    col_map["location"] = c
+                elif hn in ("reported", "date reported", "reported date"):
+                    col_map["reported"] = c
+                elif hn in ("category", "description", "notes"):
                     col_map[hn] = c
             break
 
@@ -1000,9 +1142,10 @@ def parse_work_orders(ws):
             rep  = safe_get(row, col_map.get("reported",    2))
             cat  = safe_get(row, col_map.get("category",    3))
             desc = safe_get(row, col_map.get("description", 4))
+            notes = safe_get(row, col_map.get("notes", 5))
 
             # Skip rows with no identifying data beyond the number
-            if not any(str(v or "").strip() for v in (loc, rep, cat, desc)):
+            if not any(str(v or "").strip() for v in (loc, rep, cat, desc, notes)):
                 continue
 
             work_orders.append({
@@ -1011,28 +1154,30 @@ def parse_work_orders(ws):
                 "reported":    rep,
                 "category":    str(cat  or "").strip(),
                 "description": str(desc or "").strip(),
+                "notes":       str(notes or "").strip(),
                 "status":      current_status,
             })
 
     # Priority-ordered keyword classification — first match wins
-    KEYWORDS = [
-        ("HVAC/AC",     ["hvac", "a/c", " ac ", "heating", "ventilation",
-                         "air condition", " heat "]),
-        ("Water Leak",  ["leak", "water", "plumbing", "flood", "drip"]),
-        ("Mold/Mildew", ["mold", "mildew", "fungus"]),
-        ("Fire",        ["fire", "smoke", "alarm"]),
-        ("Broken",      ["broken", "damaged", "won't", "not working",
-                         "not turn on", "door", "blind", "appliance"]),
-    ]
-    issue_counts = {k: 0 for k, _ in KEYWORDS}
+    emergency_orders = []
+    count_map = {}
     for wo in work_orders:
-        text = f"{wo['description']} {wo['category']}".lower()
-        for issue, kws in KEYWORDS:
-            if any(k in text for k in kws):
-                issue_counts[issue] += 1
-                break  # one category only
+        emergency_category = classify_emergency_work_order(wo)
+        if not emergency_category:
+            continue
+        wo["source_category"] = wo.get("category", "")
+        wo["category"] = emergency_category
+        wo["date_reported"] = fmt_date(wo.get("reported"))
+        emergency_orders.append(wo)
+        count_map[emergency_category] = count_map.get(emergency_category, 0) + 1
 
-    return {"work_orders": work_orders, "issue_counts": issue_counts}
+    issue_counts = {
+        category: count_map[category]
+        for category, _ in _EMERGENCY_WO_PATTERNS
+        if count_map.get(category)
+    }
+
+    return {"work_orders": emergency_orders, "issue_counts": issue_counts}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1480,7 +1625,7 @@ _PROPERTY_ABBREVS = {
 }
 
 
-def make_download_filename(property_name: str, date_range: str) -> str:
+def make_download_filename(property_name: str, date_range: str, printed: str = "") -> str:
     """Return e.g. 'OXPT Summary 06.22.26.xlsx' from property name + date range."""
     pn = (property_name or "").strip()
     pn_lower = pn.lower()
@@ -1496,14 +1641,24 @@ def make_download_filename(property_name: str, date_range: str) -> str:
         abbrev = words[1] if words and words[0].lower() == "the" and len(words) > 1 else (words[0] if words else "Property")
 
     date_str = ""
+    if printed:
+        clean_printed = str(printed).replace("Printed", "").replace("Exported On:", "").strip()
+        date_match = re.search(r"\d{1,2}/\d{1,2}/\d{4}", clean_printed)
+        if date_match:
+            try:
+                dt = datetime.strptime(date_match.group(0), "%m/%d/%Y")
+                date_str = dt.strftime("%m.%d.%y")
+            except Exception:
+                pass
     if date_range:
         # Resman format: "6/14/2026 - 6/21/2026"
-        try:
-            end_str = date_range.split(" - ")[-1].strip()
-            dt = datetime.strptime(end_str, "%m/%d/%Y")
-            date_str = dt.strftime("%m.%d.%y")
-        except Exception:
-            pass
+        if not date_str:
+            try:
+                end_str = date_range.split(" - ")[-1].strip()
+                dt = datetime.strptime(end_str, "%m/%d/%Y")
+                date_str = dt.strftime("%m.%d.%y")
+            except Exception:
+                pass
         # AppFolio/Maple format: "Period Range: Mar 2026 to May 2026 (Trailing...)"
         if not date_str:
             try:
@@ -1583,17 +1738,18 @@ def build_summary(wb, data):
     write_pair_row(ws, 14, "Total Rental Revenue", rr.get("total_rental", 0.0), "Average Rent / Unit", rr.get("avg_rent", 0.0),
                    left_fmt='"$"#,##0.00', right_fmt='"$"#,##0.00')
 
-    section_band(ws, 16, "READY UNITS - VACANT & PRE-LEASED", 2, 7)
-    for col, label in zip([2, 3, 5, 7], ["Unit", "Unit Type", "Section", "Status"]):
-        col_hdr(ws, 17, col, label)
     ready_units = au.get("ready_units", [])
+    section_band(ws, 16, f"READY UNITS ({len(ready_units)} total)", 2, 7)
+    for col, label in zip([2, 3, 4, 5, 6, 7], ["Unit", "Section", "Status", "Unit", "Section", "Status"]):
+        col_hdr(ws, 17, col, label)
     if ready_units:
-        for i, unit in enumerate(ready_units[:8], 18):
-            z = (i - 18) % 2 == 0
-            data_row(ws, i, 2, unit.get("unit", ""), zebra=z, align=C)
-            data_row(ws, i, 3, unit.get("type", ""), zebra=z, align=L)
-            data_row(ws, i, 5, unit.get("section", ""), zebra=z, align=L)
-            data_row(ws, i, 7, unit.get("status", ""), zebra=z, align=C)
+        for idx, unit in enumerate(ready_units[:18]):
+            row = 18 + (idx % 9)
+            base_col = 2 if idx < 9 else 5
+            z = (row - 18) % 2 == 0
+            data_row(ws, row, base_col, unit.get("unit", ""), zebra=z, align=C)
+            data_row(ws, row, base_col + 1, unit.get("section", ""), zebra=z, align=L)
+            data_row(ws, row, base_col + 2, unit.get("status", ""), zebra=z, align=C)
     else:
         merge_band(ws, 18, 2, 7, "No ready units found", font="data", fill_color=None, align=C, border=_box())
 
@@ -1617,28 +1773,27 @@ def build_summary(wb, data):
         data_row(ws, i, 5, s2, zebra=z, align=L)
         data_row(ws, i, 7, c2_v, zebra=z, align=C)
 
-    section_band(ws, 35, f"OPEN WORK ORDERS ({len(wo.get('work_orders', []))} total)", 2, 7)
-    wc(ws, 36, 2, "Issue Type", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
-    wc(ws, 36, 3, "Count", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
-    issue_counts = wo.get("issue_counts", {})
-    issue_rows = list(issue_counts.items())[:5] or [("No classified issues", 0)]
-    for i, (issue, count) in enumerate(issue_rows, 37):
-        z = (i - 37) % 2 == 0
-        data_row(ws, i, 2, issue, zebra=z, align=L)
-        data_row(ws, i, 3, count, zebra=z, align=C)
-
-    wc(ws, 36, 5, "Recent WO", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
-    wc(ws, 36, 6, "Location", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
-    wc(ws, 36, 7, "Category", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
     work_orders = wo.get("work_orders", [])
+    section_band(ws, 35, f"EMERGENCY WORK ORDERS ({len(work_orders)} total)", 2, 7)
+    issue_counts = wo.get("issue_counts", {})
+    summary_text = " | ".join(f"{issue}: {count}" for issue, count in issue_counts.items()) or "No emergency work orders"
+    wc(ws, 36, 2, "Issue Types", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
+    merge_band(ws, 36, 3, 7, summary_text, font="data", fill_color=LIGHT_BLUE, align=L, border=_box())
+
+    for col, label in zip([2, 3, 4, 5], ["WO #", "Unit/Location", "Date Reported", "Category"]):
+        col_hdr(ws, 37, col, label)
+    merge_band(ws, 37, 6, 7, "Description", font="col_hdr", fill_color=LIGHT_BLUE, align=C, border=_box())
     if work_orders:
-        for i, order in enumerate(work_orders[:5], 37):
-            z = (i - 37) % 2 == 0
-            data_row(ws, i, 5, order.get("number", ""), zebra=z, align=C)
-            data_row(ws, i, 6, order.get("location", ""), zebra=z, align=C)
-            data_row(ws, i, 7, order.get("category", ""), zebra=z, align=L)
+        for i, order in enumerate(work_orders[:8], 38):
+            z = (i - 38) % 2 == 0
+            data_row(ws, i, 2, order.get("number", ""), zebra=z, align=C)
+            data_row(ws, i, 3, order.get("location", ""), zebra=z, align=C)
+            data_row(ws, i, 4, order.get("date_reported") or fmt_date(order.get("reported")), zebra=z, align=C)
+            data_row(ws, i, 5, order.get("category", ""), zebra=z, align=L)
+            merge_band(ws, i, 6, 7, order.get("description", ""), font="data",
+                       fill_color=PALE_BLUE if z else None, align=L, border=_box())
     else:
-        merge_band(ws, 37, 5, 7, "No open work orders", font="data", fill_color=None, align=C, border=_box())
+        merge_band(ws, 38, 2, 7, "No emergency work orders", font="data", fill_color=None, align=C, border=_box())
 
     merge_band(ws, 46, 2, 7, f"Generated by FIRE Capital MMR Summary Tool | {datetime.now().strftime('%m/%d/%Y %I:%M %p')}",
                font=_FONTS["meta"], fill_color=None, align=C)
@@ -1797,7 +1952,7 @@ def parse_maple(wb):
              "in progress", "waiting on parts", "estimate"}
     if "Work Order" in wb.sheetnames:
         header_seen = False
-        s_col = wo_type_col = wo_num_col = unit_col = None
+        s_col = wo_type_col = wo_num_col = unit_col = desc_col = notes_col = created_col = None
         for row in wb["Work Order"].iter_rows(min_row=1, max_row=2000, values_only=True):
             if not header_seen:
                 if row[0] == "Property":
@@ -1807,11 +1962,17 @@ def parse_maple(wb):
                         if sv == "Status":           s_col       = idx
                         elif sv == "Work Order Type": wo_type_col = idx
                         elif sv == "Work Order Number": wo_num_col = idx
+                        elif sv == "Job Description": desc_col    = idx
+                        elif sv == "Instructions":     notes_col   = idx
                         elif sv == "Unit":            unit_col    = idx
+                        elif sv == "Created At":      created_col = idx
                     s_col       = s_col       or 7
                     wo_type_col = wo_type_col or 2
                     wo_num_col  = wo_num_col  or 4
+                    desc_col    = desc_col    or 5
+                    notes_col   = notes_col   or 6
                     unit_col    = unit_col    or 9
+                    created_col = created_col or 11
                 continue
             if not (row[0] and "Maple Valley" in str(row[0] or "")):
                 continue
@@ -1821,10 +1982,30 @@ def parse_maple(wb):
                 wo_list.append({
                     "number":   str(row[wo_num_col] or "").strip(),
                     "location": str(row[unit_col]   or "").strip(),
+                    "reported": row[created_col] if created_col is not None and len(row) > created_col else None,
                     "category": wo_type,
+                    "description": str(row[desc_col] or "").strip() if desc_col is not None and len(row) > desc_col else "",
+                    "notes": str(row[notes_col] or "").strip() if notes_col is not None and len(row) > notes_col else "",
                     "status":   status,
                 })
-                issue_counts[wo_type] = issue_counts.get(wo_type, 0) + 1
+
+        filtered_wo_list = []
+        count_map = {}
+        for wo in wo_list:
+            emergency_category = classify_emergency_work_order(wo)
+            if not emergency_category:
+                continue
+            wo["source_category"] = wo.get("category", "")
+            wo["category"] = emergency_category
+            wo["date_reported"] = fmt_date(wo.get("reported"))
+            filtered_wo_list.append(wo)
+            count_map[emergency_category] = count_map.get(emergency_category, 0) + 1
+        wo_list = filtered_wo_list
+        issue_counts = {
+            category: count_map[category]
+            for category, _ in _EMERGENCY_WO_PATTERNS
+            if count_map.get(category)
+        }
 
     return {
         "box_score": {
@@ -1915,7 +2096,7 @@ def main():
 
         print("\nParsing Work Orders ...")
         wo = parse_optional_sheet(wb, "Work Order Summary", parse_work_orders, {"work_orders": [], "issue_counts": {}})
-        print(f"  Open work orders: {len(wo['work_orders'])}")
+        print(f"  Emergency work orders: {len(wo['work_orders'])}")
         for k, v in wo["issue_counts"].items():
             if v:
                 print(f"    {k}: {v}")
@@ -1935,7 +2116,7 @@ def main():
         print(f"  Delinquency : ${dl['total']:,.2f}  ({dl.get('count', 0)} residents)")
         print(f"  Total Rental: ${rr['total_rental']:,.2f}   Avg Rent: ${rr['avg_rent']:,.2f}")
         print(f"  Ready Units : {len(au['ready_units'])}")
-        print(f"  Open WOs    : {len(wo['work_orders'])}")
+        print(f"  Emergency WOs: {len(wo['work_orders'])}")
     else:
         bs = extract_placeholder_box_score(wb, source_system)
         dl = {"total": 0.0}
