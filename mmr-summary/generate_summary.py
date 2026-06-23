@@ -10,7 +10,7 @@ Usage:
 import sys
 import re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import io
 
@@ -227,6 +227,109 @@ def debug_box_score_preleases(header_row, total_row, prelease_col):
         f"{value!r} from {get_column_letter(prelease_col + 1)} "
         f"({str(header).replace(chr(10), ' ')})"
     )
+
+
+def coerce_excel_date(value):
+    """Convert Excel date values, date strings, or serials to datetime."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, (int, float)) and value > 0:
+        try:
+            return from_excel(value)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        for fmt in ("%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                pass
+    return None
+
+
+def describe_raw(value):
+    return f"{value!r}<{type(value).__name__}>"
+
+
+def find_projected_occupancy_header(rows, start_idx):
+    for i in range(start_idx, min(len(rows), start_idx + 8)):
+        row = rows[i]
+        if find_col(row, "date") is None:
+            continue
+        if find_col(row, "occupied units") is None and find_col(row, "occupancy", "% occupancy", "% occupied") is None:
+            continue
+        return i, row
+    return None, None
+
+
+def parse_projected_occupancy(rows, start_idx, total_units):
+    header_idx, header = find_projected_occupancy_header(rows, start_idx)
+    if header_idx is None:
+        print("WARNING: Projected Occupancy header row not found.")
+        return []
+
+    date_col = find_col(header, "date")
+    occ_u_col = find_col(header, "occupied units")
+    pct_col = find_col(header, "occupancy", "% occupancy", "% occupied")
+
+    print("  Projected Occupancy headers:")
+    for c, value in enumerate(header, 1):
+        if value is not None and str(value).strip():
+            print(f"    {get_column_letter(c)}: {str(value).replace(chr(10), ' ')}")
+
+    proj_occ = []
+    for row_num, drow in enumerate(rows[header_idx + 1:], header_idx + 2):
+        raw_date = safe_get(drow, date_col)
+        raw_occ_units = safe_get(drow, occ_u_col) if occ_u_col is not None else None
+        raw_pct = safe_get(drow, pct_col) if pct_col is not None else None
+
+        dt = coerce_excel_date(raw_date)
+        if dt is None:
+            if raw_date and not is_junk_row(drow):
+                print(f"    stop row {row_num}: date={describe_raw(raw_date)}")
+            break
+
+        occ_u = coerce_num(raw_occ_units, default=None) if occ_u_col is not None else None
+        pct = coerce_pct(raw_pct) if pct_col is not None else None
+        if pct is None and total_units and occ_u is not None:
+            pct = occ_u / total_units
+        if occ_u is None and total_units and pct is not None:
+            occ_u = pct * total_units
+
+        print(
+            f"    row {row_num}: raw_date={describe_raw(raw_date)}, "
+            f"parsed_date={fmt_date(dt)}, raw_occupied_units={describe_raw(raw_occ_units)}, "
+            f"raw_occupancy={describe_raw(raw_pct)}, parsed_pct={pct}"
+        )
+
+        if pct is None:
+            continue
+        occ_display = int(occ_u) if isinstance(occ_u, float) and occ_u.is_integer() else occ_u
+        proj_occ.append({"date": dt, "occ": occ_display, "pct": pct})
+
+    print(f"  Projected Occupancy rows extracted: {len(proj_occ)}")
+    if 0 < len(proj_occ) < 20:
+        last = proj_occ[-1]
+        print(
+            "  Projected Occupancy extension: carrying forward "
+            f"{last['occ']} occupied units / {last['pct']:.4%} through 20 weekly points"
+        )
+        while len(proj_occ) < 20:
+            next_date = proj_occ[-1]["date"] + timedelta(days=7)
+            proj_occ.append({
+                "date": next_date,
+                "occ": last["occ"],
+                "pct": last["pct"],
+                "carried_forward": True,
+            })
+            print(
+                f"    extended row {len(proj_occ)}: parsed_date={fmt_date(next_date)}, "
+                f"occupied_units={last['occ']}, parsed_pct={last['pct']}"
+            )
+
+    return proj_occ
+
 
 def is_junk_row(row):
     """True for blank rows, copyright lines, or ResMan footer rows."""
@@ -506,25 +609,8 @@ def parse_box_score(ws):
     # ── Projected Occupancy ───────────────────────────────────────────────
     proj_occ = []
     for i, row in enumerate(rows):
-        if norm(safe_get(row, 0)) == "projected occupancy":
-            for j, row2 in enumerate(rows[i + 1:], i + 1):
-                if norm(safe_get(row2, 0)) == "date":
-                    occ_u_col = find_col(row2, "occupied units")
-                    if occ_u_col is None:
-                        occ_u_col = find_col_contains(row2, "occupied")
-                    if occ_u_col is None:
-                        print("WARNING: 'Occupied Units' column not found in Projected Occupancy.")
-                        break
-                    for drow in rows[j + 1:]:
-                        d0 = safe_get(drow, 0)
-                        if isinstance(d0, datetime):
-                            occ_u_raw = safe_get(drow, occ_u_col)
-                            occ_u = coerce_num(occ_u_raw, default=None)
-                            pct   = (occ_u / total_units) if (total_units and occ_u is not None) else None
-                            proj_occ.append({"date": d0, "occ": int(occ_u) if occ_u is not None and occ_u.is_integer() else occ_u, "pct": pct})
-                        elif d0 and not isinstance(d0, datetime):
-                            break
-                    break
+        if any(norm(value) == "projected occupancy" for value in row):
+            proj_occ = parse_projected_occupancy(rows, i + 1, total_units)
             break
 
     return {
