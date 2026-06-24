@@ -211,22 +211,25 @@ def find_col_contains(header_row, *substrings):
             return c
     return None
 
-def debug_box_score_preleases(header_row, total_row, prelease_col):
-    """Print Box Score occupancy headers and the chosen Preleases source."""
+def debug_box_score_preleases(header_row, total_row, vacant_prelease_col, notice_prelease_col):
+    """Print Box Score occupancy headers and the chosen Preleases sources."""
     print("  Box Score occupancy headers:")
     for c, header in enumerate(header_row, 1):
         if header is not None and str(header).strip():
             print(f"    {get_column_letter(c)}: {str(header).replace(chr(10), ' ')}")
-    if prelease_col is None:
-        print("  Preleases picked: no Vacant Pre-Leased column found")
-        return
-    header = safe_get(header_row, prelease_col)
-    value = safe_get(total_row, prelease_col)
-    print(
-        "  Preleases picked: "
-        f"{value!r} from {get_column_letter(prelease_col + 1)} "
-        f"({str(header).replace(chr(10), ' ')})"
-    )
+
+    def describe(col):
+        if col is None:
+            return "missing", 0
+        header = str(safe_get(header_row, col) or "").replace(chr(10), " ")
+        value = coerce_num(safe_get(total_row, col), default=0)
+        return f"{int(value)} from {get_column_letter(col + 1)} ({header})", int(value)
+
+    vacant_desc, vacant_value = describe(vacant_prelease_col)
+    notice_desc, notice_value = describe(notice_prelease_col)
+    print(f"  Preleases picked: Vacant Pre-Leased = {vacant_desc}")
+    print(f"  Preleases picked: On-Notice Pre-Leased = {notice_desc}")
+    print(f"  Preleases total: {vacant_value} + {notice_value} = {vacant_value + notice_value}")
 
 
 def coerce_excel_date(value):
@@ -541,6 +544,8 @@ def parse_box_score(ws):
     total_units = occupied = 0
     pct_occ = 0.0
     prelease_count = None
+    vacant_prelease_count = None
+    notice_prelease_count = None
 
     found_occ_table = False
     for i, row in enumerate(rows):
@@ -550,7 +555,16 @@ def parse_box_score(ws):
         c_units    = find_col(row, "total units")
         c_occ      = find_col(row, "occ", "occupied")
         c_pct      = find_col(row, "% occ", "% occupied", "occ %", "pct occ", "% occ.")
-        c_prelease = find_col(row, "vacant pre-leased", "vacant preleased", "vacant pre leased")
+        c_vacant_prelease = find_col(row, "vacant pre-leased", "vacant preleased", "vacant pre leased")
+        c_notice_prelease = find_col(
+            row,
+            "on-notice pre-leased",
+            "on notice pre-leased",
+            "on-notice preleased",
+            "on notice preleased",
+            "on-notice pre leased",
+            "on notice pre leased",
+        )
         if c_units is None or c_occ is None:
             continue
         for trow in rows[i + 1:]:
@@ -561,8 +575,15 @@ def parse_box_score(ws):
                 raw_pct        = safe_get(trow, c_pct) if c_pct is not None else None
                 pct            = coerce_pct(raw_pct)
                 pct_occ        = pct if pct is not None else (occupied / total_units if total_units else 0.0)
-                prelease_count = int(coerce_num(safe_get(trow, c_prelease), default=0)) if c_prelease is not None else None
-                debug_box_score_preleases(row, trow, c_prelease)
+                if c_vacant_prelease is None and c_notice_prelease is None:
+                    prelease_count = None
+                else:
+                    vacant_preleases = int(coerce_num(safe_get(trow, c_vacant_prelease), default=0)) if c_vacant_prelease is not None else 0
+                    notice_preleases = int(coerce_num(safe_get(trow, c_notice_prelease), default=0)) if c_notice_prelease is not None else 0
+                    vacant_prelease_count = vacant_preleases
+                    notice_prelease_count = notice_preleases
+                    prelease_count = vacant_preleases + notice_preleases
+                debug_box_score_preleases(row, trow, c_vacant_prelease, c_notice_prelease)
                 found_occ_table = True
                 break
         if found_occ_table:
@@ -621,7 +642,9 @@ def parse_box_score(ws):
         "occupied":        occupied,
         "vacant":          vacant,
         "pct_occ":         pct_occ,
-        "prelease_count":  prelease_count,   # from Box Score "Vacant Pre-Leased" column
+        "prelease_count":  prelease_count,
+        "vacant_prelease_count": vacant_prelease_count,
+        "notice_prelease_count": notice_prelease_count,
         "on_notice":       on_notice,
         "applied":         applied,
         "approved":        approved,
@@ -894,8 +917,13 @@ def parse_available_units(ws):
                     "status":  str(sval or "").strip(),
                 })
 
-    # Ready: normalized status == "ready", across all ResMan sections.
-    ready_units = [u for u in all_units if is_ready_status(u["status"])]
+    # Ready: normalized status == "ready", but only from operating sections.
+    # Eviction-related sections are intentionally excluded even when the row
+    # status says Ready.
+    ready_units = [
+        u for u in all_units
+        if is_ready_status(u["status"]) and norm(u["section"]) in _ALL_AU_SECTIONS
+    ]
     prelease_count = sum(1 for u in all_units if norm(u["section"]) in _PRELEASE_SECTIONS)
 
     return {"ready_units": ready_units, "prelease_count": prelease_count}
@@ -1115,51 +1143,85 @@ _EMERGENCY_WO_PATTERNS = [
         r"\bventilation\b",
         r"\bair condition(?:er|ing)?\b",
         r"\bthermostat\b",
+        r"\bheat not working\b",
+        r"\bno heat\b",
+        r"\bheater not working\b",
+        r"\bac is not working\b",
         r"\bnot cooling\b",
         r"\bblowing warm\b",
+        r"\bunit was warm\b",
+        r"\bthermostat blank screen\b",
+        r"\bair conditioner leaking water\b",
+        r"\bac leaking water\b",
+        r"\bac unit leaking\b",
+        r"\bair conditioner in bathroom leaking\b",
     ]),
     ("Water Heater", [
         r"\bno hot water\b",
         r"\bhot water heater\b",
+        r"\bwater heater out\b",
+        r"\bwater heater not working\b",
         r"\bwater heater\s+(?:is\s+)?(?:out|not working|broken|failed|leaking|dead)\b",
     ]),
     ("Water Leak", [
         r"\bleak(?:ing|s)?\b",
+        r"\bleek(?:ing|s)?\b",
         r"\bwater damage\b",
         r"\bplumbing\b",
-        r"\bflood(?:ing)?\b",
+        r"\bflood(?:ed|ing)?\b",
+        r"\bflooded toilet\b",
+        r"\btoilet overflow\b",
         r"\bdrip(?:ping|s)?\b",
+        r"\bdripping\b",
+        r"\bwater coming through\b",
+        r"\bceiling leak(?:ing)?\b",
+        r"\broof leak\b",
+        r"\bwater from ceiling\b",
+        r"\bwater on (?:the )?floor\b",
+        r"\bwater in (?:the )?kitchen ceiling\b",
         r"\bclog(?:ged)?\b",
         r"\bsewage\b",
+        r"\bbackup\b",
         r"\bback(?:ing)?\s+up\b",
         r"\btoilet tank\b",
         r"\btoilet is running\b",
         r"\btoilet.*not.*refill\b",
+        r"\btoilet tank empty\b",
         r"\bnot draining\b",
         r"\bnot containable\b",
         r"\bconstant flow\b",
+        r"\bflowing\b",
+        r"\bcannot contain\b",
         r"\bwasher hookup\b",
+        r"\bwasher leak\b",
+        r"\bwasher\s*/\s*dryer leak\b",
     ]),
     ("Fire/Smoke", [
         r"\bactive\s+fire\b",
         r"\bon\s+fire\b",
         r"\bfire\s+(?:in|inside|at|coming|started|burning)\b",
         r"\b(?:fire|smoke)\s+(?:alarm|detector)s?\s+(?:is\s+|are\s+|was\s+|were\s+|keeps?\s+|keep\s+)?(?:going\s+off|went\s+off|ringing|beeping|sounding|trigger(?:ed|ing)|activated)\b",
-        r"\b(?:smell(?:s|ing)?|odor(?:s)?)\s+(?:like\s+)?smoke\b",
-        r"\bsmoke\s+(?:smell|odor|coming|visible|inside|in)\b",
         r"\bsomething\s+(?:is\s+)?burning\b",
-        r"\bburning\s+(?:smell|odor)\b",
+        r"\bburning\s+(?:smell|odor).{0,80}\b(?:appliance|wiring|wire|electrical|outlet|dryer|stove|oven|furnace|heater)\b",
+        r"\b(?:appliance|wiring|wire|electrical|outlet|dryer|stove|oven|furnace|heater).{0,80}\bburning\s+(?:smell|odor)\b",
         r"\bdryer vent\b",
         r"\bfire hazard\b",
+        r"\bsparking\b",
     ]),
     ("Broken Windows", [
-        r"\bwindows?\b",
+        r"\bbroken window\b",
+        r"\bwindow (?:won't|wont|will not) close\b",
+        r"\bwindow cracked\b",
+        r"\bwindow shattered\b",
+        r"\bwindow (?:won't|wont|will not) lock\b",
     ]),
     ("Broken Doors", [
-        r"\bdoors?\b",
-        r"\boff (?:the )?hinges?\b",
-        r"\bcoming off (?:the )?hinges?\b",
-        r"\bcannot secure\b",
+        r"\bdoor off hinges?\b",
+        r"\bdoor (?:is\s+)?coming off(?: (?:the )?hinges?)?\b",
+        r"\bdoor (?:won't|wont|will not) close\b",
+        r"\bcannot secure (?:the )?door\b",
+        r"\b(?:entry|front) door.{0,80}\b(?:off hinges?|coming off|won't close|wont close|will not close|cannot secure|broken)\b",
+        r"\bdoor is broken\b",
     ]),
     ("Broken Appliances", [
         r"\bfridge\b",
@@ -1185,18 +1247,87 @@ _EMERGENCY_WO_PATTERNS = [
 ]
 
 
+_DOOR_EXCLUDE_PATTERNS = [
+    r"\bdoor sweep\b",
+    r"\bscreen door\b",
+    r"\bsliding door\b",
+    r"\bcloset doors?\b",
+    r"\bdoor handles?\b",
+    r"\bdoor knobs?\b",
+    r"\bdoor stops?\b",
+    r"\bcabinet door\b",
+    r"\bdishwasher door\b",
+    r"\b(?:fridge|refrigerator|freezer) door\b",
+    r"\bbifold door\b",
+]
+
+_DOOR_SECURITY_INCLUDE_PATTERNS = [
+    r"\bfront door.{0,80}\b(?:off hinges?|coming off|won't close|wont close|will not close|cannot secure|broken)\b",
+    r"\bentry door.{0,80}\b(?:off hinges?|coming off|won't close|wont close|will not close|cannot secure|broken)\b",
+    r"\bcannot secure (?:the )?door\b",
+    r"\bentrance/exit\b",
+]
+
+_WINDOW_EXCLUDE_PATTERNS = [
+    r"\bwindow screens?\b",
+    r"\bscreen windows?\b",
+    r"\bwindow blinds?\b",
+    r"\bcurtains?\b",
+    r"\bwindow sill\b",
+    r"\bplastic inserts? for window\b",
+]
+
+_FIRE_SMOKE_EXCLUDE_PATTERNS = [
+    r"\bsmell of vape\b",
+    r"\bvape smell\b",
+    r"\bcigarette smell\b",
+    r"\bsmell of smoke\b",
+    r"\bsmoke detector check\b",
+    r"\bsmoke detector install\b",
+    r"\bno sparking\b",
+    r"\bnot sparking\b",
+    r"\bno smoking\b",
+    r"\bnot smoking\b",
+    r"\bno risk of fire\b",
+    r"\bnot (?:a )?fire (?:risk|hazard)\b",
+    r"\bno .*risk of fire\b",
+]
+
+_APPLIANCE_NON_EMERGENCY_PATTERNS = [
+    r"\bstill cooling\b",
+    r"\bdoor shelf\b",
+    r"\bmissing handle\b",
+    r"\bwould go needs repair before installing appliances\b",
+]
+
+
+def normalize_wo_text(value):
+    return (
+        str(value or "")
+        .replace("\u2018", "'")
+        .replace("\u2019", "'")
+        .replace("\u201c", '"')
+        .replace("\u201d", '"')
+        .lower()
+    )
+
+
 def wo_matches(text, patterns):
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
 
 
 def is_broken_appliance_emergency(order, text):
-    source_category = str(order.get("source_category") or order.get("category") or "").lower()
-    issue_type = str(order.get("issue_type") or "").lower()
+    source_category = normalize_wo_text(order.get("source_category") or order.get("category") or "")
+    issue_type = normalize_wo_text(order.get("issue_type") or "")
+
+    if wo_matches(text, _APPLIANCE_NON_EMERGENCY_PATTERNS):
+        return False
 
     if "appliance" in source_category:
         return True
 
-    # Work Order Issue column directly naming a known appliance is sufficient
+    # Work Order Issue column directly naming a known appliance is a strong
+    # signal, except when the description says it is only cosmetic/non-urgent.
     _KNOWN_APPLIANCES = {
         "stove", "washer", "dryer", "dishwasher",
         "refrigerator", "fridge", "oven", "microwave",
@@ -1207,10 +1338,11 @@ def is_broken_appliance_emergency(order, text):
 
     appliance = r"(?:fridge|refrigerator|stove|washer|dryer|dishwasher|oven|appliance|sink|faucet)"
     issue = (
-        r"(?:not working|won’t|wont|doesn’t|doesnt|broken|damaged|leak(?:ing)?|"
-        r"repair|replace|out|stopped|isn[‘’]?t draining|is not draining|"
-        r"not draining|won’t drain|wont drain|doesn[‘’]?t drain|doesnt drain|"
-        r"not turning on|not turn on|detached from)"
+        r"(?:not working|won't|wont|doesn't|doesnt|broken|damaged|leak(?:ing)?|"
+        r"repair|replace|out|stopped|isn't draining|is not draining|"
+        r"not draining|won't drain|wont drain|doesn't drain|doesnt drain|"
+        r"not turning on|not turn on|not functioning|cannot be closed|will not close|"
+        r"won't close|wont close|detached from)"
     )
     return wo_matches(text, [
         rf"\b{appliance}s?\b.{{0,60}}\b{issue}\b",
@@ -1219,10 +1351,10 @@ def is_broken_appliance_emergency(order, text):
 
 
 def classify_emergency_work_order(order):
-    text = " ".join(
+    text = normalize_wo_text(" ".join(
         str(order.get(key) or "")
         for key in ("source_category", "category", "description", "notes", "issue_type")
-    ).lower()
+    ))
 
     # Work Order Issue column is the highest-precision signal for certain categories.
     # Check it directly before any keyword matching to avoid false positives from
@@ -1231,31 +1363,47 @@ def classify_emergency_work_order(order):
     _ISSUE_TYPE_OVERRIDES = {
         "water heater":     "Water Heater",
         "hot water heater": "Water Heater",
+        "ceiling leak":     "Water Leak",
+        "roof leak exterior": "Water Leak",
+        "bathtub leak":     "Water Leak",
+        "sink leaking":     "Water Leak",
+        "faucet leak":      "Water Leak",
+        "drain/pipe clog":  "Water Leak",
+        "toilet is running continuously": "Water Leak",
+        "air conditioner":  "HVAC/AC",
+        "thermostat":       "HVAC/AC",
         "mold/mildew":      "Mold/Mildew",
         "mold":             "Mold/Mildew",
     }
-    issue_type_val = str(order.get("issue_type") or "").strip().lower()
-    if issue_type_val in _ISSUE_TYPE_OVERRIDES:
-        return _ISSUE_TYPE_OVERRIDES[issue_type_val]
-
-    # Mold/mildew bypasses the non-emergency filter — incidental words like
-    # "carpet" in the description must not suppress a genuine mold WO.
+    issue_type_val = normalize_wo_text(order.get("issue_type") or "").strip()
     mold_patterns = next(p for c, p in _EMERGENCY_WO_PATTERNS if c == "Mold/Mildew")
     if wo_matches(text, mold_patterns):
         return "Mold/Mildew"
+    if issue_type_val in _ISSUE_TYPE_OVERRIDES:
+        return _ISSUE_TYPE_OVERRIDES[issue_type_val]
+
+    structural_patterns = next(p for c, p in _EMERGENCY_WO_PATTERNS if c == "Structural")
+    if wo_matches(text, structural_patterns):
+        return "Structural"
 
     if wo_matches(text, _NON_EMERGENCY_WO_PATTERNS):
         return None
 
     for category, patterns in _EMERGENCY_WO_PATTERNS:
-        if category == "Mold/Mildew":
+        if category in ("Mold/Mildew", "Structural"):
             continue  # already handled above
         if not wo_matches(text, patterns):
             continue
-        if category == "Broken Windows" and wo_matches(text, [r"\bscreens?\b"]):
-            continue  # screen replacements are not emergency broken windows
-        if category == "Broken Doors" and wo_matches(text, [r"\bblinds?\b", r"\bscreens?\b"]):
-            return None
+        if category == "Fire/Smoke" and wo_matches(text, _FIRE_SMOKE_EXCLUDE_PATTERNS):
+            continue
+        if category == "Broken Windows" and wo_matches(text, _WINDOW_EXCLUDE_PATTERNS):
+            continue
+        if (
+            category == "Broken Doors"
+            and wo_matches(text, _DOOR_EXCLUDE_PATTERNS)
+            and not wo_matches(text, _DOOR_SECURITY_INCLUDE_PATTERNS)
+        ):
+            continue
         if category == "Broken Appliances" and not is_broken_appliance_emergency(order, text):
             continue
         return category
@@ -1437,7 +1585,7 @@ def build_summary_legacy(wb, data):
         ("% Occupancy",    fmt_pct(bs["pct_occ"])),
         ("Occupied (Occ)", bs["occupied"]),
         ("Vacant",         bs["vacant"]),
-        ("Preleases",      au["prelease_count"]),
+        ("Preleases (Vacant + On-Notice)", au["prelease_count"]),
         ("On-Notice",      bs["on_notice"]),
     ]
     for label, val in occ_rows:
@@ -1671,6 +1819,10 @@ def write_kv(ws, row, label_col, value_col, label, value, num_fmt=None):
     wc(ws, row, value_col, value, font="data", align=R, num_fmt=num_fmt)
 
 
+def na_if_none(value):
+    return "N/A" if value is None else value
+
+
 def write_pair_row(ws, row, left_label, left_value, right_label=None, right_value=None, left_fmt=None, right_fmt=None):
     write_kv(ws, row, 2, 3, left_label, left_value, left_fmt)
     if right_label is not None:
@@ -1739,7 +1891,13 @@ def add_projected_occupancy_chart(ws, entries):
     ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=7)
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right", fontsize=7)
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0%}"))
-    ax.set_ylim(0.87, 1.00)
+    y_min = max(0.0, float(np.floor((min(values) - 0.02) * 100) / 100))
+    y_max = min(1.0, float(np.ceil((max(values) + 0.01) * 100) / 100))
+    if y_max <= y_min:
+        y_max = min(1.0, y_min + 0.05)
+        if y_max <= y_min:
+            y_min = max(0.0, y_max - 0.05)
+    ax.set_ylim(y_min, y_max)
     ax.yaxis.grid(True, alpha=0.3)
     ax.xaxis.grid(False)
     ax.set_axisbelow(True)
@@ -1754,6 +1912,9 @@ def add_projected_occupancy_chart(ws, entries):
 
 def add_expiring_leases_chart(ws, months):
     """Matplotlib grouped bar chart: expirations vs renewals per month, as PNG."""
+    if months is None:
+        merge_band(ws, 22, 9, 16, "N/A", font="data", fill_color=PALE_BLUE, align=C, border=_box())
+        return
     if not months:
         merge_band(ws, 22, 9, 16, "No expiring lease data", font="data", fill_color=PALE_BLUE, align=C, border=_box())
         return
@@ -1879,12 +2040,12 @@ def build_summary(wb, data):
     # Columns R–U no longer hold visible data; chart data lives in chart_data sheet
 
     bs = data.get("box_score", default_box_score())
-    dl = data.get("delinquency", {"total": 0.0})
-    rr = data.get("rent_roll", {"total_rental": 0.0, "avg_rent": 0.0})
-    au = data.get("available_units", {"ready_units": [], "prelease_count": 0})
+    dl = data.get("delinquency") or {"total": None}
+    rr = data.get("rent_roll") or {"total_rental": None, "avg_rent": None}
+    au = data.get("available_units") or {"ready_units": None, "prelease_count": None}
     el = data.get("expiring_leases", [])
-    ps = data.get("prospect_sources", {})
-    wo = data.get("work_orders", {"work_orders": [], "issue_counts": {}})
+    ps = data.get("prospect_sources")
+    wo = data.get("work_orders") or {"work_orders": None, "issue_counts": {}}
     source_system = data.get("source_system") or detect_source_system(wb)
     source_text, source_color, source_fill = source_system_display(source_system)
 
@@ -1918,23 +2079,27 @@ def build_summary(wb, data):
 
     # Left side: key stats and compact detail tables.
     section_band(ws, 6, "OCCUPANCY", 2, 7)
-    write_pair_row(ws, 7, "% Occupancy", fmt_pct(bs.get("pct_occ")), "Occupied", bs.get("occupied"))
-    write_pair_row(ws, 8, "Vacant", bs.get("vacant"), "Total Units", bs.get("total_units"))
+    occupancy_value = fmt_pct(bs.get("pct_occ")) if bs.get("pct_occ") is not None else "N/A"
+    write_pair_row(ws, 7, "% Occupancy", occupancy_value, "Occupied", na_if_none(bs.get("occupied")))
+    write_pair_row(ws, 8, "Vacant", na_if_none(bs.get("vacant")), "Total Units", na_if_none(bs.get("total_units")))
     # Prefer Box Score "Vacant Pre-Leased" column value; fall back to Available Units count
     prelease_val = bs.get("prelease_count") if bs.get("prelease_count") is not None else au.get("prelease_count", 0)
-    write_pair_row(ws, 9, "Preleases", prelease_val, "On-Notice", bs.get("on_notice"))
+    write_pair_row(ws, 9, "Preleases (Vacant + On-Notice)", na_if_none(prelease_val), "On-Notice", na_if_none(bs.get("on_notice")))
 
     section_band(ws, 11, "LEASING / FINANCIAL", 2, 7)
-    write_pair_row(ws, 12, "Applied", bs.get("applied"), "Approved", bs.get("approved"))
-    write_pair_row(ws, 13, "Signed", bs.get("signed"), "Total Delinquency", dl.get("total", 0.0), right_fmt='"$"#,##0.00')
-    write_pair_row(ws, 14, "Total Rental Revenue", rr.get("total_rental", 0.0), "Average Rent / Unit", rr.get("avg_rent", 0.0),
+    write_pair_row(ws, 12, "Applied", na_if_none(bs.get("applied")), "Approved", na_if_none(bs.get("approved")))
+    write_pair_row(ws, 13, "Signed", na_if_none(bs.get("signed")), "Total Delinquency", na_if_none(dl.get("total")), right_fmt='"$"#,##0.00')
+    write_pair_row(ws, 14, "Total Rental Revenue", na_if_none(rr.get("total_rental")), "Average Rent / Unit", na_if_none(rr.get("avg_rent")),
                    left_fmt='"$"#,##0.00', right_fmt='"$"#,##0.00')
 
-    ready_units = au.get("ready_units", [])
-    section_band(ws, 16, f"READY UNITS ({len(ready_units)} total)", 2, 7)
+    ready_units = au.get("ready_units")
+    ready_count = "N/A" if ready_units is None else len(ready_units)
+    section_band(ws, 16, f"READY UNITS ({ready_count} total)", 2, 7)
     for col, label in zip([2, 3, 4, 5, 6, 7], ["Unit", "Section", "Status", "Unit", "Section", "Status"]):
         col_hdr(ws, 17, col, label)
-    if ready_units:
+    if ready_units is None:
+        merge_band(ws, 18, 2, 7, "N/A", font="data", fill_color=None, align=C, border=_box())
+    elif ready_units:
         for idx, unit in enumerate(ready_units[:18]):
             row = 18 + (idx % 9)
             base_col = 2 if idx < 9 else 5
@@ -1954,6 +2119,9 @@ def build_summary(wb, data):
         "New Apps": "New Applications",
         "Net Leases": "Net Leases",
     }
+    if ps is None:
+        merge_band(ws, 29, 2, 7, "N/A", font="data", fill_color=None, align=C, border=_box())
+        metric_labels = {}
     for i, (key, label) in enumerate(metric_labels.items(), 29):
         ranked = ps.get(key, [])
         s1, c1_v = ranked[0] if len(ranked) > 0 else ("—", 0)
@@ -1965,17 +2133,20 @@ def build_summary(wb, data):
         data_row(ws, i, 5, s2, zebra=z, align=L)
         data_row(ws, i, 7, c2_v, zebra=z, align=C)
 
-    work_orders = wo.get("work_orders", [])
-    section_band(ws, 35, f"EMERGENCY WORK ORDERS ({len(work_orders)} total)", 2, 7)
+    work_orders = wo.get("work_orders")
+    work_order_count = "N/A" if work_orders is None else len(work_orders)
+    section_band(ws, 35, f"EMERGENCY WORK ORDERS ({work_order_count} total)", 2, 7)
     issue_counts = wo.get("issue_counts", {})
-    summary_text = " | ".join(f"{issue}: {count}" for issue, count in issue_counts.items()) or "No emergency work orders"
+    summary_text = "N/A" if work_orders is None else (" | ".join(f"{issue}: {count}" for issue, count in issue_counts.items()) or "No emergency work orders")
     wc(ws, 36, 2, "Issue Types", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
     merge_band(ws, 36, 3, 7, summary_text, font="data", fill_color=LIGHT_BLUE, align=L, border=_box())
 
     for col, label in zip([2, 3, 4, 5], ["WO #", "Unit/Location", "Date Reported", "Category"]):
         col_hdr(ws, 37, col, label)
     merge_band(ws, 37, 6, 7, "Description", font="col_hdr", fill_color=LIGHT_BLUE, align=C, border=_box())
-    if work_orders:
+    if work_orders is None:
+        merge_band(ws, 38, 2, 7, "N/A", font="data", fill_color=None, align=C, border=_box())
+    elif work_orders:
         for i, order in enumerate(work_orders[:8], 38):
             z = (i - 38) % 2 == 0
             data_row(ws, i, 2, order.get("number", ""), zebra=z, align=C)
@@ -2035,6 +2206,9 @@ def default_box_score():
         "occupied": 0,
         "vacant": 0,
         "pct_occ": 0.0,
+        "prelease_count": None,
+        "vacant_prelease_count": None,
+        "notice_prelease_count": None,
         "on_notice": 0,
         "applied": 0,
         "approved": 0,
@@ -2201,6 +2375,9 @@ def parse_appfolio(wb):
             for category, _ in _EMERGENCY_WO_PATTERNS
             if count_map.get(category)
         }
+        print(f"  Appfolio emergency work orders after filtering: {len(wo_list)}")
+        for order in wo_list:
+            print(f"    {order['number']} -> {order['category']}")
 
     return {
         "box_score": {
@@ -2211,6 +2388,9 @@ def parse_appfolio(wb):
             "occupied":      occupied,
             "vacant":        max(total_units - occupied, 0),
             "pct_occ":       pct_occ,
+            "prelease_count": 0,
+            "vacant_prelease_count": 0,
+            "notice_prelease_count": 0,
             "on_notice":     0,
             "applied":       0,
             "approved":      0,
@@ -2269,29 +2449,29 @@ def main():
         print(f"  On-Notice : {bs['on_notice']}   Applied/Approved/Signed: {bs['applied']}/{bs['approved']}/{bs['signed']}")
 
         print("\nParsing Delinquency ...")
-        dl = parse_optional_sheet(wb, "Delinquency", parse_delinquency, {"total": 0.0})
-        print(f"  Total delinquency: ${dl['total']:,.2f}")
+        dl = parse_optional_sheet(wb, "Delinquency", parse_delinquency, {"total": None, "count": None})
+        print(f"  Total delinquency: {('$' + format(dl['total'], ',.2f')) if dl.get('total') is not None else 'N/A'}")
 
         print("\nParsing Rent Roll ...")
-        rr = parse_optional_sheet(wb, "Rent Roll", parse_rent_roll, {"total_rental": 0.0, "avg_rent": 0.0}, bs["occupied"])
-        print(f"  Total rental revenue : ${rr['total_rental']:,.2f}")
-        print(f"  Average rent / unit  : ${rr['avg_rent']:,.2f}")
+        rr = parse_optional_sheet(wb, "Rent Roll", parse_rent_roll, {"total_rental": None, "avg_rent": None}, bs["occupied"])
+        print(f"  Total rental revenue : {('$' + format(rr['total_rental'], ',.2f')) if rr.get('total_rental') is not None else 'N/A'}")
+        print(f"  Average rent / unit  : {('$' + format(rr['avg_rent'], ',.2f')) if rr.get('avg_rent') is not None else 'N/A'}")
 
         print("\nParsing Available Units ...")
-        au = parse_optional_sheet(wb, "Available Units", parse_available_units, {"ready_units": [], "prelease_count": 0})
-        print(f"  Ready units : {len(au['ready_units'])}")
+        au = parse_optional_sheet(wb, "Available Units", parse_available_units, {"ready_units": None, "prelease_count": None})
+        print(f"  Ready units : {len(au['ready_units']) if au.get('ready_units') is not None else 'N/A'}")
         print(f"  Preleases   : {au['prelease_count']}")
 
         print("\nParsing Expiring Leases ...")
-        el = parse_optional_sheet(wb, "Expiring Leases", parse_expiring_leases, [], bs["date_range"])
-        print(f"  Months: {[fmt_month(m['dt']) for m in el]}")
+        el = parse_optional_sheet(wb, "Expiring Leases", parse_expiring_leases, None, bs["date_range"])
+        print(f"  Months: {[fmt_month(m['dt']) for m in el] if el is not None else 'N/A'}")
 
         print("\nParsing Prospect Sources ...")
-        ps = parse_optional_sheet(wb, "Prospect Source Summary", parse_prospect_sources, {})
+        ps = parse_optional_sheet(wb, "Prospect Source Summary", parse_prospect_sources, None)
 
         print("\nParsing Work Orders ...")
-        wo = parse_optional_sheet(wb, "Work Order Summary", parse_work_orders, {"work_orders": [], "issue_counts": {}})
-        print(f"  Emergency work orders: {len(wo['work_orders'])}")
+        wo = parse_optional_sheet(wb, "Work Order Summary", parse_work_orders, {"work_orders": None, "issue_counts": {}})
+        print(f"  Emergency work orders: {len(wo['work_orders']) if wo.get('work_orders') is not None else 'N/A'}")
         for k, v in wo["issue_counts"].items():
             if v:
                 print(f"    {k}: {v}")

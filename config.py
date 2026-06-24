@@ -9,12 +9,12 @@ class Config:
     # ── Security ───────────────────────────────────────────────────────────
     SECRET_KEY: str = os.environ.get("SECRET_KEY", "dev-insecure-change-before-deploy")
     WTF_CSRF_ENABLED: bool = True
-    WTF_CSRF_TIME_LIMIT: int = 3600          # 1-hour CSRF token validity
+    WTF_CSRF_TIME_LIMIT: int = 4 * 60 * 60   # 4-hour CSRF token validity
     SESSION_COOKIE_HTTPONLY: bool = True
     SESSION_COOKIE_SAMESITE: str = "Lax"
 
     # ── Session ────────────────────────────────────────────────────────────
-    PERMANENT_SESSION_LIFETIME: timedelta = timedelta(minutes=30)
+    PERMANENT_SESSION_LIFETIME: timedelta = timedelta(hours=4)
     SESSION_PERMANENT: bool = True
 
     # ── Runtime ────────────────────────────────────────────────────────────

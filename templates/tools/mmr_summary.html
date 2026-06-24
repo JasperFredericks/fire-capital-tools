@@ -125,6 +125,7 @@
   const errorPanel = document.getElementById("error-panel");
   const resultPanel= document.getElementById("result-panel");
   const downloadBtn= document.getElementById("download-btn");
+  const downloadBtnHtml = downloadBtn.innerHTML;
 
   // Result stat elements
   const resProperty   = document.getElementById("res-property");
@@ -147,6 +148,33 @@
   function getCsrfToken() {
     const meta = document.querySelector('meta[name="csrf-token"]');
     return meta ? meta.getAttribute("content") : "";
+  }
+
+  function handleSessionExpired(payload) {
+    const redirect = payload && payload.redirect ? payload.redirect : "/login";
+    window.location.assign(redirect);
+  }
+
+  async function parseJsonResponse(resp) {
+    const contentType = resp.headers.get("Content-Type") || "";
+    if (resp.redirected || resp.url.includes("/login")) {
+      handleSessionExpired({ redirect: "/login" });
+      throw new Error("Session expired. Redirecting to login.");
+    }
+    if (!contentType.includes("application/json")) {
+      const text = await resp.text();
+      if (text.trim().toLowerCase().startsWith("<!doctype")) {
+        handleSessionExpired({ redirect: "/login" });
+        throw new Error("Session expired. Redirecting to login.");
+      }
+      throw new Error("Unexpected server response. Please try again.");
+    }
+    const data = await resp.json();
+    if (resp.status === 401 && data.error === "session_expired") {
+      handleSessionExpired(data);
+      throw new Error("Session expired. Redirecting to login.");
+    }
+    return data;
   }
 
   // ── Number formatting ─────────────────────────────────────────────────
@@ -265,7 +293,7 @@
         body: formData,
       });
 
-      const data = await resp.json();
+      const data = await parseJsonResponse(resp);
 
       if (!resp.ok) {
         throw new Error(data.error || "Upload failed. Please try again.");
@@ -332,6 +360,8 @@
   // ── Download ──────────────────────────────────────────────────────────
   downloadBtn.addEventListener("click", async function () {
     if (!downloadToken) return;
+    downloadBtn.disabled = true;
+    downloadBtn.textContent = "Downloading...";
 
     try {
       const resp = await fetch(`/tools/mmr-summary/download/${downloadToken}`, {
@@ -339,10 +369,19 @@
         headers: { "X-CSRFToken": getCsrfToken() },
       });
 
+      if (resp.redirected || resp.url.includes("/login")) {
+        handleSessionExpired({ redirect: "/login" });
+        return;
+      }
+
       if (!resp.ok) {
         const ct = resp.headers.get("Content-Type") || "";
         if (ct.includes("json")) {
           const err = await resp.json();
+          if (resp.status === 401 && err.error === "session_expired") {
+            handleSessionExpired(err);
+            return;
+          }
           throw new Error(err.error || "Download failed.");
         }
         throw new Error("Download failed. Please regenerate the file.");
@@ -364,13 +403,11 @@
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      // Token is consumed — disable further downloads
-      downloadToken = null;
-      downloadBtn.disabled = true;
-      downloadBtn.textContent = "Downloaded";
-
     } catch (err) {
       showError(err.message);
+    } finally {
+      downloadBtn.disabled = false;
+      downloadBtn.innerHTML = downloadBtnHtml;
     }
   });
 

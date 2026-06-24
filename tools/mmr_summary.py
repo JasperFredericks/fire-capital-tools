@@ -54,6 +54,7 @@ default_box_score     = _gs.default_box_score
 extract_appfolio_box_score = _gs.extract_appfolio_box_score
 parse_appfolio           = _gs.parse_appfolio
 make_download_filename   = _gs.make_download_filename
+sheet_by_name            = _gs.sheet_by_name
 
 import openpyxl  # already required by generate_summary
 
@@ -69,23 +70,29 @@ def process_mmr(filepath: Path) -> dict:
     if source_system == "Unrecognized Format":
         print("WARNING: Workbook format is not recognized. Summary will contain placeholder values.")
 
-    if source_system == "Resman":
-        required = {
-            "Box Score", "Delinquency", "Rent Roll",
-            "Available Units", "Expiring Leases",
-            "Prospect Source Summary", "Work Order Summary",
-        }
-        missing = required - set(wb.sheetnames)
-        if missing:
-            raise ValueError(f"Missing required tabs: {', '.join(sorted(missing))}")
+    missing_sheets: list[str] = []
 
-        bs = parse_box_score(wb["Box Score"])
-        dl = parse_delinquency(wb["Delinquency"])
-        rr = parse_rent_roll(wb["Rent Roll"], bs["occupied"])
-        au = parse_available_units(wb["Available Units"])
-        el = parse_expiring_leases(wb["Expiring Leases"], bs["date_range"])
-        ps = parse_prospect_sources(wb["Prospect Source Summary"])
-        wo = parse_work_orders(wb["Work Order Summary"])
+    def parse_resman_section(sheet_name: str, parser, default_value, *args):
+        ws = sheet_by_name(wb, sheet_name)
+        if ws is None:
+            print(f"WARNING: Missing tab '{sheet_name}' - using blank defaults.")
+            missing_sheets.append(sheet_name)
+            return default_value
+        try:
+            return parser(ws, *args)
+        except Exception as exc:
+            print(f"WARNING: Could not parse tab '{sheet_name}' ({exc}) - using blank defaults.")
+            missing_sheets.append(f"{sheet_name} (parse failed)")
+            return default_value
+
+    if source_system == "Resman":
+        bs = parse_resman_section("Box Score", parse_box_score, default_box_score())
+        dl = parse_resman_section("Delinquency", parse_delinquency, {"total": None, "count": None})
+        rr = parse_resman_section("Rent Roll", parse_rent_roll, {"total_rental": None, "avg_rent": None}, bs["occupied"])
+        au = parse_resman_section("Available Units", parse_available_units, {"ready_units": None, "prelease_count": None})
+        el = parse_resman_section("Expiring Leases", parse_expiring_leases, None, bs["date_range"])
+        ps = parse_resman_section("Prospect Source Summary", parse_prospect_sources, None)
+        wo = parse_resman_section("Work Order Summary", parse_work_orders, {"work_orders": None, "issue_counts": {}})
     elif source_system == "Appfolio":
         appfolio = parse_appfolio(wb)
         bs = appfolio["box_score"]
@@ -118,8 +125,18 @@ def process_mmr(filepath: Path) -> dict:
     build_summary(wb, data)
     wb.save(str(filepath))
 
+    def round_number(value, digits=2):
+        try:
+            return round(float(value), digits)
+        except (TypeError, ValueError):
+            return None
+
     total_units  = bs["total_units"]
-    total_rental = round(float(rr["total_rental"]), 2)
+    total_rental = round_number(rr.get("total_rental"))
+    avg_rent = round_number(rr.get("avg_rent"))
+    delinquency_total = round_number(dl.get("total"))
+    ready_units = au.get("ready_units")
+    work_orders = wo.get("work_orders")
 
     # Return real stats for both Resman and Appfolio; show dashes only for
     # truly unrecognized formats where we have no data.
@@ -132,13 +149,14 @@ def process_mmr(filepath: Path) -> dict:
         "total_units":            total_units,
         "occupied_units":         bs["occupied"],
         "physical_occupancy_pct": round(bs["pct_occ"] * 100, 1) if has_stats else None,
-        "delinquency_total":      round(float(dl["total"]), 2) if has_stats else None,
+        "delinquency_total":      delinquency_total if has_stats else None,
         "delinquency_count":      dl.get("count"),
         "total_rental_revenue":   total_rental if has_stats else None,
-        "revenue_per_unit":       round(total_rental / total_units, 2) if has_stats and total_units else None,
-        "avg_rent_per_unit":      round(float(rr["avg_rent"]), 2) if has_stats else None,
-        "ready_units":            len(au["ready_units"]) if has_stats else None,
-        "emergency_wo_count":     len(wo["work_orders"]) if has_stats else None,
+        "revenue_per_unit":       round(total_rental / total_units, 2) if has_stats and total_units and total_rental is not None else None,
+        "avg_rent_per_unit":      avg_rent if has_stats else None,
+        "ready_units":            len(ready_units) if has_stats and ready_units is not None else None,
+        "emergency_wo_count":     len(work_orders) if has_stats and work_orders is not None else None,
+        "missing_sheets":         missing_sheets,
         "download_name":          make_download_filename(bs["property_name"], bs["date_range"], bs.get("printed", "")),
     }
 
@@ -148,8 +166,10 @@ def _upload_dir() -> Path:
     return Path(current_app.config["UPLOAD_FOLDER"])
 
 
-def _cleanup_old_uploads(max_age: int = 3600) -> None:
+def _cleanup_old_uploads(max_age: int | None = None) -> None:
     """Delete orphaned upload files older than max_age seconds."""
+    if max_age is None:
+        max_age = int(current_app.permanent_session_lifetime.total_seconds())
     cutoff = time.time() - max_age
     for f in _upload_dir().glob("*.xlsx"):
         try:
@@ -228,7 +248,7 @@ def download(token: str):
     if token not in pending:
         abort(403)
 
-    original_name: str = pending.pop(token)
+    original_name: str = pending[token]
     session["pending_downloads"] = pending
     session.modified = True
 
@@ -236,9 +256,8 @@ def download(token: str):
     if not file_path.exists():
         abort(404)
 
-    # Read into memory then delete from disk
+    # Keep the file available for repeat downloads during the session.
     data = file_path.read_bytes()
-    file_path.unlink(missing_ok=True)
 
     return send_file(
         io.BytesIO(data),
