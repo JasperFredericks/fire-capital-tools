@@ -34,6 +34,9 @@ def create_app(config_class: type = Config) -> Flask:
         return (
             request.path.startswith("/tools/mmr-summary/upload")
             or request.path.startswith("/tools/mmr-summary/download/")
+            or request.path.startswith("/tools/scorecard-pro/upload")
+            or request.path.startswith("/tools/scorecard-pro/analysis/")
+            or request.path.startswith("/tools/scorecard-pro/download/")
             or request.accept_mimetypes.best == "application/json"
             or request.headers.get("X-Requested-With") == "XMLHttpRequest"
         )
@@ -58,9 +61,11 @@ def create_app(config_class: type = Config) -> Flask:
     # ── Blueprints ─────────────────────────────────────────────────────────
     from auth import auth_bp
     from tools.mmr_summary import mmr_bp
+    from tools.scorecard_pro import scorecard_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(mmr_bp, url_prefix="/tools/mmr-summary")
+    app.register_blueprint(scorecard_bp, url_prefix="/tools/scorecard-pro")
 
     # ── Security headers ───────────────────────────────────────────────────
     @app.after_request

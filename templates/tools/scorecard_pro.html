@@ -1,0 +1,574 @@
+{% extends "base.html" %}
+{% block title %}Scorecard Pro - FIRE Capital Tools{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <h1 class="page-title">Scorecard Pro</h1>
+  <p class="page-subtitle">Upload a P&amp;L CSV and optional scorecard workbook to generate KPIs, insights, comparisons, and exports.</p>
+</div>
+
+<div class="card">
+  <div class="scorecard-upload-grid">
+    <label class="scorecard-file-box">
+      <span class="scorecard-file-label">P&amp;L CSV</span>
+      <input type="file" id="pnl-file" accept=".csv">
+      <span class="scorecard-file-name" id="pnl-file-name">Choose .csv file</span>
+    </label>
+
+    <label class="scorecard-file-box">
+      <span class="scorecard-file-label">Scorecard Workbook</span>
+      <input type="file" id="scorecard-file" accept=".xlsx,.xlsm">
+      <span class="scorecard-file-name" id="scorecard-file-name">Optional .xlsx or .xlsm</span>
+    </label>
+  </div>
+
+  <div id="scorecard-error" class="error-panel" role="alert" aria-live="assertive"></div>
+
+  <div class="upload-actions">
+    <button id="run-scorecard-btn" class="btn btn-primary" disabled type="button">Run Analysis</button>
+    <span id="scorecard-spinner" style="display:none; align-items:center; gap:8px; color:#6b7280; font-size:13px;">
+      <span class="spinner" style="border-color:rgba(37,99,235,0.2); border-top-color:#2563eb;"></span>
+      Processing...
+    </span>
+  </div>
+</div>
+
+<div id="scorecard-results" class="scorecard-results">
+  <div class="card scorecard-hero">
+    <div>
+      <div class="result-title-line">
+        <div class="result-property" id="scorecard-property">-</div>
+        <span class="source-badge source-badge-resman" id="scorecard-format">Unknown</span>
+      </div>
+      <div class="result-period" id="scorecard-period"></div>
+    </div>
+    <div class="scorecard-downloads" id="download-buttons"></div>
+  </div>
+
+  <div class="card" id="scorecard-warnings-card" style="display:none;">
+    <div class="scorecard-section-title">Parsing Notes</div>
+    <ul class="scorecard-note-list" id="scorecard-warnings"></ul>
+  </div>
+
+  <div class="card">
+    <div class="scorecard-section-title">Month Filter</div>
+    <div class="month-filter-grid" id="month-filter-grid"></div>
+    <div class="upload-actions" style="margin-top:14px;">
+      <button id="apply-months-btn" class="btn btn-ghost" type="button">Apply Filter</button>
+    </div>
+  </div>
+
+  <div class="scorecard-tabs" role="tablist">
+    <button class="scorecard-tab active" data-tab="dashboard" type="button">Dashboard</button>
+    <button class="scorecard-tab" data-tab="accounts" type="button">Account Explorer</button>
+    <button class="scorecard-tab" data-tab="comparison" type="button">Comparisons</button>
+    <button class="scorecard-tab" data-tab="insights" type="button">Insights</button>
+    <button class="scorecard-tab" data-tab="export" type="button">Export</button>
+  </div>
+
+  <section class="scorecard-tab-panel active" id="tab-dashboard">
+    <div class="stats-grid scorecard-stats">
+      <div class="stat-box">
+        <div class="stat-box-label">Total Income</div>
+        <div class="stat-box-value" id="sum-income">-</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Total Expenses</div>
+        <div class="stat-box-value" id="sum-expenses">-</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">NOI</div>
+        <div class="stat-box-value" id="sum-noi">-</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Avg Occupancy</div>
+        <div class="stat-box-value" id="sum-occupancy">-</div>
+        <div class="stat-box-sub" id="sum-occupancy-sub"></div>
+      </div>
+    </div>
+
+    <div class="card scorecard-quarter" id="quarter-card" style="display:none;">
+      <div class="scorecard-section-title" id="quarter-label">Latest Full Quarter</div>
+      <div class="scorecard-quarter-grid">
+        <span id="quarter-income">-</span>
+        <span id="quarter-expenses">-</span>
+        <span id="quarter-noi">-</span>
+        <span id="quarter-occupancy">-</span>
+      </div>
+    </div>
+
+    <div class="scorecard-chart-grid">
+      <div class="card scorecard-chart-card"><img id="chart-trend" alt="Financial trend chart"></div>
+      <div class="card scorecard-chart-card"><img id="chart-waterfall" alt="NOI waterfall chart"></div>
+      <div class="card scorecard-chart-card"><img id="chart-occupancy" alt="Occupancy chart"></div>
+      <div class="card scorecard-chart-card"><img id="chart-expense-ratio" alt="Expense ratio chart"></div>
+    </div>
+  </section>
+
+  <section class="scorecard-tab-panel" id="tab-accounts">
+    <div class="card">
+      <div class="scorecard-control-row">
+        <label class="form-label" for="account-select">Account</label>
+        <select class="form-input" id="account-select"></select>
+      </div>
+      <div class="stats-grid" style="margin-top:16px;">
+        <div class="stat-box">
+          <div class="stat-box-label">Total Period</div>
+          <div class="stat-box-value" id="account-total">-</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-label">Average Monthly</div>
+          <div class="stat-box-value" id="account-average">-</div>
+        </div>
+      </div>
+      <div class="account-bars" id="account-bars"></div>
+    </div>
+
+    <div class="card">
+      <div class="scorecard-section-title">KPI Data</div>
+      <div class="table-wrap">
+        <table class="scorecard-table" id="kpi-table"></table>
+      </div>
+    </div>
+  </section>
+
+  <section class="scorecard-tab-panel" id="tab-comparison">
+    <div class="card">
+      <div class="scorecard-section-title">Actuals vs UW &amp; PM Budget</div>
+      <div id="target-diagnostics" class="scorecard-diagnostics"></div>
+      <div class="table-wrap">
+        <table class="scorecard-table" id="comparison-table"></table>
+      </div>
+    </div>
+  </section>
+
+  <section class="scorecard-tab-panel" id="tab-insights">
+    <div class="scorecard-insight-grid">
+      <div class="card">
+        <div class="scorecard-section-title">Key Trends</div>
+        <ul class="scorecard-note-list" id="insight-trends"></ul>
+      </div>
+      <div class="card">
+        <div class="scorecard-section-title">Flags</div>
+        <div class="scorecard-flag-columns">
+          <div>
+            <div class="scorecard-mini-title">Green</div>
+            <ul class="scorecard-note-list" id="insight-green"></ul>
+          </div>
+          <div>
+            <div class="scorecard-mini-title">Red</div>
+            <ul class="scorecard-note-list" id="insight-red"></ul>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="scorecard-section-title">Recommendations</div>
+        <ul class="scorecard-note-list" id="insight-recs"></ul>
+      </div>
+      <div class="card">
+        <div class="scorecard-section-title">Category Breakdown</div>
+        <div class="table-wrap">
+          <table class="scorecard-table" id="category-table"></table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scorecard-tab-panel" id="tab-export">
+    <div class="card">
+      <div class="scorecard-section-title">Report Preview</div>
+      <textarea class="scorecard-report-preview" id="report-preview" readonly></textarea>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const pnlInput = document.getElementById("pnl-file");
+  const scorecardInput = document.getElementById("scorecard-file");
+  const pnlName = document.getElementById("pnl-file-name");
+  const scorecardName = document.getElementById("scorecard-file-name");
+  const runBtn = document.getElementById("run-scorecard-btn");
+  const spinner = document.getElementById("scorecard-spinner");
+  const errorPanel = document.getElementById("scorecard-error");
+  const results = document.getElementById("scorecard-results");
+  const monthGrid = document.getElementById("month-filter-grid");
+  const applyMonthsBtn = document.getElementById("apply-months-btn");
+  const accountSelect = document.getElementById("account-select");
+
+  let currentToken = null;
+  let currentAnalysis = null;
+
+  function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute("content") : "";
+  }
+
+  function showError(message) {
+    errorPanel.textContent = message;
+    errorPanel.classList.add("visible");
+  }
+
+  function clearError() {
+    errorPanel.textContent = "";
+    errorPanel.classList.remove("visible");
+  }
+
+  function setLoading(on) {
+    runBtn.disabled = on || !pnlInput.files.length;
+    spinner.style.display = on ? "flex" : "none";
+  }
+
+  function fmtCurrency(value) {
+    if (value == null) return "-";
+    return "$" + Number(value).toLocaleString("en-US", { maximumFractionDigits: 0 });
+  }
+
+  function fmtPercent(value) {
+    if (value == null) return "N/A";
+    return (Number(value) * 100).toFixed(1) + "%";
+  }
+
+  async function parseJsonResponse(resp) {
+    const ct = resp.headers.get("Content-Type") || "";
+    if (resp.redirected || resp.url.includes("/login")) {
+      window.location.assign("/login");
+      throw new Error("Session expired. Redirecting to login.");
+    }
+    if (!ct.includes("application/json")) {
+      throw new Error("Unexpected server response.");
+    }
+    const data = await resp.json();
+    if (resp.status === 401 && data.error === "session_expired") {
+      window.location.assign(data.redirect || "/login");
+      throw new Error("Session expired. Redirecting to login.");
+    }
+    return data;
+  }
+
+  pnlInput.addEventListener("change", function () {
+    const file = pnlInput.files[0];
+    pnlName.textContent = file ? file.name : "Choose .csv file";
+    runBtn.disabled = !file;
+    clearError();
+  });
+
+  scorecardInput.addEventListener("change", function () {
+    const file = scorecardInput.files[0];
+    scorecardName.textContent = file ? file.name : "Optional .xlsx or .xlsm";
+    clearError();
+  });
+
+  runBtn.addEventListener("click", async function () {
+    if (!pnlInput.files.length) return;
+    const pnl = pnlInput.files[0];
+    if (!pnl.name.toLowerCase().endsWith(".csv")) {
+      showError("P&L upload must be a .csv file.");
+      return;
+    }
+    const scorecard = scorecardInput.files[0];
+    if (scorecard && !/\.(xlsx|xlsm)$/i.test(scorecard.name)) {
+      showError("Scorecard upload must be an .xlsx or .xlsm file.");
+      return;
+    }
+
+    clearError();
+    setLoading(true);
+    results.classList.remove("visible");
+
+    const formData = new FormData();
+    formData.append("pnl_file", pnl);
+    if (scorecard) formData.append("scorecard_file", scorecard);
+
+    try {
+      const resp = await fetch("/tools/scorecard-pro/upload", {
+        method: "POST",
+        headers: { "X-CSRFToken": getCsrfToken() },
+        body: formData,
+      });
+      const data = await parseJsonResponse(resp);
+      if (!resp.ok) throw new Error(data.error || "Upload failed.");
+      currentToken = data.token;
+      renderAnalysis(data.analysis);
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  applyMonthsBtn.addEventListener("click", async function () {
+    if (!currentToken) return;
+    const months = Array.from(monthGrid.querySelectorAll("input[type='checkbox']:checked")).map(input => input.value);
+    try {
+      const resp = await fetch(`/tools/scorecard-pro/analysis/${currentToken}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": getCsrfToken(),
+        },
+        body: JSON.stringify({ months }),
+      });
+      const data = await parseJsonResponse(resp);
+      if (!resp.ok) throw new Error(data.error || "Filter failed.");
+      renderAnalysis(data.analysis, true);
+    } catch (err) {
+      showError(err.message);
+    }
+  });
+
+  document.querySelectorAll(".scorecard-tab").forEach(button => {
+    button.addEventListener("click", function () {
+      const tab = button.dataset.tab;
+      document.querySelectorAll(".scorecard-tab").forEach(btn => btn.classList.toggle("active", btn === button));
+      document.querySelectorAll(".scorecard-tab-panel").forEach(panel => {
+        panel.classList.toggle("active", panel.id === `tab-${tab}`);
+      });
+    });
+  });
+
+  accountSelect.addEventListener("change", renderSelectedAccount);
+
+  function renderAnalysis(analysis, preserveMonths) {
+    currentAnalysis = analysis;
+    results.classList.add("visible");
+    document.getElementById("scorecard-property").textContent = analysis.property || "-";
+    document.getElementById("scorecard-period").textContent = analysis.period || "";
+    document.getElementById("scorecard-format").textContent = analysis.format || "Unknown";
+
+    if (!preserveMonths) renderMonthFilters(analysis);
+    renderWarnings(analysis);
+    renderSummary(analysis);
+    renderQuarter(analysis);
+    renderCharts(analysis);
+    renderDownloads(analysis);
+    renderAccounts(analysis);
+    renderKpiTable(analysis);
+    renderComparison(analysis);
+    renderInsights(analysis);
+    document.getElementById("report-preview").value = analysis.report_text || "";
+  }
+
+  function renderMonthFilters(analysis) {
+    monthGrid.innerHTML = "";
+    const selected = new Set(analysis.selected_months || analysis.months || []);
+    (analysis.months || []).forEach(month => {
+      const label = document.createElement("label");
+      label.className = "month-check";
+      label.innerHTML = `<input type="checkbox" value="${month}" ${selected.has(month) ? "checked" : ""}> <span>${month}</span>`;
+      monthGrid.appendChild(label);
+    });
+  }
+
+  function renderWarnings(analysis) {
+    const card = document.getElementById("scorecard-warnings-card");
+    const list = document.getElementById("scorecard-warnings");
+    const warnings = analysis.warnings || [];
+    const missing = (analysis.summary && analysis.summary.missing_gpr_months) || [];
+    const zero = (analysis.summary && analysis.summary.zero_occupancy_months) || [];
+    const notes = warnings.slice();
+    if (missing.length) notes.push("No GPR data for: " + missing.join(", "));
+    if (zero.length) notes.push("True 0% occupancy for: " + zero.join(", "));
+    list.innerHTML = "";
+    notes.forEach(note => addListItem(list, note));
+    card.style.display = notes.length ? "block" : "none";
+  }
+
+  function renderSummary(analysis) {
+    const s = analysis.summary || {};
+    document.getElementById("sum-income").textContent = fmtCurrency(s.total_income);
+    document.getElementById("sum-expenses").textContent = fmtCurrency(s.total_expenses);
+    document.getElementById("sum-noi").textContent = fmtCurrency(s.total_noi);
+    document.getElementById("sum-occupancy").textContent = fmtPercent(s.avg_occupancy);
+    const fallback = s.expense_fallback_codes && s.expense_fallback_codes.length
+      ? "Expense fallback: " + s.expense_fallback_codes.join(", ")
+      : "";
+    document.getElementById("sum-occupancy-sub").textContent = fallback;
+  }
+
+  function renderQuarter(analysis) {
+    const card = document.getElementById("quarter-card");
+    const q = analysis.latest_quarter;
+    if (!q) {
+      card.style.display = "none";
+      return;
+    }
+    card.style.display = "block";
+    document.getElementById("quarter-label").textContent = "Latest Full Quarter (" + q.label + ")";
+    document.getElementById("quarter-income").textContent = "Income " + fmtCurrency(q.income);
+    document.getElementById("quarter-expenses").textContent = "Expenses " + fmtCurrency(q.expenses);
+    document.getElementById("quarter-noi").textContent = "NOI " + fmtCurrency(q.noi);
+    document.getElementById("quarter-occupancy").textContent = "Occupancy " + fmtPercent(q.occupancy);
+  }
+
+  function renderCharts(analysis) {
+    const charts = analysis.charts || {};
+    setChart("chart-trend", charts.trend);
+    setChart("chart-waterfall", charts.waterfall);
+    setChart("chart-occupancy", charts.occupancy);
+    setChart("chart-expense-ratio", charts.expense_ratio);
+  }
+
+  function setChart(id, src) {
+    const img = document.getElementById(id);
+    img.src = src || "";
+    img.parentElement.style.display = src ? "block" : "none";
+  }
+
+  function renderDownloads(analysis) {
+    const wrap = document.getElementById("download-buttons");
+    wrap.innerHTML = "";
+    const labels = {
+      report: "TXT",
+      csv: "CSV",
+      xlsx: "XLSX",
+      pdf: "PDF",
+      scorecard: "Updated Scorecard",
+    };
+    (analysis.downloads || []).forEach(kind => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = kind === "scorecard" ? "btn btn-success" : "btn btn-ghost";
+      btn.textContent = labels[kind] || kind;
+      btn.addEventListener("click", () => download(kind, btn));
+      wrap.appendChild(btn);
+    });
+  }
+
+  async function download(kind, button) {
+    if (!currentToken) return;
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = "Downloading...";
+    try {
+      const resp = await fetch(`/tools/scorecard-pro/download/${currentToken}/${kind}`, {
+        method: "GET",
+        headers: { "X-CSRFToken": getCsrfToken() },
+      });
+      if (!resp.ok) throw new Error("Download failed. Please rerun the analysis.");
+      const cd = resp.headers.get("Content-Disposition") || "";
+      const match = cd.match(/filename[^;=\n]*=["']?([^"';\n]+)["']?/);
+      const name = match ? match[1].trim() : `scorecard-${kind}`;
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+
+  function renderAccounts(analysis) {
+    accountSelect.innerHTML = "";
+    (analysis.accounts || []).forEach(account => {
+      const opt = document.createElement("option");
+      opt.value = account.code;
+      opt.textContent = `${account.code} - ${account.name}`;
+      accountSelect.appendChild(opt);
+    });
+    renderSelectedAccount();
+  }
+
+  function renderSelectedAccount() {
+    if (!currentAnalysis) return;
+    const code = accountSelect.value;
+    const account = (currentAnalysis.accounts || []).find(item => item.code === code);
+    if (!account) return;
+    document.getElementById("account-total").textContent = fmtCurrency(account.total);
+    document.getElementById("account-average").textContent = fmtCurrency(account.average);
+    const wrap = document.getElementById("account-bars");
+    wrap.innerHTML = "";
+    const max = Math.max(1, ...account.monthly.map(item => Math.abs(item.amount)));
+    account.monthly.forEach(item => {
+      const row = document.createElement("div");
+      row.className = "account-bar-row";
+      row.innerHTML = `<span>${item.month}</span><div><i style="width:${Math.max(4, Math.abs(item.amount) / max * 100)}%"></i></div><b>${fmtCurrency(item.amount)}</b>`;
+      wrap.appendChild(row);
+    });
+  }
+
+  function renderKpiTable(analysis) {
+    const rows = (analysis.kpi_rows || []).map(row => [
+      row.Month,
+      fmtCurrency(row.Income),
+      fmtCurrency(row.Expenses),
+      fmtCurrency(row.NOI),
+      row.OccupancyStatus === "missing_gpr" ? "No GPR" : fmtPercent(row.Occupancy),
+      fmtPercent(row.ExpenseRatio),
+    ]);
+    renderTable(document.getElementById("kpi-table"), ["Month", "Income", "Expenses", "NOI", "Occupancy", "Expense Ratio"], rows);
+  }
+
+  function renderComparison(analysis) {
+    const rows = (analysis.comparison || []).map(row => [
+      row.month,
+      row.metric,
+      fmtCurrency(row.actual),
+      fmtCurrency(row.uw),
+      fmtCurrency(row.pm),
+      fmtCurrency(row.variance_uw),
+      fmtCurrency(row.variance_pm),
+    ]);
+    renderTable(document.getElementById("comparison-table"), ["Month", "Metric", "Actual", "UW", "PM Budget", "Var UW", "Var PM"], rows);
+
+    const diag = analysis.target_diagnostics;
+    const diagEl = document.getElementById("target-diagnostics");
+    if (!diag) {
+      diagEl.textContent = "Upload a scorecard workbook to show UW and PM Budget targets.";
+      return;
+    }
+    const foundCols = Object.keys(diag.found_columns || {}).join(", ") || "none";
+    const missingCols = (diag.missing_columns || []).join(", ") || "none";
+    const foundRows = (diag.found_rows || []).map(item => item.metric + " row " + item.row).join(", ") || "none";
+    const missingRows = (diag.missing_rows || []).join(", ") || "none";
+    diagEl.textContent = `Target parser: columns found ${foundCols}; missing columns ${missingCols}; rows found ${foundRows}; missing rows ${missingRows}.`;
+  }
+
+  function renderInsights(analysis) {
+    const insights = analysis.insights || {};
+    renderList("insight-trends", (insights.trends || []).map(item => Array.isArray(item) ? item[0] : item));
+    renderList("insight-green", insights.green_flags || []);
+    renderList("insight-red", insights.red_flags || []);
+    renderList("insight-recs", insights.recommendations || []);
+    const catRows = (insights.analyzed_cats || []).map(cat => [cat.name, fmtCurrency(cat.total), (Number(cat.pct_change) * 100).toFixed(1) + "%"]);
+    renderTable(document.getElementById("category-table"), ["Category", "Total", "Trend"], catRows);
+  }
+
+  function renderList(id, items) {
+    const list = document.getElementById(id);
+    list.innerHTML = "";
+    (items.length ? items : ["None identified."]).forEach(item => addListItem(list, item));
+  }
+
+  function addListItem(list, text) {
+    const li = document.createElement("li");
+    li.textContent = text;
+    list.appendChild(li);
+  }
+
+  function renderTable(table, headers, rows) {
+    const thead = "<thead><tr>" + headers.map(h => `<th>${h}</th>`).join("") + "</tr></thead>";
+    const bodyRows = rows.length
+      ? rows.map(row => "<tr>" + row.map(cell => `<td>${cell == null ? "" : cell}</td>`).join("") + "</tr>").join("")
+      : `<tr><td colspan="${headers.length}">No data available.</td></tr>`;
+    table.innerHTML = thead + "<tbody>" + bodyRows + "</tbody>";
+  }
+})();
+</script>
+{% endblock %}
