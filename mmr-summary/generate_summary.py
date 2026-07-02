@@ -1110,28 +1110,6 @@ def coerce_work_order_number(value):
     return int(m.group(0)) if m else None
 
 
-_NON_EMERGENCY_WO_PATTERNS = [
-    r"\bbroken blinds?\b",
-    r"\bblinds?\b",
-    r"\broutine maintenance\b",
-    r"\bpest\b",
-    r"\broach(?:es)?\b",
-    r"\bants?\b",
-    r"\bbugs?\b",
-    r"\brodent(?:s)?\b",
-    r"\bgrounds?\b",
-    r"\blandscap(?:e|ing)?\b",
-    r"\bclean(?:ing)?\b",
-    r"\bpaint(?:ing)?\b",
-    r"\bcosmetic\b",
-    r"\bfilters?\b",
-    r"\bflooring\b",
-    r"\bcarpet\b",
-    r"\block changes?\b",
-    r"\bchange locks?\b",
-    r"\bkey replacements?\b",
-    r"\breplace keys?\b",
-]
 
 _EMERGENCY_WO_PATTERNS = [
     ("HVAC/AC", [
@@ -1187,6 +1165,9 @@ _EMERGENCY_WO_PATTERNS = [
         r"\btoilet is running\b",
         r"\btoilet.*not.*refill\b",
         r"\btoilet tank empty\b",
+        r"\bflush(?:ing)?\b.{0,30}\bnot working\b",
+        r"\bnot flushing\b",
+        r"\bwon'?t flush\b",
         r"\bnot draining\b",
         r"\bnot containable\b",
         r"\bconstant flow\b",
@@ -1218,6 +1199,9 @@ _EMERGENCY_WO_PATTERNS = [
     ("Broken Doors", [
         r"\bdoor off hinges?\b",
         r"\bdoor (?:is\s+)?coming off(?: (?:the )?hinges?)?\b",
+        r"\bdoor is off (?:its|the|it'?s|his|her)?\s*hinges?\b",
+        r"\bdoor\b.{0,60}\bhinges?\b.{0,60}\b(?:broken|unscrewed|not screwed in|detached)\b",
+        r"\bhinges?\b.{0,60}\b(?:broken|unscrewed|not screwed in|detached)\b.{0,60}\bdoor\b",
         r"\bdoor (?:won't|wont|will not) close\b",
         r"\bcannot secure (?:the )?door\b",
         r"\b(?:entry|front) door.{0,80}\b(?:off hinges?|coming off|won't close|wont close|will not close|cannot secure|broken)\b",
@@ -1268,6 +1252,12 @@ _DOOR_SECURITY_INCLUDE_PATTERNS = [
     r"\bentrance/exit\b",
 ]
 
+_HVAC_EXCLUDE_PATTERNS = [
+    r"\bheating coils?\b",
+    r"\bheating elements?\b",
+    r"\bair filters?\b",
+]
+
 _WINDOW_EXCLUDE_PATTERNS = [
     r"\bwindow screens?\b",
     r"\bscreen windows?\b",
@@ -1298,6 +1288,7 @@ _APPLIANCE_NON_EMERGENCY_PATTERNS = [
     r"\bdoor shelf\b",
     r"\bmissing handle\b",
     r"\bwould go needs repair before installing appliances\b",
+    r"\bfilters?\b",
 ]
 
 
@@ -1339,7 +1330,7 @@ def is_broken_appliance_emergency(order, text):
     appliance = r"(?:fridge|refrigerator|stove|washer|dryer|dishwasher|oven|appliance|sink|faucet)"
     issue = (
         r"(?:not working|won't|wont|doesn't|doesnt|broken|damaged|leak(?:ing)?|"
-        r"repair|replace|out|stopped|isn't draining|is not draining|"
+        r"repair|replace|out of (?:order|service)|stopped working|stopped|isn't draining|is not draining|"
         r"not draining|won't drain|wont drain|doesn't drain|doesnt drain|"
         r"not turning on|not turn on|not functioning|cannot be closed|will not close|"
         r"won't close|wont close|detached from)"
@@ -1377,7 +1368,12 @@ def classify_emergency_work_order(order):
     }
     issue_type_val = normalize_wo_text(order.get("issue_type") or "").strip()
     mold_patterns = next(p for c, p in _EMERGENCY_WO_PATTERNS if c == "Mold/Mildew")
-    if wo_matches(text, mold_patterns):
+    # A mold mention that's only a hypothetical future consequence ("can
+    # cause mold") isn't itself the reported problem — let the ticket fall
+    # through to whatever category actually describes the current issue
+    # (e.g. a leaking faucet) instead of mislabeling it as Mold/Mildew.
+    _MOLD_HYPOTHETICAL_PATTERNS = [r"\b(?:can|could|may|might)\s+cause\s+mold\b"]
+    if wo_matches(text, mold_patterns) and not wo_matches(text, _MOLD_HYPOTHETICAL_PATTERNS):
         return "Mold/Mildew"
     if issue_type_val in _ISSUE_TYPE_OVERRIDES:
         return _ISSUE_TYPE_OVERRIDES[issue_type_val]
@@ -1386,13 +1382,19 @@ def classify_emergency_work_order(order):
     if wo_matches(text, structural_patterns):
         return "Structural"
 
-    if wo_matches(text, _NON_EMERGENCY_WO_PATTERNS):
-        return None
-
+    # _NON_EMERGENCY_WO_PATTERNS is intentionally not checked here as a
+    # blanket short-circuit: a ticket mentioning one routine/cosmetic item
+    # (e.g. "blinds") alongside a genuinely separate emergency issue (e.g.
+    # "flush not working") must not have the real signal suppressed just
+    # because it isn't the only thing mentioned in the ticket. A category
+    # match below always wins; a ticket that matches nothing here already
+    # returns None regardless of whether it also contains a denylisted term.
     for category, patterns in _EMERGENCY_WO_PATTERNS:
         if category in ("Mold/Mildew", "Structural"):
             continue  # already handled above
         if not wo_matches(text, patterns):
+            continue
+        if category == "HVAC/AC" and wo_matches(text, _HVAC_EXCLUDE_PATTERNS):
             continue
         if category == "Fire/Smoke" and wo_matches(text, _FIRE_SMOKE_EXCLUDE_PATTERNS):
             continue
@@ -1430,6 +1432,8 @@ def parse_work_orders(ws):
                     col_map["reported"] = c
                 elif hn in ("category", "description", "notes"):
                     col_map[hn] = c
+                elif hn == "make ready":
+                    col_map["make_ready"] = c
             break
 
     work_orders    = []
@@ -1471,6 +1475,14 @@ def parse_work_orders(ws):
 
             # Skip rows with no identifying data beyond the number
             if not any(str(v or "").strip() for v in (loc, rep, cat, desc, notes)):
+                continue
+
+            # Make-Ready rows are vacant-unit turn/punch-list items (paint,
+            # cleaning, lock changes, appliance install checklists, etc.),
+            # not resident-reported problems — never eligible for emergency
+            # classification regardless of what words their description uses.
+            make_ready_col = col_map.get("make_ready")
+            if make_ready_col is not None and str(safe_get(row, make_ready_col) or "").strip():
                 continue
 
             work_orders.append({
@@ -2229,6 +2241,7 @@ def parse_appfolio(wb):
     property_name     = "Maple Valley Apartments"
     date_range        = ""
     printed           = ""
+    as_of_date        = None
     total_units       = 0
     occupied          = 0
     pct_occ           = 0.0
@@ -2236,6 +2249,10 @@ def parse_appfolio(wb):
     avg_rent_val      = 0.0
     delinquency_total = 0.0
     delinquency_count = 0
+    vacant_prelease_count  = 0
+    notice_prelease_count  = 0
+    lease_expiration_dates = []   # Lease To dates for Current/Notice residents
+    occupancy_events       = []   # (date, delta) — known future move-ins/move-outs
     ready_list        = []
     wo_list           = []
     issue_counts      = {}
@@ -2251,10 +2268,26 @@ def parse_appfolio(wb):
 
     # ── Occupancy + scheduled rent from Rent Roll summary row ────────────
     # The summary row looks like: ["64 Units", …, "90.6% Occupied", …, 63694, …]
+    #
+    # Individual unit rows also carry a Status column whose values follow the
+    # {Vacant,Notice}-{Rented,Unrented} convention (confirmed against the raw
+    # Maple Valley export — the "-Unrented" suffix implies a "-Rented"
+    # counterpart marks a vacant/notice unit that already has a signed future
+    # lease, i.e. a pre-lease). We use the same pass to also collect Lease To
+    # dates (for the Expiring Leases chart) and known Move-out dates for
+    # on-notice residents (for the Projected Occupancy chart).
+    _PRELEASE_STATUSES = {"vacant-rented", "notice-rented"}
+    _OCCUPIED_STATUSES = {"current", "notice-unrented", "notice-rented"}
     if "Rent Roll" in wb.sheetnames:
         for row in wb["Rent Roll"].iter_rows(min_row=1, max_row=500, values_only=True):
             first  = str(row[0] or "").strip()
             status = str(row[4] or "").strip() if len(row) > 4 else ""
+            status_norm = status.strip().lower()
+            if as_of_date is None and first.lower().startswith("as of:"):
+                try:
+                    as_of_date = datetime.strptime(first.split(":", 1)[-1].strip(), "%m/%d/%Y")
+                except ValueError:
+                    pass
             # Grab property name from the property-header rows
             if "Maple Valley" in first and " - " in first and not property_name.endswith(first.split(" - ")[0]):
                 property_name = first.split(" - ")[0].strip()
@@ -2273,6 +2306,21 @@ def parse_appfolio(wb):
                     if occupied > 0:
                         avg_rent_val = total_rental / occupied
                 break   # only the first (non-"Total") summary row needed
+
+            if status_norm in _PRELEASE_STATUSES:
+                if status_norm == "vacant-rented":
+                    vacant_prelease_count += 1
+                else:
+                    notice_prelease_count += 1
+
+            if status_norm in _OCCUPIED_STATUSES and len(row) > 10 and isinstance(row[10], datetime):
+                lease_expiration_dates.append(row[10])
+
+            # "Move-out" (col 13 / index 12) is the resident's known departure
+            # date once they're on notice — the only concretely-known future
+            # vacate event Appfolio's export exposes.
+            if status_norm in ("notice-unrented", "notice-rented") and len(row) > 12 and isinstance(row[12], datetime):
+                occupancy_events.append((row[12], -1))
 
     # ── Delinquency total + resident count from Delinquency sheet ────────
     # Columns (0-indexed): 0=Unit, 8=Amount Receivable
@@ -2312,6 +2360,10 @@ def parse_appfolio(wb):
                     "section": "",
                     "status":  "Ready",
                 })
+            # "Next Move In" (col 14 / index 13) is the only concretely-known
+            # future move-in date this export exposes for vacant/notice units.
+            if len(row) > 13 and isinstance(row[13], datetime):
+                occupancy_events.append((row[13], 1))
 
     # ── Open work orders from Work Order sheet ────────────────────────────
     _OPEN = {"new", "new by appfolio", "assigned", "scheduled",
@@ -2347,6 +2399,12 @@ def parse_appfolio(wb):
             status = str(row[s_col] or "").strip().lower()
             if status in _OPEN:
                 wo_type = str(row[wo_type_col] or "").strip()
+                # "Unit Turn" work orders are vacant-unit make-ready punch
+                # lists (paint, cleaning, appliance install checklists,
+                # etc.), not resident-reported problems — never eligible for
+                # emergency classification regardless of description wording.
+                if wo_type.strip().lower() == "unit turn":
+                    continue
                 wo_list.append({
                     "number":     str(row[wo_num_col] or "").strip(),
                     "location":   str(row[unit_col]   or "").strip(),
@@ -2379,6 +2437,49 @@ def parse_appfolio(wb):
         for order in wo_list:
             print(f"    {order['number']} -> {order['category']}")
 
+    # ── Expiring Leases (by month) from Rent Roll "Lease To" dates ─────────
+    # Appfolio's export has no equivalent to ResMan's "Renewal Start" signal,
+    # so renewals are always reported as 0 here — a known data gap, not a
+    # miscount.
+    reference_date = as_of_date or datetime.now()
+    start_key = (reference_date.year, reference_date.month)
+    lease_month_counts: dict = {}
+    for dt in lease_expiration_dates:
+        key = (dt.year, dt.month)
+        if key < start_key:
+            continue
+        lease_month_counts[key] = lease_month_counts.get(key, 0) + 1
+    expiring_leases = [
+        {"dt": datetime(year, month, 1), "expirations": count, "renewals": 0}
+        for (year, month), count in sorted(lease_month_counts.items())
+    ][:10]
+
+    # ── Projected Occupancy from known future move-in/move-out events ─────
+    # Unlike Resman's Box Score (a system-generated multi-week leasing
+    # pipeline projection), Appfolio's export only exposes concretely-known
+    # events: a Move-out date once a resident is on notice, and a Next Move
+    # In date once a vacant/notice unit has a signed future lease. Weeks with
+    # no known event simply carry the last known occupied count forward.
+    proj_occ = []
+    if total_units:
+        occupancy_events.sort(key=lambda ev: ev[0])
+        running_occupied = occupied
+        event_idx = 0
+        point_date = reference_date
+        for _ in range(20):
+            while event_idx < len(occupancy_events) and occupancy_events[event_idx][0] <= point_date:
+                running_occupied += occupancy_events[event_idx][1]
+                event_idx += 1
+            running_occupied = max(0, min(total_units, running_occupied))
+            proj_occ.append({
+                "date": point_date,
+                "occ":  running_occupied,
+                "pct":  running_occupied / total_units,
+            })
+            point_date = point_date + timedelta(days=7)
+
+    prelease_count = vacant_prelease_count + notice_prelease_count
+
     return {
         "box_score": {
             "property_name": property_name,
@@ -2388,20 +2489,23 @@ def parse_appfolio(wb):
             "occupied":      occupied,
             "vacant":        max(total_units - occupied, 0),
             "pct_occ":       pct_occ,
-            "prelease_count": 0,
-            "vacant_prelease_count": 0,
-            "notice_prelease_count": 0,
+            "prelease_count": prelease_count,
+            "vacant_prelease_count": vacant_prelease_count,
+            "notice_prelease_count": notice_prelease_count,
             "on_notice":     0,
             "applied":       0,
             "approved":      0,
             "signed":        0,
-            "proj_occ":      [],
+            "proj_occ":      proj_occ,
         },
         "delinquency":  {"total": delinquency_total, "count": delinquency_count},
         "rent_roll":    {"total_rental": total_rental, "avg_rent": avg_rent_val},
-        "available_units": {"ready_units": ready_list, "prelease_count": 0},
-        "expiring_leases":  [],
-        "prospect_sources": {},
+        "available_units": {"ready_units": ready_list, "prelease_count": prelease_count},
+        "expiring_leases":  expiring_leases,
+        # No prospect/lead-source data exists anywhere in Appfolio's export
+        # (checked all 9 sheets) — None (not {}) so build_summary renders its
+        # existing "N/A" path instead of a table of blank dashes.
+        "prospect_sources": None,
         "work_orders": {"work_orders": wo_list, "issue_counts": issue_counts},
     }
 
