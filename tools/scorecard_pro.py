@@ -760,13 +760,29 @@ class ScorecardUpdater:
         self.sheet = self.wb["T12"]
         excel_month_map = {}
         header_row = 6
+        first_month_col = None
         last_month_col = None
+        account_header_col = None
         for col_idx in range(1, 50):
             cell_val = self.sheet.cell(row=header_row, column=col_idx).value
-            if isinstance(cell_val, str):
-                match = re.search(r"([A-Za-z]{3}).*(20\d{2})", cell_val)
-                if match:
-                    excel_month_map[f"{match.group(1)} {match.group(2)}"] = col_idx
+            if not isinstance(cell_val, str):
+                continue
+            stripped = cell_val.strip()
+            if account_header_col is None and stripped.lower() in ("account", "account name"):
+                account_header_col = col_idx
+                continue
+            # Month headers vary by export: "Jan 2025 Actual" (4-digit year)
+            # or "Jan-25" (2-digit year). Normalize both to the same
+            # "Mon YYYY" key the parsed P&L data already uses.
+            match = re.search(r"([A-Za-z]{3}).*?(\d{4}|\d{2})\b", stripped)
+            if match:
+                month_abbr = match.group(1)[:3].title()
+                year_str = match.group(2)
+                year = int(year_str) if len(year_str) == 4 else int("20" + year_str)
+                if 2000 <= year <= 2099 and month_abbr in MONTHS:
+                    excel_month_map[f"{month_abbr} {year}"] = col_idx
+                    if first_month_col is None:
+                        first_month_col = col_idx
                     last_month_col = col_idx
 
         # Extend the sheet with new month columns if the uploaded P&L covers
@@ -813,9 +829,19 @@ class ScorecardUpdater:
             skipped_months = missing_months
             skip_reason = "no existing month columns could be identified in the T12 sheet at all"
 
+        # Different Scorecard T12 layouts put account-code labels in
+        # different columns (Eagle Rock: column 1; Canyon: column 16+, after
+        # an unrelated older "12 Month Rolling" report occupies columns
+        # 1-14). Locate the label region dynamically — from the "Account"
+        # header column through the column just before the first month
+        # column — instead of assuming a fixed range.
+        label_scan_start = account_header_col or 1
+        label_scan_end = (first_month_col - 1) if first_month_col else (label_scan_start + 4)
+        label_scan_end = max(label_scan_end, label_scan_start)
+
         account_row_map = {}
         for row_idx in range(7, self.sheet.max_row + 1):
-            for col_idx in range(1, 6):
+            for col_idx in range(label_scan_start, label_scan_end + 1):
                 val = self.sheet.cell(row=row_idx, column=col_idx).value
                 if not val:
                     continue
@@ -823,6 +849,40 @@ class ScorecardUpdater:
                 if match:
                     account_row_map[match.group(1)] = row_idx
                     break
+
+        # Fallback for layouts with no digit codes at all (e.g. OXPT's T12
+        # tab: a plain indented account-name hierarchy). Match any codes not
+        # already resolved by the parsed P&L account's own name against
+        # label-column rows that actually carry data — excluding blank
+        # section-header rows — and only when the match is unambiguous.
+        ambiguous_names = []
+        unmatched_codes = [code for code in self.data["accounts"] if code not in account_row_map]
+        if unmatched_codes:
+            label_rows: dict = {}
+            for row_idx in range(7, self.sheet.max_row + 1):
+                label_val = self.sheet.cell(row_idx, label_scan_start).value
+                if not isinstance(label_val, str) or not label_val.strip():
+                    continue
+                has_data = any(
+                    self.sheet.cell(row_idx, c).value is not None
+                    and str(self.sheet.cell(row_idx, c).value).strip() != ""
+                    for c in range(label_scan_start + 1, self.sheet.max_column + 1)
+                )
+                if not has_data:
+                    continue
+                label_rows.setdefault(label_val.strip().lower(), []).append(row_idx)
+
+            for code in unmatched_codes:
+                name = str(self.data["accounts"][code].get("name") or "").strip().lower()
+                if not name:
+                    continue
+                rows = label_rows.get(name)
+                if not rows:
+                    continue
+                if len(rows) == 1:
+                    account_row_map[code] = rows[0]
+                else:
+                    ambiguous_names.append((code, self.data["accounts"][code].get("name"), rows))
 
         updates_count = 0
         for code, acc_data in self.data["accounts"].items():
@@ -841,13 +901,25 @@ class ScorecardUpdater:
                 + f" — {skip_reason}. These months were not written to the updated "
                   "scorecard; extend the T12 sheet's month columns manually and re-run."
             )
-        if updates_count == 0 and self.data.get("accounts"):
+
+        total_accounts = len(self.data.get("accounts", {}))
+        matched_accounts = len(account_row_map)
+        if total_accounts and matched_accounts < total_accounts:
+            unresolved = sorted(code for code in self.data["accounts"] if code not in account_row_map)
+            preview = ", ".join(unresolved[:15])
+            more = f" (+{len(unresolved) - 15} more)" if len(unresolved) > 15 else ""
             self.diagnostics["warnings"].append(
-                "Scorecard updater: no account rows in the T12 sheet matched any parsed "
-                "P&L account codes (checked the first 5 columns of each row) — 0 cells "
-                "were updated. This usually means the T12 sheet's account labels live in "
-                "different columns than expected; the updated scorecard download will be "
-                "an unmodified copy of the original."
+                f"Scorecard updater: matched {matched_accounts} of {total_accounts} parsed "
+                f"P&L accounts to rows in the T12 sheet; {len(unresolved)} could not be "
+                "confidently matched — likely different account naming/grouping between "
+                f"the P&L export and this Scorecard's own T12 tab — and were not written: "
+                f"{preview}{more}."
+            )
+        if ambiguous_names:
+            desc = "; ".join(f"{code} ({name!r} matched rows {rows})" for code, name, rows in ambiguous_names[:10])
+            self.diagnostics["warnings"].append(
+                "Scorecard updater: could not confidently place these accounts because "
+                f"their name matched more than one row in the T12 sheet: {desc}."
             )
 
         self.diagnostics["updated_cells"] = updates_count
