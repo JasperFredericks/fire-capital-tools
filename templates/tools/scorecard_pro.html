@@ -10,15 +10,15 @@
     Back to Dashboard
   </a>
   <h1 class="page-title">Scorecard Pro</h1>
-  <p class="page-subtitle">Upload a P&amp;L CSV and optional scorecard workbook to generate KPIs, insights, comparisons, and exports.</p>
+  <p class="page-subtitle">Upload a P&amp;L file (.csv, .xlsx, or .xlsm) and optional scorecard workbook to generate KPIs, insights, comparisons, and exports.</p>
 </div>
 
 <div class="card">
   <div class="scorecard-upload-grid">
     <label class="scorecard-file-box">
-      <span class="scorecard-file-label">P&amp;L CSV</span>
-      <input type="file" id="pnl-file" accept=".csv">
-      <span class="scorecard-file-name" id="pnl-file-name">Choose .csv file</span>
+      <span class="scorecard-file-label">P&amp;L File</span>
+      <input type="file" id="pnl-file" accept=".csv,.xlsx,.xlsm">
+      <span class="scorecard-file-name" id="pnl-file-name">Choose .csv, .xlsx, or .xlsm file</span>
     </label>
 
     <label class="scorecard-file-box">
@@ -256,7 +256,7 @@
 
   pnlInput.addEventListener("change", function () {
     const file = pnlInput.files[0];
-    pnlName.textContent = file ? file.name : "Choose .csv file";
+    pnlName.textContent = file ? file.name : "Choose .csv, .xlsx, or .xlsm file";
     runBtn.disabled = !file;
     clearError();
   });
@@ -270,8 +270,8 @@
   runBtn.addEventListener("click", async function () {
     if (!pnlInput.files.length) return;
     const pnl = pnlInput.files[0];
-    if (!pnl.name.toLowerCase().endsWith(".csv")) {
-      showError("P&L upload must be a .csv file.");
+    if (!/\.(csv|xlsx|xlsm)$/i.test(pnl.name)) {
+      showError("P&L upload must be a .csv, .xlsx, or .xlsm file.");
       return;
     }
     const scorecard = scorecardInput.files[0];

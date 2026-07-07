@@ -46,19 +46,23 @@ from werkzeug.utils import secure_filename
 
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 MONTH_INDEX = {month: idx + 1 for idx, month in enumerate(MONTHS)}
-ALLOWED_PNL_EXT = {".csv"}
+ALLOWED_PNL_EXT = {".csv", ".xlsx", ".xlsm"}
 ALLOWED_SCORECARD_EXT = {".xlsx", ".xlsm"}
 MAX_PENDING = 8
 
 
 class PnLParser:
     def __init__(self, filepath):
-        self.filepath = filepath
         self.property_name = "Unknown Property"
         self.period = "Unknown Period"
         self.accounts = {}
         self.detected_format = "Unknown"
         self.warnings = []
+
+        if Path(filepath).suffix.lower() in (".xlsx", ".xlsm"):
+            self.filepath = self._convert_workbook_to_csv(filepath)
+        else:
+            self.filepath = filepath
 
         # Standard Mapping for "The View" (Name -> Code)
         self.name_map = {
@@ -128,6 +132,30 @@ class PnLParser:
             "TOTAL OPERATING EXPENSES": "9999",
         }
 
+    def _convert_workbook_to_csv(self, filepath):
+        """
+        Convert an uploaded .xlsx/.xlsm P&L export to an equivalent CSV file
+        on disk so the rest of PnLParser (format detection, all parse_*
+        methods) can keep operating on self.filepath unchanged.
+
+        Prefers a sheet named "Accounting Tree Report" (ResMan's T12 P&L
+        export), falling back to the workbook's first sheet for any other
+        xlsx P&L layout we haven't seen yet.
+        """
+        wb = openpyxl.load_workbook(str(filepath), data_only=True)
+        sheet_name = next(
+            (name for name in wb.sheetnames if name.strip().lower() == "accounting tree report"),
+            wb.sheetnames[0],
+        )
+        ws = wb[sheet_name]
+
+        out_path = Path(filepath).with_suffix(".converted.csv")
+        with open(out_path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            for row in ws.iter_rows(values_only=True):
+                writer.writerow(["" if value is None else value for value in row])
+        return out_path
+
     def parse(self):
         try:
             header_lines = self._read_head_lines(25)
@@ -145,7 +173,7 @@ class PnLParser:
             elif header_lines and "category" in header_lines[0].lower():
                 self.detected_format = "Paresh"
                 self.parse_paresh()
-            elif "oxford pointe" in content or "account name" in content:
+            elif "account name" in content:
                 self.detected_format = "OXPT"
                 self.parse_oxpt()
             elif len(header_lines) > 1 and "ltm" in header_lines[1].lower():
@@ -312,13 +340,16 @@ class PnLParser:
             return 0.0
         return -parsed if negative else parsed
 
-    def _merge_account(self, code, name, monthly_data):
+    def _merge_account(self, code, name, monthly_data, depth=None):
         if code in self.accounts:
-            existing = self.accounts[code]["data"]
+            existing = self.accounts[code]
+            existing_data = existing["data"]
             for key, value in monthly_data.items():
-                existing[key] = existing.get(key, 0.0) + (value if value is not None else 0.0)
+                existing_data[key] = existing_data.get(key, 0.0) + (value if value is not None else 0.0)
+            if depth is not None:
+                existing["depth"] = depth if existing.get("depth") is None else min(existing["depth"], depth)
         else:
-            self.accounts[code] = {"name": name, "data": monthly_data}
+            self.accounts[code] = {"name": name, "data": monthly_data, "depth": depth}
 
     def parse_canyon(self):
         df = self._clean_columns(self._read_csv_robust(header=0))
@@ -446,10 +477,12 @@ class PnLParser:
         for idx in range(6, len(df)):
             row = df.iloc[idx]
             account_str = None
+            account_depth = None
             for col_idx in range(8):
                 val = row[col_idx]
                 if pd.notna(val) and str(val).strip() != "":
                     account_str = str(val).strip()
+                    account_depth = col_idx
                     break
 
             if not account_str:
@@ -465,7 +498,7 @@ class PnLParser:
                 month_name: self._parse_amount(row[col_idx])
                 for col_idx, month_name in month_col_indices.items()
             }
-            self._merge_account(code, name, monthly_values)
+            self._merge_account(code, name, monthly_values, depth=account_depth)
 
     def parse_cash_flow(self):
         header_row_idx = 0
@@ -610,21 +643,44 @@ class ScorecardTargetParser:
                     val = sheet.cell(row=row_idx, column=col_idx).value
                     row_vals.append((col_idx, str(val).strip().lower()) if val else (col_idx, ""))
 
-                for col_idx, val in row_vals:
-                    if "pm budget" in val or "manager budget" in val:
-                        pm_col = col_idx
-                    if "uw" in val and "per unit" not in val and "variance" not in val:
-                        uw_col = col_idx
-                    elif val == "year 1" or val == "yr 1":
-                        uw_col = col_idx
+                row_pm_col = next(
+                    (col_idx for col_idx, val in row_vals if "pm budget" in val or "manager budget" in val),
+                    None,
+                )
+                if row_pm_col is None:
+                    continue
 
-                if pm_col:
-                    break
+                # Found the real data-table header row. Scope the UW column
+                # search to this same row only — an unrelated "UW" mention
+                # elsewhere on the sheet (e.g. a property-info label like
+                # "OPERATING ASSUMPTIONS - UW YR1") must never be mistaken
+                # for the actual UW/underwriting column of this table.
+                pm_col = row_pm_col
+                uw_col = next(
+                    (col_idx for col_idx, val in row_vals
+                     if "uw" in val and "per unit" not in val and "variance" not in val),
+                    None,
+                )
+                if uw_col is None:
+                    # Some scorecards label their UW column "Year N" / "Yr N"
+                    # (the underwritten target for that scorecard year)
+                    # rather than spelling out "UW".
+                    uw_col = next(
+                        (col_idx for col_idx, val in row_vals
+                         if re.search(r"\b(?:year|yr)\.?\s*\d+\b", val)
+                         and "variance" not in val and "per unit" not in val),
+                        None,
+                    )
+                break
 
             if uw_col:
                 self.diagnostics["found_columns"]["UW"] = uw_col
             else:
                 self.diagnostics["missing_columns"].append("UW")
+                self.diagnostics["warnings"].append(
+                    "Target parser: could not find a UW/underwriting column in the Scorecard "
+                    "header row — UW targets will show as $0 and should not be trusted."
+                )
             if pm_col:
                 self.diagnostics["found_columns"]["PM"] = pm_col
             else:
@@ -704,12 +760,58 @@ class ScorecardUpdater:
         self.sheet = self.wb["T12"]
         excel_month_map = {}
         header_row = 6
+        last_month_col = None
         for col_idx in range(1, 50):
             cell_val = self.sheet.cell(row=header_row, column=col_idx).value
             if isinstance(cell_val, str):
                 match = re.search(r"([A-Za-z]{3}).*(20\d{2})", cell_val)
                 if match:
                     excel_month_map[f"{match.group(1)} {match.group(2)}"] = col_idx
+                    last_month_col = col_idx
+
+        # Extend the sheet with new month columns if the uploaded P&L covers
+        # months the workbook's own T12 tab doesn't have yet (e.g. a newer
+        # T12 refreshing a Scorecard whose T12 tab stops months earlier) —
+        # rather than silently writing only the overlapping months.
+        source_months = set()
+        for acc_data in self.data["accounts"].values():
+            source_months.update(acc_data["data"].keys())
+        missing_months = sorted(
+            (m for m in source_months if m not in excel_month_map),
+            key=month_sort_key,
+        )
+
+        skipped_months = []
+        skip_reason = None
+        if missing_months and last_month_col is not None:
+            insertion_col = last_month_col + 1
+            # openpyxl shifts cell values on insert_cols() but does not
+            # rewrite formula text, so inserting into a column range that
+            # any formula elsewhere on the sheet references (e.g. an
+            # "Adjusted Total" that sums across the month columns) would
+            # silently produce a wrong total rather than an obviously
+            # incomplete one. Only extend the sheet if no formulas exist
+            # anywhere from the insertion point onward.
+            has_formula_in_insert_region = any(
+                isinstance(self.sheet.cell(r, c).value, str) and self.sheet.cell(r, c).value.startswith("=")
+                for r in range(1, self.sheet.max_row + 1)
+                for c in range(insertion_col, self.sheet.max_column + 1)
+            )
+            if has_formula_in_insert_region:
+                skipped_months = missing_months
+                skip_reason = (
+                    "the T12 sheet has formulas in or after the column where new months "
+                    "would be inserted, and inserting there could silently break those totals"
+                )
+            else:
+                self.sheet.insert_cols(insertion_col, amount=len(missing_months))
+                for offset, month_key in enumerate(missing_months):
+                    col = insertion_col + offset
+                    self.sheet.cell(row=header_row, column=col).value = f"{month_key} Actual"
+                    excel_month_map[month_key] = col
+        elif missing_months:
+            skipped_months = missing_months
+            skip_reason = "no existing month columns could be identified in the T12 sheet at all"
 
         account_row_map = {}
         for row_idx in range(7, self.sheet.max_row + 1):
@@ -732,6 +834,22 @@ class ScorecardUpdater:
                     self.sheet.cell(row=row_idx, column=excel_month_map[month_key]).value = value
                     updates_count += 1
 
+        if skipped_months:
+            self.diagnostics["warnings"].append(
+                "Scorecard updater: could not add columns for "
+                + ", ".join(skipped_months)
+                + f" — {skip_reason}. These months were not written to the updated "
+                  "scorecard; extend the T12 sheet's month columns manually and re-run."
+            )
+        if updates_count == 0 and self.data.get("accounts"):
+            self.diagnostics["warnings"].append(
+                "Scorecard updater: no account rows in the T12 sheet matched any parsed "
+                "P&L account codes (checked the first 5 columns of each row) — 0 cells "
+                "were updated. This usually means the T12 sheet's account labels live in "
+                "different columns than expected; the updated scorecard download will be "
+                "an unmodified copy of the original."
+            )
+
         self.diagnostics["updated_cells"] = updates_count
         self.wb.save(output_path)
         return output_path
@@ -751,6 +869,33 @@ class KPICalculator:
             code for code in self.accounts if re.fullmatch(r"6\d{3}", str(code))
         )
 
+        # Additional top-level income categories beyond GPR/NRI (4000) and
+        # Other Income (4300) — e.g. a tree-report P&L with a sibling income
+        # line like "4580 High Risk Fee" that isn't nested under either.
+        # Scoped by tree depth (the column an account code was found in, set
+        # by parse_resman()) rather than by code range, since a leaf code
+        # can numerically fall outside 4300's range while still being a
+        # nested sub-line already counted in 4300's own total (e.g. "4500
+        # Credit Builder" nested one level deeper than the 4580 sibling).
+        # Formats without depth info (flat CSVs) leave this empty, which
+        # preserves the exact previous nri + other_income behavior for them.
+        income_depths = [
+            acc.get("depth")
+            for code, acc in self.accounts.items()
+            if re.fullmatch(r"4\d{3}", str(code)) and acc.get("depth") is not None
+        ]
+        if income_depths:
+            shallowest_income_depth = min(income_depths)
+            self.income_fallback_codes = sorted(
+                code
+                for code, acc in self.accounts.items()
+                if re.fullmatch(r"4\d{3}", str(code))
+                and acc.get("depth") == shallowest_income_depth
+                and code not in ("4000", "4300")
+            )
+        else:
+            self.income_fallback_codes = []
+
     def get_val(self, code, month):
         if code in self.accounts:
             return float(self.accounts[code]["data"].get(month, 0.0) or 0.0)
@@ -767,6 +912,7 @@ class KPICalculator:
             "noi_margin": {},
             "occupancy_status": {},
             "expense_fallback_codes": self.expense_fallback_codes,
+            "income_fallback_codes": self.income_fallback_codes,
         }
 
         for month in self.available_months:
@@ -775,11 +921,19 @@ class KPICalculator:
             nri = self.get_val("4000", month)
             other_income = self.get_val("4300", month)
 
-            if nri == 0 and gpr != 0:
+            # Only reconstruct NRI from GPR + Vacancy Loss when code 4000
+            # was never captured in this file at all — a genuinely-parsed
+            # 4000 value of exactly 0 (a real accounting outcome some
+            # months) must be trusted, not silently overridden.
+            if "4000" not in self.accounts and gpr != 0:
                 nri = gpr + vacancy_loss
 
             override_income = self.get_val("9998", month)
-            total_income = override_income if override_income != 0 else nri + other_income
+            if override_income != 0:
+                total_income = override_income
+            else:
+                additional_income = sum(self.get_val(code, month) for code in self.income_fallback_codes)
+                total_income = nri + other_income + additional_income
 
             controllable = self.get_val("6000", month)
             non_controllable = self.get_val("7000", month)
@@ -987,15 +1141,16 @@ def upload():
     _cleanup_old_uploads()
 
     if "pnl_file" not in request.files:
-        return jsonify({"error": "No P&L CSV included in the request."}), 400
+        return jsonify({"error": "No P&L file included in the request."}), 400
 
     pnl_file = request.files["pnl_file"]
     if not pnl_file or not pnl_file.filename:
-        return jsonify({"error": "No P&L CSV selected."}), 400
+        return jsonify({"error": "No P&L file selected."}), 400
 
     pnl_name = secure_filename(pnl_file.filename)
-    if Path(pnl_name).suffix.lower() not in ALLOWED_PNL_EXT:
-        return jsonify({"error": "P&L upload must be a .csv file."}), 400
+    pnl_ext = Path(pnl_name).suffix.lower()
+    if pnl_ext not in ALLOWED_PNL_EXT:
+        return jsonify({"error": "P&L upload must be a .csv, .xlsx, or .xlsm file."}), 400
 
     scorecard_file = request.files.get("scorecard_file")
     scorecard_name = ""
@@ -1006,7 +1161,7 @@ def upload():
 
     token = secrets.token_urlsafe(16)
     upload_dir = _upload_dir()
-    pnl_path = upload_dir / f"{token}_pnl.csv"
+    pnl_path = upload_dir / f"{token}_pnl{pnl_ext}"
     scorecard_path = None
 
     try:
