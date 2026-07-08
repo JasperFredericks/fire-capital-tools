@@ -66,8 +66,14 @@ Tested against:
 
 ### Runtime variables (Railway)
 
-- Required variable: `CENSUS_API_KEY`
 - Configure in Railway: Service -> Variables
+- Full variable list:
+	- `SECRET_KEY`
+	- `FLASK_DEBUG`
+	- `ADMIN_USERNAME`
+	- `ADMIN_PASSWORD_HASH`
+	- `CENSUS_API_KEY`
+- Required for the FIRE Metric updater to pull ACS/Census data: `CENSUS_API_KEY`
 
 ### Local development
 
