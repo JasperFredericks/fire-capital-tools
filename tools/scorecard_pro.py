@@ -737,6 +737,67 @@ class ScorecardTargetParser:
         return self.diagnostics
 
 
+# OXPT-specific write-back category mapping (Michelle's explicit decisions).
+# Maps existing Scorecard T12 row labels — already present in the sheet,
+# never newly created or renamed — to the P&L account code(s) whose values
+# should be summed into that row. Scoped to OXPT only (see the property-name
+# check in ScorecardUpdater.update()); must not affect Eagle Rock or Canyon.
+_OXPT_ROW_GROUPS = {
+    "total office expense": ["6100"],                # Administration Costs ("G&A")
+    "total legal & professional fees": ["6200"],      # Legal & Professional
+    "total advertising": ["6300"],                    # Marketing & Leasing ("Marketing")
+    "total payroll expense": ["6400"],                 # Salaries & Payroll
+    "total cleaning & trash removal": ["6520"],        # Contract Services: housekeeping-specific
+    "total outside contractors": ["6540", "6545", "6555", "6565"],  # Contract Services: trades
+    "total other expenses": ["6560"],                  # Contract Services: pest control
+    "total repairs": ["6600"],                          # Maintenance Related (non-capital, operating)
+    "total grounds & lawn maintenance": ["6800"],       # Grounds
+    "total utilities": ["6900"],                        # Utilities
+    "total insurance": ["7120"],                        # Insurance
+    "total taxes": ["7130"],                            # Property Taxes
+    "asset mgmt fee": ["7210"],                         # Asset Management Fee — kept in its existing row/location
+    "total management fees": ["7220", "7250"],          # Management Company Charges minus Asset Mgmt Fee
+    "total debt service": ["7300"],                     # Debt Service
+    "total capital expenses": ["7500"],                 # Big-ticket capital repairs
+    # Other Income (4300 family) splits across several existing rows rather
+    # than one bucket — fee-type income to the relevant Fees row, utility
+    # reimbursement to Utility Recovery, parking-related to Parking Income.
+    "electric": ["4320"],
+    "late fees": ["4400"],
+    "insurance services": ["4402"],
+    "admin fee": ["4405"],
+    "application fee income": ["4415"],
+    "cleaning fee": ["4420"],
+    "early termination fee": ["4448"],
+    "month-to-month fee": ["4450"],
+    "damages": ["4452"],
+    "pet fee-non refundable": ["4455"],
+    "nsf fees collected": ["4460"],
+    "parking income": ["4508"],
+}
+
+# Codes whose value is already fully captured by a group above (parent
+# rollups distributed via children, or children merged into a parent
+# rollup via a group) — excluded from digit/name-based matching so they
+# can't also write into the same or a different cell a second time.
+_OXPT_EXCLUDED_CODES = {
+    "6000", "7000",  # grand rollups, fully distributed via sub-categories
+    "6112", "6113", "6115", "6118", "6138", "6139", "6140", "6157", "6164", "6178", "6187",  # 6100 children
+    "6205", "6210",  # 6200 children
+    "6305", "6315", "6350", "6355", "6360",  # 6300 children
+    "6405", "6415", "6430", "6450", "6465",  # 6400 children
+    "6500",  # Contract Services rollup, distributed via children individually
+    "6606", "6627", "6636", "6639", "6651", "6654", "6660", "6663", "6669", "6675",  # 6600 children
+    "6810",  # 6800 child
+    "6910", "6911", "6915", "6930", "6940", "6955", "6960",  # 6900 children
+    "7200",  # Management Company Charges rollup, distributed via 7210 + [7220, 7250]
+    "7330", "7350",  # 7300 children
+    "7502", "7505", "7511", "7516", "7518", "7520", "7536", "7543", "7544", "7545",
+    "7547", "7549", "7550", "7556", "7560", "7564", "7568", "7570", "7573", "7578", "7595",  # 7500 children
+    "4300",  # Other Income rollup, distributed via children individually
+}
+
+
 class ScorecardUpdater:
     def __init__(self, scorecard_path, data):
         self.scorecard_path = scorecard_path
@@ -839,6 +900,23 @@ class ScorecardUpdater:
         label_scan_end = (first_month_col - 1) if first_month_col else (label_scan_start + 4)
         label_scan_end = max(label_scan_end, label_scan_start)
 
+        # Label-column index (label -> row indices that actually carry data,
+        # i.e. not a blank section-header row) — reused by both the OXPT
+        # explicit category mapping and the generic name-based fallback.
+        label_rows: dict = {}
+        for row_idx in range(7, self.sheet.max_row + 1):
+            label_val = self.sheet.cell(row_idx, label_scan_start).value
+            if not isinstance(label_val, str) or not label_val.strip():
+                continue
+            has_data = any(
+                self.sheet.cell(row_idx, c).value is not None
+                and str(self.sheet.cell(row_idx, c).value).strip() != ""
+                for c in range(label_scan_start + 1, self.sheet.max_column + 1)
+            )
+            if not has_data:
+                continue
+            label_rows.setdefault(label_val.strip().lower(), []).append(row_idx)
+
         account_row_map = {}
         for row_idx in range(7, self.sheet.max_row + 1):
             for col_idx in range(label_scan_start, label_scan_end + 1):
@@ -850,49 +928,67 @@ class ScorecardUpdater:
                     account_row_map[match.group(1)] = row_idx
                     break
 
-        # Fallback for layouts with no digit codes at all (e.g. OXPT's T12
-        # tab: a plain indented account-name hierarchy). Match any codes not
-        # already resolved by the parsed P&L account's own name against
-        # label-column rows that actually carry data — excluding blank
-        # section-header rows — and only when the match is unambiguous.
-        ambiguous_names = []
-        unmatched_codes = [code for code in self.data["accounts"] if code not in account_row_map]
-        if unmatched_codes:
-            label_rows: dict = {}
-            for row_idx in range(7, self.sheet.max_row + 1):
-                label_val = self.sheet.cell(row_idx, label_scan_start).value
-                if not isinstance(label_val, str) or not label_val.strip():
-                    continue
-                has_data = any(
-                    self.sheet.cell(row_idx, c).value is not None
-                    and str(self.sheet.cell(row_idx, c).value).strip() != ""
-                    for c in range(label_scan_start + 1, self.sheet.max_column + 1)
-                )
-                if not has_data:
-                    continue
-                label_rows.setdefault(label_val.strip().lower(), []).append(row_idx)
-
-            for code in unmatched_codes:
-                name = str(self.data["accounts"][code].get("name") or "").strip().lower()
-                if not name:
-                    continue
-                rows = label_rows.get(name)
+        # OXPT-specific explicit category mapping (Michelle's decisions —
+        # see _OXPT_ROW_GROUPS above). Scoped strictly to OXPT by property
+        # name so Eagle Rock/Canyon's matching is never affected.
+        excluded_codes = set()
+        oxpt_ambiguous_groups = []
+        is_oxpt = "oxford pointe" in str(self.data.get("property") or "").strip().lower()
+        if is_oxpt:
+            excluded_codes |= _OXPT_EXCLUDED_CODES
+            for label, codes in _OXPT_ROW_GROUPS.items():
+                rows = label_rows.get(label)
                 if not rows:
                     continue
-                if len(rows) == 1:
-                    account_row_map[code] = rows[0]
-                else:
-                    ambiguous_names.append((code, self.data["accounts"][code].get("name"), rows))
+                if len(rows) > 1:
+                    oxpt_ambiguous_groups.append((label, codes, rows))
+                    continue
+                row_idx = rows[0]
+                for code in codes:
+                    if code in self.data["accounts"]:
+                        account_row_map[code] = row_idx
 
-        updates_count = 0
+        # Fallback for accounts not resolved above and not part of an
+        # OXPT-excluded group. Match by the parsed P&L account's own name
+        # against label-column rows that carry data, only when unambiguous.
+        ambiguous_names = list(oxpt_ambiguous_groups)
+        unmatched_codes = [
+            code for code in self.data["accounts"]
+            if code not in account_row_map and code not in excluded_codes
+        ]
+        for code in unmatched_codes:
+            name = str(self.data["accounts"][code].get("name") or "").strip().lower()
+            if not name:
+                continue
+            rows = label_rows.get(name)
+            if not rows:
+                continue
+            if len(rows) == 1:
+                account_row_map[code] = rows[0]
+            else:
+                ambiguous_names.append((code, self.data["accounts"][code].get("name"), rows))
+
+        # Aggregate per (row, month-column) before writing — some rows
+        # receive the summed value of multiple P&L codes (e.g. OXPT's
+        # Contract Services split). For every other layout this is a
+        # no-op: each code maps to a distinct row, so the "sum" is just
+        # that one value, identical to a direct overwrite.
+        cell_totals: dict = {}
         for code, acc_data in self.data["accounts"].items():
             if code not in account_row_map:
                 continue
             row_idx = account_row_map[code]
             for month_key, value in acc_data["data"].items():
-                if month_key in excel_month_map:
-                    self.sheet.cell(row=row_idx, column=excel_month_map[month_key]).value = value
-                    updates_count += 1
+                col_idx = excel_month_map.get(month_key)
+                if col_idx is None:
+                    continue
+                key = (row_idx, col_idx)
+                cell_totals[key] = cell_totals.get(key, 0.0) + (value or 0.0)
+
+        updates_count = 0
+        for (row_idx, col_idx), total in cell_totals.items():
+            self.sheet.cell(row=row_idx, column=col_idx).value = total
+            updates_count += 1
 
         if skipped_months:
             self.diagnostics["warnings"].append(
@@ -902,10 +998,15 @@ class ScorecardUpdater:
                   "scorecard; extend the T12 sheet's month columns manually and re-run."
             )
 
-        total_accounts = len(self.data.get("accounts", {}))
-        matched_accounts = len(account_row_map)
+        # Codes in excluded_codes are intentionally not matched individually
+        # because their value is already fully captured via a mapped parent
+        # rollup/group — they're not failures, so they're left out of both
+        # the denominator and the "not written" list below.
+        reportable_codes = [code for code in self.data.get("accounts", {}) if code not in excluded_codes]
+        total_accounts = len(reportable_codes)
+        matched_accounts = sum(1 for code in reportable_codes if code in account_row_map)
         if total_accounts and matched_accounts < total_accounts:
-            unresolved = sorted(code for code in self.data["accounts"] if code not in account_row_map)
+            unresolved = sorted(code for code in reportable_codes if code not in account_row_map)
             preview = ", ".join(unresolved[:15])
             more = f" (+{len(unresolved) - 15} more)" if len(unresolved) > 15 else ""
             self.diagnostics["warnings"].append(
@@ -968,6 +1069,19 @@ class KPICalculator:
         else:
             self.income_fallback_codes = []
 
+        # OXPT-specific: Asset Management Fees (code 7210) is treated as a
+        # below-NOI item in the app's own NOI math, per Michelle's explicit
+        # decision — the exported Scorecard spreadsheet is unaffected (7210
+        # still gets written to its existing row by ScorecardUpdater).
+        # Scoped to OXPT by property name, not by bare code number: Canyon's
+        # chart of accounts also happens to use code 7210 for the same
+        # concept, but that's a separate decision Michelle hasn't made yet,
+        # and Eagle Rock uses a different code (7270) entirely.
+        self.below_noi_codes = set()
+        property_name = str(pnl_data.get("property") or "").strip().lower()
+        if "oxford pointe" in property_name:
+            self.below_noi_codes.add("7210")
+
     def get_val(self, code, month):
         if code in self.accounts:
             return float(self.accounts[code]["data"].get(month, 0.0) or 0.0)
@@ -1009,6 +1123,8 @@ class KPICalculator:
 
             controllable = self.get_val("6000", month)
             non_controllable = self.get_val("7000", month)
+            for code in self.below_noi_codes:
+                non_controllable -= self.get_val(code, month)
             override_expenses = self.get_val("9999", month)
             if override_expenses != 0:
                 total_expenses = override_expenses
