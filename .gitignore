@@ -10,4 +10,24 @@ dist/
 build/
 .venv/
 venv/
+fire_metrics/.env
+fire_metrics/*.env
+fire_metrics/data/cache/*
+!fire_metrics/data/cache/.gitkeep
+fire_metrics/data/raw/*
+!fire_metrics/data/raw/.gitkeep
+fire_metrics/input/*.xlsx
+!fire_metrics/input/.gitkeep
+fire_metrics/output/*.xlsx
+fire_metrics/output/*.csv
+fire_metrics/output/*.txt
+!fire_metrics/output/.gitkeep
+fire_metrics/*.zip
+fire_metrics/census_api_key.txt
+fire_metrics/data/cache/census_api_key.txt
+fire_metrics/**pycache**/
+fire_metrics/**/**pycache**/
+fire_metrics/__pycache__/
+fire_metrics/**/__pycache__/
+fire_metrics/.DS_Store
 
