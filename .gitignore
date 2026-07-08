@@ -25,8 +25,6 @@ fire_metrics/output/*.txt
 fire_metrics/*.zip
 fire_metrics/census_api_key.txt
 fire_metrics/data/cache/census_api_key.txt
-fire_metrics/**pycache**/
-fire_metrics/**/**pycache**/
 fire_metrics/__pycache__/
 fire_metrics/**/__pycache__/
 fire_metrics/.DS_Store
