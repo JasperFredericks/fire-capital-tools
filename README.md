@@ -56,3 +56,31 @@ Tested against:
 - Eagle Rock Apartments (ERA) — 92 units
 - The Canyon Apartments — 91 units
 - Oxford Pointe Apartments (OXPT) — 152 units
+
+## FIRE Metric Tool (Phase 2 Flask Integration)
+
+- Location in app: Markets -> FIRE Metric
+- Purpose: refresh market indicators workbook through the standalone FIRE Metrics updater workspace
+- Input: `.xlsx` workbook upload
+- Output: updated `.xlsx` workbook download
+
+### Runtime variables (Railway)
+
+- Configure in Railway: Service -> Variables
+- Full variable list:
+	- `SECRET_KEY`
+	- `FLASK_DEBUG`
+	- `ADMIN_USERNAME`
+	- `ADMIN_PASSWORD_HASH`
+	- `CENSUS_API_KEY`
+- Required for the FIRE Metric updater to pull ACS/Census data: `CENSUS_API_KEY`
+
+### Local development
+
+- Local runs can use `.env` or `fire_metrics/data/cache/census_api_key.txt`
+- These files are ignored by Git and must never be committed with real credentials
+
+### Git safety
+
+- Generated workbooks and cache payloads are ignored by Git
+- `fire_metrics/output/*` workbooks, `fire_metrics/data/cache/*` runtime cache, and related generated artifacts are excluded

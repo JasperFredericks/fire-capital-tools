@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}FIRE Metric — FIRE Capital Tools{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <h1 class="page-title">FIRE Metric</h1>
+  <p class="page-subtitle">Market indicators updater</p>
+  <p class="page-subtitle" style="max-width:780px;">
+    Refreshes the FIRE Metrics workbook using official/reliable sources including Census, ACS, BLS LAUS, FEMA NRI, FBI/UCR-style crime data, and internal landlord-friendliness scoring.
+  </p>
+</div>
+
+<div class="card">
+  <form method="post" enctype="multipart/form-data" style="display:grid; gap:16px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <label style="font-weight:600; color:#374151;">Upload workbook (.xlsx)</label>
+    <input type="file" name="file" accept=".xlsx" required>
+
+    <div style="display:grid; gap:8px;">
+      <label><input type="checkbox" name="refresh_all" {% if selected.refresh_all %}checked{% endif %}> Refresh all data</label>
+      <label><input type="checkbox" name="format_only" {% if selected.format_only %}checked{% endif %}> Format only</label>
+      <label><input type="checkbox" name="dry_run" {% if selected.dry_run %}checked{% endif %}> Dry run</label>
+    </div>
+
+    <div>
+      <button type="submit" class="btn btn-primary">Run FIRE Metric Update</button>
+    </div>
+  </form>
+
+  {% if error_message %}
+    <div class="error-panel visible" role="alert" style="margin-top:16px;">{{ error_message }}</div>
+  {% endif %}
+</div>
+
+{% if run_result %}
+<div class="card result-panel visible" style="display:block;">
+  <div class="result-header">
+    <div>
+      <div class="result-property">FIRE Metric Update Complete</div>
+      <div class="result-period">Last Updated: {{ run_result.last_updated }}</div>
+    </div>
+    {% if download_token %}
+      <a href="{{ url_for('fire_metrics.download', token=download_token) }}" class="btn btn-success">Download Updated Workbook</a>
+    {% endif %}
+  </div>
+
+  <hr class="divider">
+
+  {% if run_result.summary_lines %}
+    <div style="display:grid; gap:6px;">
+      {% for line in run_result.summary_lines %}
+        <div style="font-size:13px; color:#374151;">• {{ line }}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if run_result.warnings %}
+    <div class="alert alert-warning" style="margin-top:16px;">
+      <strong>Warnings:</strong>
+      <ul style="margin-top:8px; padding-left:18px;">
+        {% for w in run_result.warnings %}
+          <li>{{ w }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  {% if run_result.errors %}
+    <div class="alert alert-error" style="margin-top:16px;">
+      <strong>Errors:</strong>
+      <ul style="margin-top:8px; padding-left:18px;">
+        {% for e in run_result.errors %}
+          <li>{{ e }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

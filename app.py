@@ -2,6 +2,8 @@
 FIRE Capital Tools — Flask Application
 """
 
+from __future__ import annotations
+
 import os
 from datetime import datetime
 
@@ -34,6 +36,7 @@ def create_app(config_class: type = Config) -> Flask:
         return (
             request.path.startswith("/tools/mmr-summary/upload")
             or request.path.startswith("/tools/mmr-summary/download/")
+            or request.path.startswith("/tools/fire-metrics/download/")
             or request.path.startswith("/tools/scorecard-pro/upload")
             or request.path.startswith("/tools/scorecard-pro/analysis/")
             or request.path.startswith("/tools/scorecard-pro/download/")
@@ -60,11 +63,13 @@ def create_app(config_class: type = Config) -> Flask:
 
     # ── Blueprints ─────────────────────────────────────────────────────────
     from auth import auth_bp
+    from tools.fire_metrics import fire_metrics_bp
     from tools.mmr_summary import mmr_bp
     from tools.scorecard_pro import scorecard_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(mmr_bp, url_prefix="/tools/mmr-summary")
+    app.register_blueprint(fire_metrics_bp, url_prefix="/tools/fire-metrics")
     app.register_blueprint(scorecard_bp, url_prefix="/tools/scorecard-pro")
 
     # ── Security headers ───────────────────────────────────────────────────
