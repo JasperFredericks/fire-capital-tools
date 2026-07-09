@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import datetime as dt
 import importlib.util
 import json
+import os
 import re
 import shutil
 import urllib.request
@@ -607,5 +609,93 @@ def main():
     print(clean_df[["rank_2025", "city", "state", "population_2025"]].tail(10).to_string(index=False))
 
 
+def _runtime_dir_for_cli(runtime_dir: str | None = None) -> Path:
+    if runtime_dir:
+        path = Path(runtime_dir)
+    else:
+        configured = os.getenv("FIRE_METRICS_DATA_DIR", "").strip()
+        path = Path(configured) if configured else Path("instance") / "fire_metrics"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _cli_latest_input(runtime_dir: Path) -> Path | None:
+    latest_updated = runtime_dir / "latest_updated.xlsx"
+    latest_uploaded = runtime_dir / "latest_uploaded.xlsx"
+    if latest_updated.exists():
+        return latest_updated
+    if latest_uploaded.exists():
+        return latest_uploaded
+    return None
+
+
+def cli() -> int:
+    parser = argparse.ArgumentParser(description="FIRE Metrics updater CLI")
+    parser.add_argument("--input", dest="input_path", help="Input workbook path")
+    parser.add_argument("--output", dest="output_path", help="Output workbook path")
+    parser.add_argument("--runtime-dir", dest="runtime_dir", help="Runtime directory for latest files and indexes")
+    parser.add_argument("--refresh-all", action="store_true", help="Run refresh-all mode")
+    parser.add_argument("--format-only", action="store_true", help="Run format-only mode")
+    parser.add_argument("--dry-run", action="store_true", help="Run dry-run mode")
+    parser.add_argument("--rebuild-index", action="store_true", help="Rebuild city search indexes from output workbook")
+
+    args = parser.parse_args()
+
+    # Preserve the legacy behavior when no modern flags are provided.
+    if not any([
+        args.input_path,
+        args.output_path,
+        args.refresh_all,
+        args.format_only,
+        args.dry_run,
+        args.rebuild_index,
+    ]):
+        main()
+        return 0
+
+    runtime_dir = _runtime_dir_for_cli(args.runtime_dir)
+    input_path = Path(args.input_path) if args.input_path else _cli_latest_input(runtime_dir)
+    if not input_path:
+        print("No input workbook found. Provide --input or place latest_updated.xlsx/latest_uploaded.xlsx in the runtime directory.")
+        return 2
+
+    output_path = Path(args.output_path) if args.output_path else runtime_dir / "latest_updated.xlsx"
+    opts = {
+        "refresh_all": bool(args.refresh_all),
+        "format_only": bool(args.format_only),
+        "dry_run": bool(args.dry_run),
+    }
+
+    try:
+        result = run_update(str(input_path), str(output_path), opts)
+    except Exception as exc:
+        print(f"Update failed: {exc}")
+        return 1
+
+    print("FIRE Metrics update completed.")
+    for line in result.get("summary_lines", []):
+        print(f"- {line}")
+
+    if args.rebuild_index and not args.dry_run:
+        try:
+            from fire_metrics.fire_metrics_updater.index_builder import build_indexes_from_workbook
+
+            index_result = build_indexes_from_workbook(
+                workbook_path=output_path,
+                city_index_path=runtime_dir / "city_metrics_index.json",
+                excluded_index_path=runtime_dir / "city_excluded_index.json",
+                metadata_path=runtime_dir / "source_metadata.json",
+            )
+            print(
+                "Search index rebuilt "
+                f"({index_result['city_count']} cities, {index_result['excluded_count']} excluded)."
+            )
+        except Exception as exc:
+            print(f"Index rebuild failed: {exc}")
+            return 1
+
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(cli())
