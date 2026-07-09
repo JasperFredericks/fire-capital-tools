@@ -57,12 +57,65 @@ Tested against:
 - The Canyon Apartments — 91 units
 - Oxford Pointe Apartments (OXPT) — 152 units
 
-## FIRE Metric Tool (Phase 2 Flask Integration)
+## FIRE Metric Dashboard
 
 - Location in app: Markets -> FIRE Metric
-- Purpose: refresh market indicators workbook through the standalone FIRE Metrics updater workspace
-- Input: `.xlsx` workbook upload
-- Output: updated `.xlsx` workbook download
+- Purpose: searchable city-level market metrics dashboard backed by a runtime JSON index built from the latest FIRE Metrics workbook
+- Primary workflow: search first, refresh/index only when data is stale or missing
+- Upload/download workflow is still available for admins
+
+### Search behavior
+
+- Search entry supports punctuation/case normalization and common aliases:
+	- `St Louis`, `Saint Louis`, `St. Louis`
+	- `NYC`, `New York City`
+	- `LA`
+	- `DC`, `Washington DC`
+- API endpoint: `GET /tools/fire-metrics/search?q=<query>`
+- Response statuses:
+	- `found`
+	- `suggestions` (ambiguous/fuzzy)
+	- `excluded` (below threshold)
+	- `not_found`
+	- `error`
+
+### Dashboard sections
+
+- Header/status:
+	- last refreshed
+	- source updated timestamp
+	- data status (`current`, `stale`, `missing`)
+- Search bar with suggestions and user-friendly messages
+- City metric cards for:
+	- population
+	- income
+	- home value
+	- employment
+	- climate risk
+	- crime
+	- density-adjusted crime
+	- landlord friendliness
+- Methodology notes accordion
+- Admin tools:
+	- Check for Updates
+	- Refresh All Data
+	- Format Only
+	- Dry Run
+	- Rebuild Search Index
+	- Download Latest Workbook
+
+### Auto-update and refresh model
+
+- Search reads from cached runtime JSON index files and does not trigger expensive refreshes.
+- Freshness is tracked via metadata and stale-hour thresholds.
+- Manual refresh/index actions are available in the FIRE Metric admin panel.
+- CLI support is available for scheduled jobs:
+
+```bash
+python3 -m fire_metrics.update_fire_metrics --refresh-all --rebuild-index
+```
+
+- Railway note: true automatic scheduled refreshes require a Railway scheduled job/cron (or manual admin refresh from the dashboard).
 
 ### Runtime variables (Railway)
 
@@ -74,13 +127,21 @@ Tested against:
 	- `ADMIN_PASSWORD_HASH`
 	- `CENSUS_API_KEY`
 - Required for the FIRE Metric updater to pull ACS/Census data: `CENSUS_API_KEY`
+- Optional:
+	- `FIRE_METRICS_DATA_DIR` (defaults to `instance/fire_metrics/`)
 
 ### Local development
 
 - Local runs can use `.env` or `fire_metrics/data/cache/census_api_key.txt`
 - These files are ignored by Git and must never be committed with real credentials
+- Search can still run without `CENSUS_API_KEY` if a previous runtime index exists
+- Refresh/update actions fail cleanly with a user message when `CENSUS_API_KEY` is missing
 
 ### Git safety
 
 - Generated workbooks and cache payloads are ignored by Git
 - `fire_metrics/output/*` workbooks, `fire_metrics/data/cache/*` runtime cache, and related generated artifacts are excluded
+- Runtime dashboard artifacts are ignored:
+	- `instance/fire_metrics/`
+	- `fire_metrics_runtime/`
+	- generated JSON indexes and metadata

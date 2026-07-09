@@ -4,6 +4,8 @@ __pycache__/
 *.pyo
 .DS_Store
 .env
+fire_metrics_runtime/
+instance/fire_metrics/
 uploads/
 *.egg-info/
 dist/
