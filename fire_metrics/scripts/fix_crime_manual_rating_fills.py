@@ -10,7 +10,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment, PatternFill
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_WB = BASE_DIR / "output" / "us_cities_100k_population_ranked_CRIME_NON_FL_FIXED.xlsx"
 OUTPUT_WB = BASE_DIR / "output" / "us_cities_100k_population_ranked_CRIME_MANUAL_RATING_FILLS.xlsx"
 
@@ -140,11 +140,18 @@ def update_readme(ws):
     return True
 
 
-def main():
-    if not INPUT_WB.exists():
-        raise FileNotFoundError(f"Input workbook not found: {INPUT_WB}")
+def fix_crime_manual_rating_fills(input_path=None, output_path=None):
+    """Apply targeted manual crime rating fills for unresolved non-Florida rows.
 
-    wb = load_workbook(INPUT_WB)
+    Returns a summary dict identical in shape to what the CLI used to print.
+    """
+    input_wb = Path(input_path) if input_path is not None else INPUT_WB
+    output_wb = Path(output_path) if output_path is not None else OUTPUT_WB
+
+    if not input_wb.exists():
+        raise FileNotFoundError(f"Input workbook not found: {input_wb}")
+
+    wb = load_workbook(input_wb)
 
     if "Crime Index" not in wb.sheetnames:
         raise RuntimeError("Crime Index sheet missing")
@@ -224,8 +231,8 @@ def main():
     if "README" in wb.sheetnames:
         readme_updated = update_readme(wb["README"])
 
-    OUTPUT_WB.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(OUTPUT_WB)
+    output_wb.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_wb)
 
     print(f"Number of manual rating fills added: {len(updated_cities)}")
     print("List of manual-fill cities updated:")
@@ -237,7 +244,19 @@ def main():
     print(f"Number of rows highlighted: {highlight_count}")
     print(f"README crime methodology updated: {'yes' if readme_updated else 'no'}")
     print(f"Removed provisional columns: {removed_cols}")
-    print(f"Output file path: {OUTPUT_WB}")
+    print(f"Output file path: {output_wb}")
+
+    return {
+        "output_path": str(output_wb),
+        "updated_cities": updated_cities,
+        "highlight_count": highlight_count,
+        "readme_updated": readme_updated,
+        "removed_cols": removed_cols,
+    }
+
+
+def main():
+    fix_crime_manual_rating_fills()
 
 
 if __name__ == "__main__":

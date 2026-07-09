@@ -10,16 +10,19 @@ import datetime as dt
 import json
 import re
 import shutil
+import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from openpyxl import load_workbook
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fire_metrics_updater.config import get_secret
 
 
-BASE_DIR = Path(__file__).resolve().parent
-WORKBOOK_PATH = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_CRIME_INDEX.xlsx"
+BASE_DIR = Path(__file__).resolve().parent.parent
+WORKBOOK_PATH = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_LANDLORD_AND_POP_CHANGE.xlsx"
 CACHE_DIR = BASE_DIR / "data" / "cache"
 CENSUS_API_KEY = get_secret("CENSUS_API_KEY", "data/cache/census_api_key.txt")
 ACS_DATASET = "acs/acs1"
@@ -292,12 +295,13 @@ def choose_target_sheets(wb):
     return out
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Add ACS income growth columns to workbook")
-    parser.add_argument("--workbook", default=str(WORKBOOK_PATH), help="Workbook path")
-    args = parser.parse_args()
+def add_income_growth(workbook_path=None):
+    """Add ACS median household income + growth columns to a workbook in place.
 
-    workbook = Path(args.workbook)
+    Returns a summary dict (years used, backup path, per-sheet match stats)
+    identical in shape to what the CLI used to print.
+    """
+    workbook = Path(workbook_path) if workbook_path is not None else WORKBOOK_PATH
     if not workbook.exists():
         raise FileNotFoundError(f"Workbook not found: {workbook}")
 
@@ -329,10 +333,26 @@ def main():
     update_readme_sheet(wb, years)
     wb.save(workbook)
 
-    # report summary based on primary sheet
+    return {
+        "workbook": str(workbook),
+        "years": years,
+        "backup": str(backup),
+        "summaries": summaries,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Add ACS income growth columns to workbook")
+    parser.add_argument("--workbook", default=str(WORKBOOK_PATH), help="Workbook path")
+    args = parser.parse_args()
+
+    result = add_income_growth(Path(args.workbook))
+
+    years = result["years"]
+    summaries = result["summaries"]
     primary = next((s for s in summaries if s["sheet"] == "Clean Cities 100k+"), summaries[0])
     print("ACS years used:", years)
-    print("Backup created:", backup)
+    print("Backup created:", result["backup"])
     print("Updated sheets:", ", ".join(s["sheet"] for s in summaries))
     print("Cities matched:", primary["matched"])
     print("Cities failed to match:", primary["unmatched"])

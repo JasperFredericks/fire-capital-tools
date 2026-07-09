@@ -9,16 +9,19 @@ import datetime as dt
 import json
 import re
 import shutil
+import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from openpyxl import load_workbook
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fire_metrics_updater.config import get_secret
 
 
-BASE_DIR = Path(__file__).resolve().parent
-INPUT_WORKBOOK = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_CRIME_INDEX.xlsx"
+BASE_DIR = Path(__file__).resolve().parent.parent
+INPUT_WORKBOOK = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_LANDLORD_AND_POP_CHANGE.xlsx"
 OUTPUT_WORKBOOK = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_HOME_VALUE_GROWTH.xlsx"
 CENSUS_API_KEY = get_secret("CENSUS_API_KEY", "data/cache/census_api_key.txt")
 
@@ -283,9 +286,17 @@ def append_readme_note(wb):
     ws.append([note])
 
 
-def main():
-    if not INPUT_WORKBOOK.exists():
-        raise FileNotFoundError(f"Input workbook not found: {INPUT_WORKBOOK}")
+def add_home_value_growth(input_path=None, output_path=None):
+    """Add ACS median home/condo value + growth columns to a copy of the workbook.
+
+    Returns a summary dict (years used, output path, match stats) identical
+    in shape to what the CLI used to print.
+    """
+    input_workbook = Path(input_path) if input_path is not None else INPUT_WORKBOOK
+    output_workbook = Path(output_path) if output_path is not None else OUTPUT_WORKBOOK
+
+    if not input_workbook.exists():
+        raise FileNotFoundError(f"Input workbook not found: {input_workbook}")
 
     api_key = load_api_key()
     latest = discover_latest_year(api_key)
@@ -299,32 +310,45 @@ def main():
     }
 
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = INPUT_WORKBOOK.with_name(f"{INPUT_WORKBOOK.stem}_backup_{stamp}{INPUT_WORKBOOK.suffix}")
-    shutil.copy2(INPUT_WORKBOOK, backup_path)
+    backup_path = input_workbook.with_name(f"{input_workbook.stem}_backup_{stamp}{input_workbook.suffix}")
+    shutil.copy2(input_workbook, backup_path)
 
-    shutil.copy2(INPUT_WORKBOOK, OUTPUT_WORKBOOK)
-    wb = load_workbook(OUTPUT_WORKBOOK)
+    shutil.copy2(input_workbook, output_workbook)
+    wb = load_workbook(output_workbook)
     if "Clean Cities 100k+" not in wb.sheetnames:
         raise RuntimeError("Sheet 'Clean Cities 100k+' not found")
 
     ws = wb["Clean Cities 100k+"]
     matched, unmatched, sanity = append_home_value_columns(ws, years, values_by_year)
     append_readme_note(wb)
-    wb.save(OUTPUT_WORKBOOK)
+    wb.save(output_workbook)
 
-    total_rows = ws.max_row - 1
+    return {
+        "output_path": str(output_workbook),
+        "backup_path": str(backup_path),
+        "years": years,
+        "total_rows": ws.max_row - 1,
+        "matched": matched,
+        "unmatched": unmatched,
+        "sanity": sanity,
+    }
 
-    print(f"Output file path: {OUTPUT_WORKBOOK}")
+
+def main():
+    result = add_home_value_growth()
+
+    years = result["years"]
+    print(f"Output file path: {result['output_path']}")
     print(f"ACS years used: {years}")
-    print(f"Number of city rows: {total_rows}")
-    print(f"Number matched to ACS home/condo value data: {matched}")
-    print(f"Number failed to match: {len(unmatched)}")
+    print(f"Number of city rows: {result['total_rows']}")
+    print(f"Number matched to ACS home/condo value data: {result['matched']}")
+    print(f"Number failed to match: {len(result['unmatched'])}")
     print("First 10 unmatched cities:")
-    for city, st in unmatched[:10]:
+    for city, st in result["unmatched"][:10]:
         print(f"- {city}, {st}")
     print("5 sanity-check rows:")
     y2021, yprior, ylatest = years
-    for city, st, v1, vp, vl, g1, g2 in sanity:
+    for city, st, v1, vp, vl, g1, g2 in result["sanity"]:
         print(
             f"- {city}, {st} | {y2021}: {v1} | {yprior}: {vp} | {ylatest}: {vl} "
             f"| growth {y2021}\u2013{ylatest}: {g1} | growth {yprior}\u2013{ylatest}: {g2}"

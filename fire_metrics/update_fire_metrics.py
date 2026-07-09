@@ -20,7 +20,7 @@ RAW_DIR = BASE_DIR / "data" / "raw"
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 OUTPUT_DIR = BASE_DIR / "output"
 RAW_FILE = RAW_DIR / "SUB-IP-EST2025-ANNRNK.xlsx"
-OUTPUT_FILE = OUTPUT_DIR / "us_cities_100k_population_ranked_WITH_CLIMATE_RISK.xlsx"
+OUTPUT_FILE = OUTPUT_DIR / "us_cities_100k_population_ranked_WITH_LANDLORD_AND_POP_CHANGE.xlsx"
 CENSUS_URL = "https://www2.census.gov/programs-surveys/popest/tables/2020-2025/cities/totals/SUB-IP-EST2025-ANNRNK.xlsx"
 FEMA_NRI_QUERY_URL = "https://services.arcgis.com/XG15cJAlne2vxtgt/ArcGIS/rest/services/National_Risk_Index_Counties/FeatureServer/0/query"
 

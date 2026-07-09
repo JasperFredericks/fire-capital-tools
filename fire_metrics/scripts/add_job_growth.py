@@ -1,36 +1,51 @@
 #!/usr/bin/env python3
 """Add BLS LAUS resident employment growth columns to Clean Cities 100k+.
 
-Inputs (official BLS LAUS bulk files):
-- data/cache/bls_laus/la.area
-- data/cache/bls_laus/la.series
-- data/cache/bls_laus/la.data.65.City
+Live data source: the BLS Time Series API (api.bls.gov), replacing the
+former manual BLS LAUS bulk-file dependency (la.area, la.series,
+la.data.65.City). City-level LAUS series IDs are constructed directly from
+each city's Census state+place FIPS code (via a Census ACS crosswalk, the
+same mechanism used by add_income_growth.py/add_home_value_growth.py) rather
+than by fuzzy-matching city names against a bulk-file text catalog.
 
 Measure code used: 05 (employment)
-Period used: M13 (annual average)
+Period used: M13 (annual average, via the API's annualaverage=true option)
+
+A small number of consolidated city-county governments (Nashville-Davidson,
+Louisville-Jefferson, Athens-Clarke, Augusta-Richmond, Urban Honolulu) do not
+have their own city-level ("CT") LAUS series -- BLS only publishes an
+encompassing county-level ("CN") series for these. See COUNTY_FALLBACK
+below; each entry was verified individually against the live API.
 """
 
-import csv
 import datetime as dt
-import difflib
 import re
 import shutil
-from collections import defaultdict
+import sys
+import json
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from openpyxl import load_workbook
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from fire_metrics_updater.config import get_secret
 
-BASE_DIR = Path(__file__).resolve().parent
+
+BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_WORKBOOK = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_HOME_VALUE_GROWTH.xlsx"
 OUTPUT_WORKBOOK = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_JOB_GROWTH_FIXED.xlsx"
 PREVIOUS_WORKBOOK = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_JOB_GROWTH.xlsx"
 
-BLS_DIR = BASE_DIR / "data" / "cache" / "bls_laus"
-BLS_AREA = BLS_DIR / "la.area"
-BLS_SERIES = BLS_DIR / "la.series"
-BLS_CITY_DATA = BLS_DIR / "la.data.65.City"
-BLS_MEASURE = BLS_DIR / "la.measure"
+# Census key is required (used for the city -> state/place FIPS crosswalk).
+# BLS key is optional: unauthenticated access works (verified), a
+# registered key just raises the daily query / per-request series limits.
+CENSUS_API_KEY = get_secret("CENSUS_API_KEY", "data/cache/census_api_key.txt")
+BLS_API_KEY = get_secret("BLS_API_KEY", "data/cache/bls_api_key.txt")
+
+BLS_MEASURE_EMPLOYMENT = "05"
+BLS_SERIES_ENDPOINT = "https://api.bls.gov/publicAPI/v2/timeseries/data/"
 
 STATE_TO_ABBR = {
     "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR", "CALIFORNIA": "CA",
@@ -67,7 +82,12 @@ REMOVE_WORDS = {
     "county/city",
 }
 
-# Targeted aliases for workbook city names that do not match LAUS names 1:1.
+# Historical aliases from the old bulk-file text-matching approach. No
+# longer read by this script (there is no bulk-file text catalog to match
+# them against anymore -- see COUNTY_FALLBACK and fetch_place_fips_crosswalk
+# below for how the same consolidated-government cities are now handled,
+# via Census FIPS codes rather than BLS area-name text). Left in place,
+# unedited, as Beckett's original domain reference.
 ALIASES = {
     ("PA", "philadelphia"): [
         "philadelphia city",
@@ -139,6 +159,25 @@ ALIASES = {
     ("CA", "san buenaventura ventura"): ["san buenaventura"],
 }
 
+# Consolidated city-county governments with no city-level ("CT") LAUS
+# series of their own -- BLS only publishes the encompassing county's
+# ("CN") series. Each entry verified individually against the live API
+# (2026-07): the CT series for these returns no data, the CN series does.
+# Of the 15 cities in the old ALIASES table above, only these 5 actually
+# need this fallback -- the other 10 (Philadelphia, San Francisco, Denver,
+# Lexington-Fayette, Anchorage, Columbus GA, Macon-Bibb, San Buenaventura,
+# Washington DC, Indianapolis) have their own valid CT series directly.
+COUNTY_FALLBACK = {
+    # Key is base_city_key(normalize_city(...)) of the workbook's own city
+    # text -- "urban" is a REMOVE_WORDS stopword, so "Urban Honolulu CDP"
+    # reduces to "honolulu", not "urban honolulu".
+    ("HI", "honolulu"): ("15", "003"),            # Honolulu County, HI
+    ("GA", "augusta richmond"): ("13", "245"),    # Richmond County, GA
+    ("GA", "athens clarke"): ("13", "059"),       # Clarke County, GA
+    ("TN", "nashville davidson"): ("47", "037"),  # Davidson County, TN
+    ("KY", "louisville jefferson"): ("21", "111"),  # Jefferson County, KY
+}
+
 
 def normalize_city(value):
     text = "" if value is None else str(value).strip().lower()
@@ -164,204 +203,102 @@ def normalize_state_abbr(value):
     return STATE_TO_ABBR.get(raw, "")
 
 
-def require_inputs():
-    missing = [p for p in (BLS_AREA, BLS_SERIES, BLS_CITY_DATA) if not p.exists()]
-    if missing:
-        msg = ["Missing required BLS LAUS file(s):"]
-        msg.extend([f"- {p}" for p in missing])
-        msg.append("Download official files from https://download.bls.gov/pub/time.series/la/ and place them in data/cache/bls_laus/.")
-        raise FileNotFoundError("\n".join(msg))
-
-
-def verify_measure_code():
-    if not BLS_MEASURE.exists():
-        return
-    with BLS_MEASURE.open("r", encoding="utf-8", errors="replace") as f:
-        reader = csv.reader(f, delimiter="\t")
-        next(reader, None)
-        for row in reader:
-            if len(row) >= 2 and row[0].strip() == "05":
-                if row[1].strip().lower() != "employment":
-                    raise RuntimeError("BLS measure code 05 is not employment in la.measure")
-                return
-
-
-def parse_area_file():
-    area_by_code = {}
-    state_areas = defaultdict(list)
-    with BLS_AREA.open("r", encoding="utf-8", errors="replace") as f:
-        reader = csv.reader(f, delimiter="\t")
-        next(reader, None)
-        for row in reader:
-            if len(row) < 3:
-                continue
-            area_type = row[0].strip()
-            area_code = row[1].strip()
-            area_text = row[2].strip()
-            m = re.match(r"^(.*?),\s*([A-Z]{2})(?:\b|\s|$)", area_text)
-            if not m:
-                continue
-            city_part = m.group(1).strip()
-            st = m.group(2).strip()
-            area_by_code[area_code] = {
-                "area_type": area_type,
-                "area_code": area_code,
-                "area_text": area_text,
-                "state": st,
-                "city_norm": normalize_city(city_part),
-                "base_key": base_city_key(normalize_city(city_part)),
-            }
-            state_areas[st].append(area_by_code[area_code])
-    return area_by_code, state_areas
-
-
-def parse_series_file(area_by_code):
-    series_to_area = {}
-    with BLS_SERIES.open("r", encoding="utf-8", errors="replace") as f:
-        reader = csv.reader(f, delimiter="\t")
-        next(reader, None)
-        for row in reader:
-            if len(row) < 4:
-                continue
-            series_id = row[0].strip()
-            area_type = row[1].strip()
-            area_code = row[2].strip()
-            measure_code = row[3].strip()
-
-            if measure_code != "05":
-                continue
-            if area_type not in {"G", "I"}:
-                continue
-            if area_code not in area_by_code:
-                continue
-
-            series_to_area[series_id] = area_code
-    return series_to_area
-
-
-def parse_city_annual_data(series_to_area):
-    annual_by_series = defaultdict(dict)
-    latest_year = 0
-
-    with BLS_CITY_DATA.open("r", encoding="utf-8", errors="replace") as f:
-        reader = csv.reader(f, delimiter="\t")
-        next(reader, None)
-        for row in reader:
-            if len(row) < 4:
-                continue
-            series_id = row[0].strip()
-            if series_id not in series_to_area:
-                continue
-
-            year_raw = row[1].strip()
-            period = row[2].strip()
-            value_raw = row[3].strip()
-
-            if period != "M13":
-                continue
-            try:
-                year = int(year_raw)
-                value = float(value_raw)
-            except Exception:
-                continue
-            if year < 2021:
-                continue
-
-            annual_by_series[series_id][year] = value
-            if year > latest_year:
-                latest_year = year
-
-    if latest_year == 0:
-        raise RuntimeError("No annual M13 data found in la.data.65.City for measure 05")
-
-    prior_year = latest_year - 1
-    return annual_by_series, prior_year, latest_year
-
-
-def choose_best(candidates):
-    if not candidates:
-        return None
-    # Prefer direct city records (G), then split-city records (I), then higher latest value.
-    def score(rec):
-        area_priority = 1 if rec["area_type"] == "G" else 0
-        latest_val = rec.get("latest")
-        latest_score = latest_val if latest_val is not None else -1
-        return (area_priority, latest_score)
-
-    return sorted(candidates, key=score, reverse=True)[0]
-
-
-def choose_by_population(candidates, population):
-    if not candidates:
-        return None
-    if population is None:
-        return choose_best(candidates)
-
-    scored = []
-    for rec in candidates:
-        latest = rec.get("latest")
-        if latest is None:
+def discover_crosswalk_year(api_key):
+    current = dt.date.today().year
+    for year in range(current - 1, 2020, -1):
+        try:
+            params = {"get": "NAME", "for": "place:*", "in": "state:01", "key": api_key}
+            query = urllib.parse.urlencode(params)
+            url = f"https://api.census.gov/data/{year}/acs/acs1?{query}"
+            with urllib.request.urlopen(url, timeout=30) as resp:
+                body = resp.read().decode("utf-8")
+            if body.strip().startswith("[") and len(json.loads(body)) > 1:
+                return year
+        except Exception:
             continue
-        diff = abs(latest - population)
-        rel = diff / max(float(population), 1.0)
-        scored.append((rel, diff, rec))
-
-    if not scored:
-        return choose_best(candidates)
-
-    scored.sort(key=lambda x: (x[0], x[1]))
-    best_rel, _, best = scored[0]
-    if best_rel > 0.80:
-        return None
-    if len(scored) > 1:
-        second_rel = scored[1][0]
-        if second_rel - best_rel < 0.05:
-            return None
-    return best
+    raise RuntimeError("Unable to find a usable ACS 1-year place list for the BLS crosswalk")
 
 
-def closest_same_state_candidates(st, city_norm, state_areas, limit=10):
-    candidates = []
-    for area in state_areas.get(st, []):
-        cand = area.get("city_norm", "")
-        ratio = difflib.SequenceMatcher(None, city_norm, cand).ratio()
-        token_overlap = len(set(city_norm.split()) & set(cand.split()))
-        candidates.append((ratio, token_overlap, area.get("area_text", ""), area.get("area_type", "")))
-    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    out = []
-    seen = set()
-    for ratio, _, text, area_type in candidates:
-        if text in seen:
+def fetch_place_fips_crosswalk(api_key, year):
+    """Census ACS place-level (state_abbr, normalized city) -> (state_fips, place_fips).
+
+    Reuses the same ACS 1-year 'place:*' query pattern as
+    add_income_growth.py/add_home_value_growth.py -- the population
+    variable here is just a vehicle to get the state/place geography
+    columns back; its value is never used.
+    """
+    params = {"get": "NAME,B01001_001E", "for": "place:*", "in": "state:*", "key": api_key}
+    query = urllib.parse.urlencode(params)
+    url = f"https://api.census.gov/data/{year}/acs/acs1?{query}"
+    with urllib.request.urlopen(url, timeout=60) as resp:
+        body = resp.read().decode("utf-8")
+    if not body.strip().startswith("["):
+        raise RuntimeError(f"Census API error for {year}: {body[:200]}")
+    rows = json.loads(body)
+    header = rows[0]
+    idx = {name: i for i, name in enumerate(header)}
+
+    crosswalk = {}
+    for row in rows[1:]:
+        name = row[idx["NAME"]]
+        if "," not in name:
             continue
-        seen.add(text)
-        out.append((text, area_type, round(ratio, 4)))
-        if len(out) >= limit:
-            break
-    return out
-
-
-def build_lookup(area_by_code, series_to_area, annual_by_series, prior_year, latest_year):
-    by_key = defaultdict(list)
-
-    for series_id, years in annual_by_series.items():
-        area_code = series_to_area.get(series_id)
-        area = area_by_code.get(area_code)
-        if not area:
+        place_part, state_name = [x.strip() for x in name.rsplit(",", 1)]
+        state_abbr = STATE_TO_ABBR.get(state_name.upper(), "")
+        if not state_abbr:
             continue
+        key = (state_abbr, base_city_key(normalize_city(place_part)))
+        crosswalk.setdefault(key, (row[idx["state"]], row[idx["place"]]))
+    return crosswalk
 
-        rec = {
-            "state": area["state"],
-            "city_norm": area["city_norm"],
-            "area_text": area["area_text"],
-            "series_id": series_id,
-            "area_type": area["area_type"],
-            "v2021": years.get(2021),
-            "vprior": years.get(prior_year),
-            "latest": years.get(latest_year),
+
+def build_series_id(area_type, state_fips, geo_fips, measure=BLS_MEASURE_EMPLOYMENT):
+    geo_code = f"{state_fips}{geo_fips}".ljust(13, "0")
+    return f"LAU{area_type}{geo_code}{measure}"
+
+
+def fetch_bls_series_batch(series_ids, start_year, end_year, api_key=None):
+    """POST batched BLS Time Series API requests (with annualaverage=true
+    for M13 data), chunked to the per-request series limit. Returns
+    {series_id: {year: value}} -- only for series that actually have data.
+    """
+    chunk_size = 50 if api_key else 25
+    results = {}
+    ids = list(series_ids)
+    for i in range(0, len(ids), chunk_size):
+        chunk = ids[i:i + chunk_size]
+        payload = {
+            "seriesid": chunk,
+            "startyear": str(start_year),
+            "endyear": str(end_year),
+            "annualaverage": True,
         }
-        by_key[(rec["state"], rec["city_norm"])].append(rec)
-
-    return by_key
+        if api_key:
+            payload["registrationkey"] = api_key
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            BLS_SERIES_ENDPOINT,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        if body.get("status") not in ("REQUEST_SUCCEEDED",):
+            raise RuntimeError(f"BLS API request failed: {body.get('message')}")
+        for series in body.get("Results", {}).get("series", []):
+            sid = series["seriesID"]
+            years = {}
+            for point in series.get("data", []):
+                if point.get("period") != "M13":
+                    continue
+                try:
+                    years[int(point["year"])] = float(point["value"])
+                except (TypeError, ValueError):
+                    continue
+            if years:
+                results[sid] = years
+    return results
 
 
 def find_header_index(ws, names):
@@ -390,11 +327,32 @@ def remove_existing_job_columns(ws):
         ws.delete_cols(c, 1)
 
 
-def append_job_columns(ws, prior_year, latest_year, by_key, state_areas):
+def resolve_city_series_id(city, st, series_data, crosswalk):
+    """Return (series_id, area_label) for a workbook row, or (None, None)."""
+    city_norm = normalize_city(city)
+    base_key = base_city_key(city_norm)
+
+    fips = crosswalk.get((st, base_key))
+    if fips:
+        state_fips, place_fips = fips
+        ct_id = build_series_id("CT", state_fips, place_fips)
+        if ct_id in series_data:
+            return ct_id, f"{city}, {st} (Census place {state_fips}{place_fips})"
+
+    county = COUNTY_FALLBACK.get((st, base_key))
+    if county:
+        county_state_fips, county_fips = county
+        cn_id = build_series_id("CN", county_state_fips, county_fips)
+        if cn_id in series_data:
+            return cn_id, f"{city}, {st} (encompassing county {county_state_fips}{county_fips})"
+
+    return None, None
+
+
+def append_job_columns(ws, prior_year, latest_year, series_data, crosswalk):
     city_col = find_header_index(ws, ["city"])
     state_col = find_header_index(ws, ["state_abbr", "state"])
     state_name_col = find_header_index(ws, ["state"])
-    pop_col = find_header_index(ws, ["population_2025", "population", "population_2024"])
 
     if city_col is None or state_col is None:
         raise RuntimeError("Could not find city/state columns in Clean Cities 100k+ sheet")
@@ -416,7 +374,6 @@ def append_job_columns(ws, prior_year, latest_year, by_key, state_areas):
 
     matched = 0
     unmatched = []
-    unmatched_candidates = {}
     sanity = []
 
     for r in range(2, ws.max_row + 1):
@@ -427,35 +384,6 @@ def append_job_columns(ws, prior_year, latest_year, by_key, state_areas):
         st = normalize_state_abbr(raw_state)
         if not st:
             st = normalize_state_abbr(state_name)
-        city_norm = normalize_city(city)
-        base_key = base_city_key(city_norm)
-
-        population = None
-        if pop_col is not None:
-            pv = ws.cell(r, pop_col).value
-            try:
-                population = float(pv) if pv is not None else None
-            except Exception:
-                population = None
-
-        direct = choose_best(by_key.get((st, city_norm), []))
-        if direct is None:
-            direct = choose_best(by_key.get((st, base_key), []))
-        rec = direct
-
-        if rec is None:
-            alias_candidates = []
-            for alias_city in ALIASES.get((st, base_key), []):
-                alias_norm = normalize_city(alias_city)
-                alias_base = base_city_key(alias_norm)
-                alias_candidates.extend(by_key.get((st, alias_norm), []))
-                alias_candidates.extend(by_key.get((st, alias_base), []))
-            if alias_candidates:
-                # De-duplicate by series ID before population tie-break.
-                dedup = {}
-                for c in alias_candidates:
-                    dedup[c["series_id"]] = c
-                rec = choose_by_population(list(dedup.values()), population)
 
         c2021 = ws.cell(r, start)
         cprior = ws.cell(r, start + 1)
@@ -463,22 +391,23 @@ def append_job_columns(ws, prior_year, latest_year, by_key, state_areas):
         g1 = ws.cell(r, start + 3)
         g2 = ws.cell(r, start + 4)
         area_name = ws.cell(r, start + 5)
-        series_id = ws.cell(r, start + 6)
+        series_id_cell = ws.cell(r, start + 6)
 
-        if rec is None:
+        series_id, area_label = resolve_city_series_id(city, st, series_data, crosswalk)
+        if series_id is None:
             unmatched.append((city, st))
-            unmatched_candidates[(city, st)] = closest_same_state_candidates(st, city_norm, state_areas, limit=10)
             continue
 
-        v2021 = rec.get("v2021")
-        vprior = rec.get("vprior")
-        vlast = rec.get("latest")
+        years = series_data[series_id]
+        v2021 = years.get(2021)
+        vprior = years.get(prior_year)
+        vlast = years.get(latest_year)
 
         c2021.value = v2021
         cprior.value = vprior
         clatest.value = vlast
-        area_name.value = rec.get("area_text")
-        series_id.value = rec.get("series_id")
+        area_name.value = area_label
+        series_id_cell.value = series_id
 
         if v2021 and vlast and v2021 != 0:
             g1.value = (vlast - v2021) / v2021
@@ -498,9 +427,9 @@ def append_job_columns(ws, prior_year, latest_year, by_key, state_areas):
 
         matched += 1
         if len(sanity) < 5:
-            sanity.append((city, st, v2021, vprior, vlast, g1.value, g2.value, rec.get("area_text")))
+            sanity.append((city, st, v2021, vprior, vlast, g1.value, g2.value, area_label))
 
-    return matched, unmatched, sanity, unmatched_candidates
+    return matched, unmatched, sanity
 
 
 def get_matched_set(workbook_path):
@@ -539,9 +468,12 @@ def append_readme_note(wb, prior_year, latest_year):
 
     ws = wb["README"]
     note = (
-        "Resident employment uses BLS LAUS (Local Area Unemployment Statistics) bulk files "
-        "la.area, la.series, and la.data.65.City with measure code 05 (employment) and annual "
-        f"average period M13 for years 2021, {prior_year}, and {latest_year}."
+        "Resident employment uses the BLS Time Series API (api.bls.gov) for LAUS "
+        "(Local Area Unemployment Statistics), measure code 05 (employment), annual "
+        f"average period M13, for years 2021, {prior_year}, and {latest_year}. City-level "
+        "series are resolved via each city's Census state/place FIPS code; a small number of "
+        "consolidated city-county governments use the encompassing county's LAUS series "
+        "instead, since BLS does not publish a separate city-level series for them."
     )
 
     for r in range(1, ws.max_row + 1):
@@ -553,42 +485,108 @@ def append_readme_note(wb, prior_year, latest_year):
     ws.append([note])
 
 
-def main():
-    if not INPUT_WORKBOOK.exists():
-        raise FileNotFoundError(f"Input workbook not found: {INPUT_WORKBOOK}")
+def add_job_growth(input_path=None, output_path=None, previous_path=None):
+    """Add BLS LAUS resident employment + growth columns to a copy of the workbook.
 
-    require_inputs()
-    verify_measure_code()
+    Returns a summary dict identical in shape to what the CLI used to print.
+    """
+    input_workbook = Path(input_path) if input_path is not None else INPUT_WORKBOOK
+    output_workbook = Path(output_path) if output_path is not None else OUTPUT_WORKBOOK
+    previous_workbook = Path(previous_path) if previous_path is not None else PREVIOUS_WORKBOOK
 
-    previous_matched = get_matched_set(PREVIOUS_WORKBOOK)
+    if not input_workbook.exists():
+        raise FileNotFoundError(f"Input workbook not found: {input_workbook}")
+    if not CENSUS_API_KEY:
+        raise RuntimeError(
+            "Census API key not found (needed for the city -> FIPS crosswalk). "
+            "Set CENSUS_API_KEY or create data/cache/census_api_key.txt"
+        )
 
-    area_by_code, state_areas = parse_area_file()
-    series_to_area = parse_series_file(area_by_code)
-    annual_by_series, prior_year, latest_year = parse_city_annual_data(series_to_area)
-    by_key = build_lookup(area_by_code, series_to_area, annual_by_series, prior_year, latest_year)
+    previous_matched = get_matched_set(previous_workbook)
+
+    crosswalk_year = discover_crosswalk_year(CENSUS_API_KEY)
+    crosswalk = fetch_place_fips_crosswalk(CENSUS_API_KEY, crosswalk_year)
+
+    wb_probe = load_workbook(input_workbook, read_only=True, data_only=True)
+    if "Clean Cities 100k+" not in wb_probe.sheetnames:
+        raise RuntimeError("Sheet 'Clean Cities 100k+' not found")
+    ws_probe = wb_probe["Clean Cities 100k+"]
+    city_col = find_header_index(ws_probe, ["city"])
+    state_col = find_header_index(ws_probe, ["state_abbr", "state"])
+    state_name_col = find_header_index(ws_probe, ["state"])
+    if city_col is None or state_col is None:
+        raise RuntimeError("Could not find city/state columns in Clean Cities 100k+ sheet")
+
+    candidate_ids = set()
+    for row in ws_probe.iter_rows(min_row=2, values_only=True):
+        city = row[city_col - 1]
+        raw_state = row[state_col - 1]
+        state_name = row[state_name_col - 1] if state_name_col else raw_state
+        st = normalize_state_abbr(raw_state) or normalize_state_abbr(state_name)
+        base_key = base_city_key(normalize_city(city))
+
+        fips = crosswalk.get((st, base_key))
+        if fips:
+            candidate_ids.add(build_series_id("CT", fips[0], fips[1]))
+        county = COUNTY_FALLBACK.get((st, base_key))
+        if county:
+            candidate_ids.add(build_series_id("CN", county[0], county[1]))
+    wb_probe.close()
+
+    current_year = dt.date.today().year
+    series_data = fetch_bls_series_batch(candidate_ids, 2021, current_year, api_key=BLS_API_KEY)
+
+    years_seen = sorted({y for years in series_data.values() for y in years})
+    if not years_seen:
+        raise RuntimeError("BLS API returned no annual (M13) employment data for any requested series")
+    latest_year = years_seen[-1]
+    prior_year = latest_year - 1
 
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = INPUT_WORKBOOK.with_name(f"{INPUT_WORKBOOK.stem}_backup_{stamp}{INPUT_WORKBOOK.suffix}")
-    shutil.copy2(INPUT_WORKBOOK, backup_path)
+    backup_path = input_workbook.with_name(f"{input_workbook.stem}_backup_{stamp}{input_workbook.suffix}")
+    shutil.copy2(input_workbook, backup_path)
 
-    shutil.copy2(INPUT_WORKBOOK, OUTPUT_WORKBOOK)
-    wb = load_workbook(OUTPUT_WORKBOOK)
+    shutil.copy2(input_workbook, output_workbook)
+    wb = load_workbook(output_workbook)
     if "Clean Cities 100k+" not in wb.sheetnames:
         raise RuntimeError("Sheet 'Clean Cities 100k+' not found")
 
     ws = wb["Clean Cities 100k+"]
-    matched, unmatched, sanity, unmatched_candidates = append_job_columns(ws, prior_year, latest_year, by_key, state_areas)
+    matched, unmatched, sanity = append_job_columns(ws, prior_year, latest_year, series_data, crosswalk)
     append_readme_note(wb, prior_year, latest_year)
-    wb.save(OUTPUT_WORKBOOK)
+    wb.save(output_workbook)
 
-    current_matched = get_matched_set(OUTPUT_WORKBOOK)
+    current_matched = get_matched_set(output_workbook)
     newly_matched = sorted(current_matched - previous_matched)
 
     total_rows = ws.max_row - 1
+
+    return {
+        "output_path": str(output_workbook),
+        "backup_path": str(backup_path),
+        "prior_year": prior_year,
+        "latest_year": latest_year,
+        "total_rows": total_rows,
+        "matched": matched,
+        "unmatched": unmatched,
+        "newly_matched": newly_matched,
+        "sanity": sanity,
+    }
+
+
+def main():
+    result = add_job_growth()
+
+    prior_year = result["prior_year"]
+    latest_year = result["latest_year"]
+    total_rows = result["total_rows"]
+    matched = result["matched"]
+    unmatched = result["unmatched"]
+    newly_matched = result["newly_matched"]
     failed = len(unmatched)
     match_rate = (matched / total_rows * 100.0) if total_rows else 0.0
 
-    print(f"Output file path: {OUTPUT_WORKBOOK}")
+    print(f"Output file path: {result['output_path']}")
     print(f"BLS years used: 2021, {prior_year}, {latest_year}")
     print(f"Total city rows: {total_rows}")
     print(f"Matched count: {matched}")
@@ -600,11 +598,8 @@ def main():
     print("Remaining unmatched cities:")
     for city, st in unmatched:
         print(f"- {city}, {st}")
-        print("  Closest same-state BLS candidates:")
-        for name, area_type, ratio in unmatched_candidates.get((city, st), []):
-            print(f"  - {name} [type {area_type}] similarity={ratio}")
     print("5 sanity-check rows:")
-    for city, st, v1, vp, vl, g1, g2, area in sanity:
+    for city, st, v1, vp, vl, g1, g2, area in result["sanity"]:
         print(
             f"- {city}, {st} | 2021: {v1} | {prior_year}: {vp} | {latest_year}: {vl} "
             f"| growth 2021-{latest_year}: {g1} | growth {prior_year}-{latest_year}: {g2} | area: {area}"

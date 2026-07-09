@@ -16,7 +16,7 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import load_workbook
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_WB = BASE_DIR / "output" / "us_cities_100k_population_ranked_FORMATTED_FINAL_BEFORE_CRIME_FIX.xlsx"
 OUTPUT_WB = BASE_DIR / "output" / "us_cities_100k_population_ranked_CRIME_NON_FL_FIXED.xlsx"
 BACKUP_WB = BASE_DIR / "output" / "us_cities_100k_population_ranked_FORMATTED_FINAL_BEFORE_CRIME_FIX.backup_before_non_fl_crime_fix.xlsx"
@@ -178,8 +178,9 @@ def ensure_columns(ws, col_idx, required):
         col_idx[name] = ws.max_column
 
 
-def load_fbi_table_8():
-    df = pd.read_excel(FBI_TABLE_8, sheet_name=0, header=3, engine="openpyxl")
+def load_fbi_table_8(fbi_file=None):
+    fbi_file = Path(fbi_file) if fbi_file is not None else FBI_TABLE_8
+    df = pd.read_excel(fbi_file, sheet_name=0, header=3, engine="openpyxl")
     df.columns = [str(c).replace("\n", " ").strip().lower() for c in df.columns]
     df = df.copy()
     df["state"] = df["state"].astype(str).str.upper().map(STATE_TO_ABBR)
@@ -258,15 +259,24 @@ def pick_match(state_abbr, aliases, state_df):
     return best_row, f"Fuzzy alias match: {best_alias} (core={best_core_ratio:.3f}, full={best_ratio:.3f})"
 
 
-def main():
-    if not INPUT_WB.exists():
-        raise FileNotFoundError(f"Input workbook not found: {INPUT_WB}")
-    if not FBI_TABLE_8.exists():
-        raise FileNotFoundError(f"FBI Table 8 source not found: {FBI_TABLE_8}")
+def fix_crime_non_fl_overrides(input_path=None, output_path=None, backup_path=None, fbi_file=None):
+    """Fill blank non-Florida Crime Index rows via targeted agency-name overrides.
 
-    shutil.copy2(INPUT_WB, BACKUP_WB)
+    Returns a summary dict identical in shape to what the CLI used to print.
+    """
+    input_wb = Path(input_path) if input_path is not None else INPUT_WB
+    output_wb = Path(output_path) if output_path is not None else OUTPUT_WB
+    backup_wb = Path(backup_path) if backup_path is not None else BACKUP_WB
+    fbi_file = Path(fbi_file) if fbi_file is not None else FBI_TABLE_8
 
-    wb = load_workbook(INPUT_WB)
+    if not input_wb.exists():
+        raise FileNotFoundError(f"Input workbook not found: {input_wb}")
+    if not fbi_file.exists():
+        raise FileNotFoundError(f"FBI Table 8 source not found: {fbi_file}")
+
+    shutil.copy2(input_wb, backup_wb)
+
+    wb = load_workbook(input_wb)
     if "Crime Index" not in wb.sheetnames:
         raise RuntimeError("Crime Index sheet not found")
 
@@ -322,7 +332,7 @@ def main():
                     non_fl_blank_before += 1
                 break
 
-    fbi_df = load_fbi_table_8()
+    fbi_df = load_fbi_table_8(fbi_file)
 
     # Existing distributions used by original methodology for percentile-based scoring.
     existing_violent = []
@@ -423,12 +433,12 @@ def main():
             fl_unchanged += 1
 
     # Save output workbook from in-memory updated copy.
-    OUTPUT_WB.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(OUTPUT_WB)
+    output_wb.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_wb)
 
     # Sanity summary
-    print(f"Backup created: {BACKUP_WB}")
-    print(f"Output saved: {OUTPUT_WB}")
+    print(f"Backup created: {backup_wb}")
+    print(f"Output saved: {output_wb}")
     print(f"Non-Florida blank rows before: {non_fl_blank_before}")
     print(f"Non-Florida rows successfully populated: {len(populated)}")
 
@@ -461,6 +471,21 @@ def main():
                 print(f"- {city}, {st} | reason: {reason}")
     else:
         print("- none")
+
+    return {
+        "output_path": str(output_wb),
+        "backup_path": str(backup_wb),
+        "non_fl_blank_before": non_fl_blank_before,
+        "populated": populated,
+        "still_blank": still_blank,
+        "remaining_blanks": remaining_blanks,
+        "fl_unchanged": fl_unchanged,
+        "fl_blank_before": fl_blank_before,
+    }
+
+
+def main():
+    fix_crime_non_fl_overrides()
 
 
 if __name__ == "__main__":

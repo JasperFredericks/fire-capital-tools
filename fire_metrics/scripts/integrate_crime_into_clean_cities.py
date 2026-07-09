@@ -7,7 +7,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_CRIME_MANUAL_RATING_FILLS.xlsx"
 OUTPUT_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_ALL_METRICS_CLEAN.xlsx"
 
@@ -179,8 +179,18 @@ def update_readme_crime_section(readme_ws):
     return True
 
 
-def main():
-    wb = load_workbook(INPUT_FILE)
+def integrate_crime_into_clean_cities(input_path=None, output_path=None):
+    """Copy decision-useful Crime Index columns onto the Clean Cities 100k+ sheet.
+
+    Returns a summary dict identical in shape to what the CLI used to print.
+    """
+    input_file = Path(input_path) if input_path is not None else INPUT_FILE
+    output_file = Path(output_path) if output_path is not None else OUTPUT_FILE
+
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input workbook not found: {input_file}")
+
+    wb = load_workbook(input_file)
     clean_ws = wb["Clean Cities 100k+"]
     crime_ws = wb["Crime Index"]
     readme_ws = wb["README"]
@@ -300,8 +310,8 @@ def main():
 
     readme_updated = update_readme_crime_section(readme_ws)
 
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(OUTPUT_FILE)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_file)
 
     print(f"Number of Clean Cities 100k+ rows: {total_rows}")
     print(f"Number matched to Crime Index: {matched}")
@@ -318,7 +328,25 @@ def main():
     print(f"Whether Density-Adjusted Crime Rating was copied: {'yes' if copied_density_rating else 'no'}")
     print(f"Number of manual rating fill rows copied: {manual_fill_copied}")
     print(f"README Crime Index section updated: {'yes' if readme_updated else 'no'}")
-    print(f"Output file path: {OUTPUT_FILE}")
+    print(f"Output file path: {output_file}")
+
+    return {
+        "output_path": str(output_file),
+        "total_rows": total_rows,
+        "matched": matched,
+        "unmatched": unmatched,
+        "unmatched_rows": unmatched_rows,
+        "copied_score": copied_score,
+        "copied_rating": copied_rating,
+        "copied_density_score": copied_density_score,
+        "copied_density_rating": copied_density_rating,
+        "manual_fill_copied": manual_fill_copied,
+        "readme_updated": readme_updated,
+    }
+
+
+def main():
+    integrate_crime_into_clean_cities()
 
 
 if __name__ == "__main__":
