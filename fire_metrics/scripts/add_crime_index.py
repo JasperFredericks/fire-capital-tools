@@ -17,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_LANDLORD_AND_POP_CHANGE.xlsx"
 OUTPUT_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_CRIME_INDEX.xlsx"
 CACHE_DIR = BASE_DIR / "data" / "cache" / "crime"
@@ -192,12 +192,13 @@ def load_gazetteer_places():
     return places[["state", "city_normalized", "Land Area Sq Mi"]]
 
 
-def load_clean_cities(sample=None):
+def load_clean_cities(sample=None, input_file=None):
     """Load Clean Cities 100k+ from input workbook."""
-    if not INPUT_FILE.exists():
-        raise FileNotFoundError(f"Input workbook not found: {INPUT_FILE}")
-    
-    df = pd.read_excel(INPUT_FILE, sheet_name="Clean Cities 100k+", dtype=str, engine="openpyxl")
+    input_file = Path(input_file) if input_file is not None else INPUT_FILE
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input workbook not found: {input_file}")
+
+    df = pd.read_excel(input_file, sheet_name="Clean Cities 100k+", dtype=str, engine="openpyxl")
     
     city_col = next((c for c in CITY_COL_CANDIDATES if c in df.columns), None)
     state_col = next((c for c in STATE_COL_CANDIDATES if c in df.columns), None)
@@ -229,11 +230,11 @@ def load_clean_cities(sample=None):
     return df[["city", "state", "Census City Population"]]
 
 
-def load_fbi_table_8():
+def load_fbi_table_8(fbi_file=None):
     """Load FBI Table 8 city-level crime data.
-    
+
     Table 8: Offenses Known to Law Enforcement by State, by City
-    
+
     Expected columns:
     - State
     - City
@@ -248,17 +249,18 @@ def load_fbi_table_8():
     - Larceny-theft
     - Motor vehicle theft
     """
-    if not FBI_TABLE_8_FILE.exists():
+    fbi_file = Path(fbi_file) if fbi_file is not None else FBI_TABLE_8_FILE
+    if not fbi_file.exists():
         print(f"\n❌ FBI Table 8 file not found:")
-        print(f"   {FBI_TABLE_8_FILE}")
+        print(f"   {fbi_file}")
         print(f"\n📥 Download from:")
         print(f"   https://cde.ucr.cjis.gov/LATEST/webapp/#/pages/downloads")
         print(f"\n📋 Look for: 'Crime in the United States Annual Reports'")
         print(f"   2024 Download → Extract → CIUS_Table_8_Offenses_Known_to_Law_Enforcement_by_State_by_City_2024.xlsx")
-        raise RuntimeError(f"FBI Table 8 file required at: {FBI_TABLE_8_FILE}")
-    
+        raise RuntimeError(f"FBI Table 8 file required at: {fbi_file}")
+
     # Read Excel with header at row 3 (0-indexed)
-    df = pd.read_excel(FBI_TABLE_8_FILE, sheet_name=0, header=3, engine="openpyxl")
+    df = pd.read_excel(fbi_file, sheet_name=0, header=3, engine="openpyxl")
     
     print(f"✓ Loaded FBI Table 8 data: {len(df)} records")
     print(f"  Columns: {', '.join(str(c) for c in df.columns.tolist()[:5])}...")
@@ -467,37 +469,37 @@ def build_output_sheet(crime_data_df):
     return output[output_cols]
 
 
-def main(sample=None):
-    """Main workflow."""
+def build_crime_index(input_path=None, output_path=None, fbi_file=None, sample=None):
+    """Build the Crime Index sheet from the manually-provided FBI Table 8 file.
+
+    Raises on any step failure (previously some steps silently printed an
+    error and returned early — that's unsafe for orchestration, since a
+    caller couldn't tell success from failure). Returns a summary dict.
+    """
+    input_file = Path(input_path) if input_path is not None else INPUT_FILE
+    output_file = Path(output_path) if output_path is not None else OUTPUT_FILE
+
     print("\n" + "="*50)
     print("   Crime Index Builder")
     print("   FBI Table 8 City-Level Data")
     print("="*50 + "\n")
-    
+
     # Step 1: Load Clean Cities
     print("1. Loading Clean Cities 100k+...")
-    try:
-        clean_cities = load_clean_cities(sample=sample)
-        print(f"   ✓ Loaded {len(clean_cities)} cities")
-    except Exception as e:
-        print(f"   ✗ Error loading Clean Cities: {e}")
-        return
-    
+    clean_cities = load_clean_cities(sample=sample, input_file=input_file)
+    print(f"   ✓ Loaded {len(clean_cities)} cities")
+
     # Step 2: Load FBI Table 8
     print("\n2. Loading FBI Table 8 city-level crime data...")
-    try:
-        fbi_data = load_fbi_table_8()
-        print(f"   ✓ Loaded {len(fbi_data)} records from FBI data")
-    except Exception as e:
-        print(f"   ✗ Error loading FBI data: {e}")
-        return
-    
+    fbi_data = load_fbi_table_8(fbi_file=fbi_file)
+    print(f"   ✓ Loaded {len(fbi_data)} records from FBI data")
+
     # Step 3: Match cities
     print("\n3. Matching cities to FBI data...")
     matched = match_cities_to_fbi_data(clean_cities, fbi_data)
     matched_count = len(matched[matched['fbi_data_available']])
     print(f"   ✓ Matched {matched_count}/{len(matched)} cities")
-    
+
     # Step 4: Calculate crime rates and index
     print("\n4. Calculating crime rates and index...")
     crime_index = calculate_crime_rates(matched)
@@ -505,23 +507,19 @@ def main(sample=None):
 
     # Step 5: Apply density adjustment
     print("\n5. Applying Census Gazetteer density adjustment...")
-    try:
-        crime_index = apply_density_adjustment(crime_index)
-        gaz_matches = int(crime_index['Land Area Sq Mi'].notna().sum())
-        print(f"   ✓ Land area matched for {gaz_matches}/{len(crime_index)} cities")
-    except Exception as e:
-        print(f"   ✗ Error applying density adjustment: {e}")
-        return
-    
+    crime_index = apply_density_adjustment(crime_index)
+    gaz_matches = int(crime_index['Land Area Sq Mi'].notna().sum())
+    print(f"   ✓ Land area matched for {gaz_matches}/{len(crime_index)} cities")
+
     # Step 6: Build output sheet
     print("\n6. Building output workbook...")
     output_sheet = build_output_sheet(crime_index)
-    
+
     # Step 7: Write output
     print("\n7. Writing output...")
     # Read all sheets from input workbook
-    wb_dict = pd.read_excel(INPUT_FILE, sheet_name=None, dtype=str, engine="openpyxl")
-    
+    wb_dict = pd.read_excel(input_file, sheet_name=None, dtype=str, engine="openpyxl")
+
     # Add Crime Index sheet
     wb_dict["Crime Index"] = output_sheet
 
@@ -543,27 +541,34 @@ def main(sample=None):
         if readme_marker not in existing_text:
             extra = pd.DataFrame({first_col: [""] + readme_lines})
             wb_dict["README"] = pd.concat([readme_df, extra], ignore_index=True)
-    
+
     # Write to output
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl") as writer:
+    with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
         for sheet_name, df in wb_dict.items():
             df.to_excel(writer, sheet_name=sheet_name, index=False)
-    
-    print(f"   ✓ Saved: {OUTPUT_FILE}")
-    
+
+    print(f"   ✓ Saved: {output_file}")
+
     # Summary
     with_scores = len(crime_index[crime_index['Crime Index Score'].notna()])
     needs_review = len(output_sheet[output_sheet['Manual Review'].astype(bool)])
-    
+
     print(f"\n   Summary:")
     print(f"   - Total cities: {len(output_sheet)}")
     print(f"   - With crime data: {with_scores}")
     print(f"   - Needs manual review: {needs_review}")
     print(f"\n✓ Complete!\n")
 
+    return {
+        "output_path": str(output_file),
+        "total_cities": len(output_sheet),
+        "with_crime_data": with_scores,
+        "needs_manual_review": needs_review,
+    }
 
-if __name__ == "__main__":
+
+def main():
     parser = argparse.ArgumentParser(
         description="Build Crime Index from FBI Table 8 city-level crime data"
     )
@@ -574,5 +579,9 @@ if __name__ == "__main__":
         help="Run on sample of N cities (1 per state, up to N)"
     )
     args = parser.parse_args()
-    
-    main(sample=args.sample if args.sample > 0 else None)
+
+    build_crime_index(sample=args.sample if args.sample > 0 else None)
+
+
+if __name__ == "__main__":
+    main()

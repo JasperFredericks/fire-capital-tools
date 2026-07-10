@@ -15,7 +15,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_PATH = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_JOB_GROWTH_FIXED.xlsx"
 OUTPUT_PATH = BASE_DIR / "output" / "us_cities_100k_population_ranked_FORMATTED_FINAL_BEFORE_CRIME_FIX.xlsx"
 
@@ -313,7 +313,14 @@ def rewrite_readme_sheet(ws):
     ws.freeze_panes = "A2"
 
 
-def main():
+def format_workbook_final(input_path=None, output_path=None):
+    """Apply city-name cleanup, section formatting, and README rewrite.
+
+    Returns a summary dict identical in shape to what the CLI used to print.
+    """
+    input_file = Path(input_path) if input_path is not None else INPUT_PATH
+    output_file = Path(output_path) if output_path is not None else OUTPUT_PATH
+
     errors = []
     skipped = []
     updated_sheets = []
@@ -321,10 +328,10 @@ def main():
     readme_updated = False
     section_format_applied = False
 
-    if not INPUT_PATH.exists():
-        raise FileNotFoundError(f"Input workbook not found: {INPUT_PATH}")
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input workbook not found: {input_file}")
 
-    wb = load_workbook(INPUT_PATH)
+    wb = load_workbook(input_file)
 
     # Clean city display names in every sheet with known city display headers.
     for ws in wb.worksheets:
@@ -378,9 +385,9 @@ def main():
     else:
         skipped.append("README (sheet not found)")
 
-    wb.save(OUTPUT_PATH)
+    wb.save(output_file)
 
-    print(f"Output file path: {OUTPUT_PATH}")
+    print(f"Output file path: {output_file}")
     print("Sheets updated:")
     if updated_sheets:
         for name in updated_sheets:
@@ -399,6 +406,20 @@ def main():
             print(f"- SKIPPED: {s}")
     if not errors and not skipped:
         print("- none")
+
+    return {
+        "output_path": str(output_file),
+        "updated_sheets": updated_sheets,
+        "city_names_cleaned": city_names_cleaned,
+        "readme_updated": readme_updated,
+        "section_format_applied": section_format_applied,
+        "errors": errors,
+        "skipped": skipped,
+    }
+
+
+def main():
+    format_workbook_final()
 
 
 if __name__ == "__main__":

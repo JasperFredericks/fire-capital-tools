@@ -16,9 +16,9 @@ except ImportError as exc:
     print("Install dependencies with: python3 -m pip install pandas openpyxl requests geopandas shapely pyogrio")
     sys.exit(1)
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_LANDLORD_AND_POP_CHANGE.xlsx"
-OUTPUT_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_CLIMATE_RISK_FIXED.xlsx"
+OUTPUT_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_CLIMATE_RISK.xlsx"
 RAW_DIR = BASE_DIR / "data" / "raw"
 TIGER_DIR = RAW_DIR / "tiger"
 
@@ -41,6 +41,27 @@ CLIMATE_COLUMNS_TO_REMOVE = [
     "row_id",
     "city_normalized",
     "state_abbr",
+    "__city_original",
+    "__state_original",
+]
+
+# Purely internal/intermediate columns used only for matching within this
+# script's own run — never the computed climate-risk results themselves.
+# Deliberately a *different* list from CLIMATE_COLUMNS_TO_REMOVE above:
+# that one is used to strip a previous run's climate columns from a stale
+# input (so it must include climate_risk_score etc.), but the final output
+# filter must NOT strip those same columns, or the workbook ends up missing
+# the very data this script computes.
+INTERNAL_WORKING_COLUMNS = [
+    "place_geometry",
+    "place_match_ambiguous",
+    "place_match_notes",
+    "row_id",
+    "city_normalized",
+    "state_abbr",
+    "statefp",
+    "match_key",
+    "place_match_key",
     "__city_original",
     "__state_original",
 ]
@@ -209,13 +230,9 @@ def download_file(url: str, dest: Path):
     try:
         response = requests.get(url, stream=True, timeout=120)
     except requests.RequestException as exc:
-        print(f"Failed to download URL: {url}")
-        print(str(exc))
-        sys.exit(1)
+        raise RuntimeError(f"Failed to download URL: {url}\n{exc}") from exc
     if response.status_code != 200:
-        print(f"Failed to download URL: {url}")
-        print(f"HTTP status: {response.status_code}")
-        sys.exit(1)
+        raise RuntimeError(f"Failed to download URL: {url}\nHTTP status: {response.status_code}")
     with open(dest, "wb") as handle:
         for chunk in response.iter_content(chunk_size=8192):
             if chunk:
@@ -254,18 +271,18 @@ def choose_city_state_columns(columns):
     return city_col, state_col
 
 
-def load_city_workbook():
-    if not INPUT_FILE.exists():
-        print(f"Input workbook not found: {INPUT_FILE}")
-        sys.exit(1)
-    df = pd.read_excel(INPUT_FILE, sheet_name="Clean Cities 100k+", engine="openpyxl", dtype=str)
+def load_city_workbook(input_file=None):
+    input_file = Path(input_file) if input_file is not None else INPUT_FILE
+    if not input_file.exists():
+        raise FileNotFoundError(f"Input workbook not found: {input_file}")
+    df = pd.read_excel(input_file, sheet_name="Clean Cities 100k+", engine="openpyxl", dtype=str)
     df = df.drop(columns=[c for c in CLIMATE_COLUMNS_TO_REMOVE if c in df.columns], errors="ignore")
     city_col, state_col = choose_city_state_columns(df.columns)
     if city_col is None or state_col is None:
-        print("Unable to find city or state column in the workbook.")
-        print("Expected city columns:", CITY_COL_CANDIDATES)
-        print("Expected state columns:", STATE_COL_CANDIDATES)
-        sys.exit(1)
+        raise RuntimeError(
+            "Unable to find city or state column in the workbook. "
+            f"Expected city columns: {CITY_COL_CANDIDATES}; expected state columns: {STATE_COL_CANDIDATES}"
+        )
     df = df.reset_index(drop=True)
     df["row_id"] = df.index.astype(str).str.zfill(6)
     df["__city_original"] = df[city_col].astype(str).fillna("")
@@ -288,7 +305,7 @@ def load_tiger_place_gdf(year, needed_states):
     if not best_path.exists():
         try:
             download_file(TIGER_PLACE_URL_TEMPLATE.format(year=year), best_path)
-        except SystemExit:
+        except RuntimeError:
             best_path = None
     if best_path and best_path.exists():
         return gpd.read_file(best_path)
@@ -335,13 +352,11 @@ def fetch_fema_nri():
         try:
             response = requests.get(FEMA_NRI_QUERY_URL, params=params, timeout=120)
         except requests.RequestException as exc:
-            print(f"Failed to download URL: {FEMA_NRI_QUERY_URL}")
-            print(str(exc))
-            sys.exit(1)
+            raise RuntimeError(f"Failed to download URL: {FEMA_NRI_QUERY_URL}\n{exc}") from exc
         if response.status_code != 200:
-            print(f"Failed to download URL: {FEMA_NRI_QUERY_URL}")
-            print(f"HTTP status: {response.status_code}")
-            sys.exit(1)
+            raise RuntimeError(
+                f"Failed to download URL: {FEMA_NRI_QUERY_URL}\nHTTP status: {response.status_code}"
+            )
         payload = response.json()
         features = payload.get("features", [])
         if not features:
@@ -366,8 +381,7 @@ def fetch_fema_nri():
         if len(features) < page_size:
             break
     if not records:
-        print(f"No FEMA NRI data downloaded from {FEMA_NRI_QUERY_URL}")
-        sys.exit(1)
+        raise RuntimeError(f"No FEMA NRI data downloaded from {FEMA_NRI_QUERY_URL}")
     return pd.DataFrame(records)
 
 
@@ -646,19 +660,17 @@ def validate_assignments(df):
                 f"Missing climate_risk_score for assigned county {actual_fips} on {row['__city_original']}, {row['state_abbr']}"
             )
     if errors:
-        print("Validation failed:")
-        for err in errors:
-            print("-", err)
-        sys.exit(1)
+        raise RuntimeError("Validation failed:\n" + "\n".join(f"- {err}" for err in errors))
 
 
-def write_output_workbook(original_path, new_df):
+def write_output_workbook(original_path, new_df, output_file=None):
+    output_file = Path(output_file) if output_file is not None else OUTPUT_FILE
     sheets = pd.read_excel(original_path, sheet_name=None, engine="openpyxl")
     sheets["Clean Cities 100k+"] = new_df
-    with pd.ExcelWriter(OUTPUT_FILE, engine="openpyxl", datetime_format="yyyy-mm-dd") as writer:
+    with pd.ExcelWriter(output_file, engine="openpyxl", datetime_format="yyyy-mm-dd") as writer:
         for name, sheet_df in sheets.items():
             sheet_df.to_excel(writer, sheet_name=name, index=False)
-    wb = load_workbook(OUTPUT_FILE)
+    wb = load_workbook(output_file)
     if "README" in wb.sheetnames:
         sheet = wb["README"]
         row = sheet.max_row + 1
@@ -686,10 +698,10 @@ def write_output_workbook(original_path, new_df):
                 [len(str(v)) if v is not None else 0 for v in values] + [len(sheet.cell(row=1, column=idx).value or "")]
             )
             sheet.column_dimensions[letter].width = min(max_length + 2, 50)
-    wb.save(OUTPUT_FILE)
+    wb.save(output_file)
 
 
-def print_diagnostics(df, unmatched_city_rows, unmatched_fema_fips=None, place_match_count=None, matched_places=None, total_workbook_valid=None):
+def print_diagnostics(df, unmatched_city_rows, unmatched_fema_fips=None, place_match_count=None, matched_places=None, total_workbook_valid=None, output_file=None):
     total_rows = len(df)
     if total_workbook_valid is None:
         total_workbook_valid = df['match_key'].notna().sum() if 'match_key' in df.columns else 0
@@ -701,7 +713,7 @@ def print_diagnostics(df, unmatched_city_rows, unmatched_fema_fips=None, place_m
     multi_county = df['city_crosses_multiple_counties'].sum() if 'city_crosses_multiple_counties' in df.columns else 0
     match_rate = (matched_places / total_workbook_valid * 100) if total_workbook_valid > 0 else 0.0
 
-    print(f"Output file: {OUTPUT_FILE}")
+    print(f"Output file: {output_file if output_file is not None else OUTPUT_FILE}")
     print(f"Total rows: {total_rows}")
     print(f"Rows matched to Census PLACE: {matched_places}")
     print(f"Rows assigned to county: {assigned_counties}")
@@ -739,9 +751,19 @@ def print_diagnostics(df, unmatched_city_rows, unmatched_fema_fips=None, place_m
         print(" ".join(unmatched_fema_fips))
 
 
-def main():
+def run_climate_risk(input_path=None, output_path=None):
+    """Assign county-level FEMA climate risk scores to each city in the workbook.
+
+    Returns a summary dict (used_year, match counts, output path) identical
+    in spirit to what the CLI used to print. Raises RuntimeError/
+    FileNotFoundError on failure instead of exiting the process, so this can
+    be safely called from within a long-running server.
+    """
+    input_file = Path(input_path) if input_path is not None else INPUT_FILE
+    output_file = Path(output_path) if output_path is not None else OUTPUT_FILE
+
     ensure_directories()
-    df, city_col, state_col = load_city_workbook()
+    df, city_col, state_col = load_city_workbook(input_file)
     needed_states = sorted(df["state_abbr"].dropna().unique())
     place_gdf = None
     county_gdf = None
@@ -752,14 +774,11 @@ def main():
             county_gdf = load_tiger_county_gdf(year)
             used_year = year
             break
-        except SystemExit:
-            sys.exit(1)
         except Exception as exc:
             print(f"TIGER {year} load failed: {exc}")
             continue
     if place_gdf is None or county_gdf is None:
-        print("Unable to load TIGER place or county shapefiles for any supported year.")
-        sys.exit(1)
+        raise RuntimeError("Unable to load TIGER place or county shapefiles for any supported year.")
 
     place_gdf = prepare_place_match_table(place_gdf)
     place_match_count = len(place_gdf)
@@ -774,7 +793,7 @@ def main():
     print("PLACE matching diagnostics:")
     matched_places = df['place_geometry'].notna().sum() if 'place_geometry' in df.columns else 0
     total_workbook_valid = df['match_key'].notna().sum() if 'match_key' in df.columns else 0
-    print_diagnostics(df, unmatched_city_rows, place_match_count=place_match_count, matched_places=matched_places, total_workbook_valid=total_workbook_valid)
+    print_diagnostics(df, unmatched_city_rows, place_match_count=place_match_count, matched_places=matched_places, total_workbook_valid=total_workbook_valid, output_file=output_file)
 
     county_gdf = prepare_county_gdf(county_gdf)
     df = compute_county_assignments(df, county_gdf)
@@ -791,14 +810,32 @@ def main():
 
     validate_assignments(df)
 
-    drop_columns = [
-        c for c in CLIMATE_COLUMNS_TO_REMOVE if c in df.columns
-    ] + ["__city_original", "__state_original"]
+    # Diagnostics reference __city_original/state_abbr for the ranking
+    # display, so compute them before those working columns are dropped
+    # for the actual output write below.
+    print_diagnostics(df, unmatched_city_rows, unmatched_fema_fips=unmatched_fema_fips, place_match_count=place_match_count, output_file=output_file)
+
+    matched_fema_count = int(df['climate_risk_score'].notna().sum())
+    flagged_count = int(df['climate_risk_review_flag'].sum())
+
+    drop_columns = [c for c in INTERNAL_WORKING_COLUMNS if c in df.columns]
     output_columns = [c for c in df.columns if c not in drop_columns]
     df = df[output_columns]
 
-    write_output_workbook(INPUT_FILE, df)
-    print_diagnostics(df, unmatched_city_rows, unmatched_fema_fips=unmatched_fema_fips, place_match_count=place_match_count)
+    write_output_workbook(input_file, df, output_file)
+
+    return {
+        "output_path": str(output_file),
+        "used_year": used_year,
+        "total_rows": len(df),
+        "matched_places": int(matched_places),
+        "matched_fema": matched_fema_count,
+        "flagged_for_review": flagged_count,
+    }
+
+
+def main():
+    run_climate_risk()
 
 
 if __name__ == "__main__":
