@@ -429,7 +429,15 @@
       event.preventDefault();
       const formData = new FormData(adminForm, event.submitter);
       try {
-        const res = await fetch(adminForm.action || window.location.href, {
+        // NOT adminForm.action: the three admin buttons all share
+        // name="action" (refresh_all / refresh_live_only / rebuild_index),
+        // and a form's named-control lookup resolves that shared name to a
+        // RadioNodeList (a collection), shadowing the form's own reserved
+        // `action` URL property. fetch() then silently stringifies that
+        // object ("[object RadioNodeList]") instead of using a real URL.
+        // This form always submits back to the page it's on, so just use
+        // the current path directly.
+        const res = await fetch(window.location.pathname, {
           method: "POST",
           body: formData,
           headers: { "X-Requested-With": "XMLHttpRequest" },
