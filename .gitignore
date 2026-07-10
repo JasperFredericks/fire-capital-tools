@@ -1,4 +1,5 @@
 *.xlsx
+*.db
 __pycache__/
 *.pyc
 *.pyo
@@ -21,6 +22,7 @@ fire_metrics/input/*.xlsx
 fire_metrics/output/*.xlsx
 fire_metrics/output/*.csv
 fire_metrics/output/*.txt
+fire_metrics/output/*.db
 !fire_metrics/output/.gitkeep
 fire_metrics/*.zip
 fire_metrics/census_api_key.txt

@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
-import importlib.util
 import json
 import re
-import shutil
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -214,97 +212,6 @@ LANDLORD_SCORES = {
     "Wisconsin": 0,
     "Wyoming": None,
 }
-
-
-class MissingSecretError(RuntimeError):
-    """Raised when a required secret is not available at runtime."""
-
-
-def _load_secret_helper():
-    helper_path = BASE_DIR / "fire_metrics_updater" / "config.py"
-    spec = importlib.util.spec_from_file_location("_fire_metrics_config", helper_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.get_secret
-
-
-def run_update(input_path: str, output_path: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Run FIRE Metrics updater in Flask/web context.
-
-    This callable is intentionally side-effect limited for web uploads:
-    it validates the uploaded workbook, verifies required secrets, and writes an
-    updated workbook path for download. Existing CLI behavior remains available
-    via main().
-    """
-    opts = options or {}
-    refresh_all = bool(opts.get("refresh_all", False))
-    format_only = bool(opts.get("format_only", False))
-    dry_run = bool(opts.get("dry_run", False))
-
-    get_secret = _load_secret_helper()
-    census_api_key = get_secret("CENSUS_API_KEY", "data/cache/census_api_key.txt")
-    if not census_api_key:
-        raise MissingSecretError(
-            "Missing CENSUS_API_KEY environment variable. Add it in Railway Variables before running FIRE Metric updates."
-        )
-
-    src = Path(input_path)
-    dst = Path(output_path)
-    if not src.exists():
-        raise FileNotFoundError(f"Input workbook not found: {src}")
-    if src.suffix.lower() != ".xlsx":
-        raise ValueError("Only .xlsx files are supported.")
-
-    # Validate workbook readability first to produce user-friendly failures.
-    openpyxl.load_workbook(src, read_only=True).close()
-
-    summary_lines = [
-        "Validated uploaded workbook structure.",
-        "Verified Census API key availability for FIRE Metric updates.",
-    ]
-    warnings: list[str] = []
-    metrics_checked = ["Workbook integrity", "CENSUS_API_KEY availability"]
-    metrics_updated: list[str] = []
-
-    if dry_run:
-        summary_lines.append("Dry run selected: no output workbook written.")
-        return {
-            "success": True,
-            "output_path": None,
-            "last_updated": dt.datetime.utcnow().isoformat() + "Z",
-            "summary_text": "\n".join(summary_lines),
-            "summary_lines": summary_lines,
-            "metrics_checked": metrics_checked,
-            "metrics_updated": metrics_updated,
-            "warnings": warnings,
-            "errors": [],
-        }
-
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
-    summary_lines.append("Copied workbook to secure output path.")
-
-    if format_only:
-        summary_lines.append("Format-only mode selected. No source metrics were recalculated.")
-    elif refresh_all:
-        warnings.append(
-            "Refresh-all orchestration is scaffolded for Flask integration and currently returns a validated workbook copy."
-        )
-        summary_lines.append("Refresh-all requested; returned validated workbook copy for this phase.")
-    else:
-        summary_lines.append("No refresh mode selected; returned validated workbook copy.")
-
-    return {
-        "success": True,
-        "output_path": str(dst),
-        "last_updated": dt.datetime.utcnow().isoformat() + "Z",
-        "summary_text": "\n".join(summary_lines),
-        "summary_lines": summary_lines,
-        "metrics_checked": metrics_checked,
-        "metrics_updated": metrics_updated,
-        "warnings": warnings,
-        "errors": [],
-    }
 
 
 def ensure_directories():

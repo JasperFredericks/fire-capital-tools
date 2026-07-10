@@ -1,0 +1,151 @@
+"""Real "Refresh All Data" orchestration.
+
+Replaces update_fire_metrics.py's run_update(), which only validated the
+uploaded workbook and copied it -- it never actually called any of the real
+data-refresh scripts. This module calls the actual, working pipeline
+scripts from fire_metrics/scripts/ (fixed in JasperTest Priorities 1-4) in
+the correct order, then ingests each one's output into SQLite (db.py) with
+its own metric-family timestamp.
+
+Crime stays manual/periodic (see crime_pipeline.py's own docstring -- the
+FBI API is dead, there is no live source): this orchestrator only refreshes
+crime from whatever FBI Table 8 workbook is already sitting at its default
+cache location. If that file isn't present, crime is skipped (not an
+error) and its timestamp is left untouched, exactly like the rest of the
+"only stamp what actually refreshed" rule below.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Any
+
+SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from . import db as db_module
+from . import index_builder
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+POP_LANDLORD_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_LANDLORD_AND_POP_CHANGE.xlsx"
+HOME_VALUE_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_HOME_VALUE_GROWTH.xlsx"
+JOB_GROWTH_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_JOB_GROWTH_FIXED.xlsx"
+CLIMATE_RISK_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_CLIMATE_RISK.xlsx"
+CRIME_FINAL_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_ALL_METRICS_CLEAN.xlsx"
+
+
+def _step(steps: list[dict[str, Any]], name: str, fn, *args, **kwargs) -> Any:
+    """Run one pipeline step, recording success/failure without aborting
+    the whole refresh -- one metric family failing (e.g. a transient BLS
+    API hiccup) shouldn't prevent the others from refreshing.
+    """
+    try:
+        result = fn(*args, **kwargs)
+        steps.append({"step": name, "status": "ok"})
+        return result
+    except Exception as exc:
+        steps.append({"step": name, "status": "error", "error": str(exc)})
+        return None
+
+
+def run_full_refresh(
+    db_path: str | Path | None = None,
+    skip_climate: bool = False,
+    skip_crime: bool = False,
+) -> dict[str, Any]:
+    """Run the real Census/ACS chain, BLS job growth, climate risk, and
+    (if a manually-provided FBI file is present) the crime pipeline, then
+    ingest everything into SQLite. Returns a summary of what ran and what
+    got skipped/failed, plus each metric family's row/timestamp outcome.
+
+    skip_climate/skip_crime exist because both are slow (climate: a
+    nationwide TIGER download the first time it runs; crime: requires a
+    manually-placed file) -- a caller doing a quick "refresh the live
+    stuff" pass can skip them without losing anything, since neither one's
+    timestamp gets touched unless it actually ran.
+    """
+    from add_income_growth import add_income_growth
+    from add_home_value_growth import add_home_value_growth
+    from add_job_growth import add_job_growth
+    import update_fire_metrics as population_updater
+
+    steps: list[dict[str, Any]] = []
+    ingest_results: dict[str, Any] = {}
+
+    with db_module.get_connection(db_path) as conn:
+        # 1. Population + landlord (Census population file + internal
+        #    landlord-friendliness scoring). Writes POP_LANDLORD_FILE.
+        _step(steps, "population_fetch", population_updater.main)
+        if POP_LANDLORD_FILE.exists():
+            ingest_results["population"] = _step(
+                steps, "population_ingest", index_builder.ingest_population_and_landlord, POP_LANDLORD_FILE, conn
+            )
+
+        # 2. Income growth -- mutates POP_LANDLORD_FILE in place.
+        _step(steps, "income_fetch", add_income_growth)
+        if POP_LANDLORD_FILE.exists():
+            ingest_results["income"] = _step(
+                steps, "income_ingest", index_builder.ingest_income, POP_LANDLORD_FILE, conn
+            )
+
+        # 3. Home value growth -- reads POP_LANDLORD_FILE, writes HOME_VALUE_FILE.
+        _step(steps, "home_value_fetch", add_home_value_growth)
+        if HOME_VALUE_FILE.exists():
+            ingest_results["home_value"] = _step(
+                steps, "home_value_ingest", index_builder.ingest_home_value, HOME_VALUE_FILE, conn
+            )
+
+        # 4. Job growth (real BLS API) -- reads HOME_VALUE_FILE, writes JOB_GROWTH_FILE.
+        _step(steps, "employment_fetch", add_job_growth)
+        if JOB_GROWTH_FILE.exists():
+            ingest_results["employment"] = _step(
+                steps, "employment_ingest", index_builder.ingest_employment, JOB_GROWTH_FILE, conn
+            )
+
+        # 5. Climate risk -- slow (nationwide shapefile download on a cold
+        #    cache), so skippable independently of the fast Census/ACS/BLS
+        #    metrics above.
+        if not skip_climate:
+            from add_climate_risk import run_climate_risk
+            _step(steps, "climate_fetch", run_climate_risk)
+            if CLIMATE_RISK_FILE.exists():
+                ingest_results["climate"] = _step(
+                    steps, "climate_ingest", index_builder.ingest_climate_risk, CLIMATE_RISK_FILE, conn
+                )
+        else:
+            steps.append({"step": "climate_fetch", "status": "skipped"})
+
+        # 6. Crime -- manual/periodic. Only refreshes if a manually-placed
+        #    FBI Table 8 workbook already exists; otherwise this is a no-op,
+        #    not an error, and crime_updated_at is left untouched.
+        if not skip_crime:
+            from crime_pipeline import run_crime_pipeline
+            from add_crime_index import FBI_TABLE_8_FILE
+            if FBI_TABLE_8_FILE.exists():
+                _step(steps, "crime_fetch", run_crime_pipeline)
+                if CRIME_FINAL_FILE.exists():
+                    ingest_results["crime"] = _step(
+                        steps, "crime_ingest", index_builder.ingest_crime, CRIME_FINAL_FILE, conn
+                    )
+            else:
+                steps.append({
+                    "step": "crime_fetch", "status": "skipped",
+                    "reason": f"No manually-provided FBI Table 8 workbook at {FBI_TABLE_8_FILE}",
+                })
+        else:
+            steps.append({"step": "crime_fetch", "status": "skipped"})
+
+        total_cities = conn.execute("SELECT COUNT(*) FROM cities").fetchone()[0]
+        db_module.set_metadata(
+            conn,
+            last_refresh_at=index_builder._utc_now(),
+            city_count=total_cities,
+        )
+
+    return {
+        "steps": steps,
+        "ingest_results": ingest_results,
+        "total_cities": total_cities,
+        "errors": [s for s in steps if s["status"] == "error"],
+    }

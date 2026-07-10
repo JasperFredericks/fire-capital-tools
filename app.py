@@ -36,7 +36,9 @@ def create_app(config_class: type = Config) -> Flask:
         return (
             request.path.startswith("/tools/mmr-summary/upload")
             or request.path.startswith("/tools/mmr-summary/download/")
-            or request.path.startswith("/tools/fire-metrics/download/")
+            or request.path.startswith("/tools/fire-metrics/download-latest")
+            or request.path.startswith("/tools/fire-metrics/search")
+            or request.path.startswith("/tools/fire-metrics/refresh-status")
             or request.path.startswith("/tools/scorecard-pro/upload")
             or request.path.startswith("/tools/scorecard-pro/analysis/")
             or request.path.startswith("/tools/scorecard-pro/download/")
