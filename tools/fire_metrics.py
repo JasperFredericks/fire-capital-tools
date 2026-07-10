@@ -37,6 +37,7 @@ Changes from Beckett's version, and why (see final report for full detail):
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import sys
@@ -346,6 +347,27 @@ def search():
 @login_required
 def refresh_status():
     return jsonify(_refresh_status())
+
+
+@fire_metrics_bp.route("/debug-refresh")
+@login_required
+def debug_refresh():
+    # TEMPORARY diagnostic route -- added specifically to inspect the raw
+    # refresh_metadata table (including per-step results the normal status
+    # payload doesn't surface) without needing direct Railway console/DB
+    # access. Not linked from any page; remove once the climate-risk
+    # never-populates investigation is resolved.
+    with db_module.get_connection() as conn:
+        metadata = db_module.get_metadata(conn)
+    steps_raw = metadata.get("refresh_steps_json")
+    try:
+        parsed_steps = json.loads(steps_raw) if steps_raw else None
+    except json.JSONDecodeError as exc:
+        parsed_steps = f"<could not parse refresh_steps_json: {exc}>"
+    return jsonify({
+        "raw_metadata": metadata,
+        "parsed_steps": parsed_steps,
+    })
 
 
 @fire_metrics_bp.route("/download-latest")
