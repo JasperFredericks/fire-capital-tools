@@ -243,28 +243,28 @@
   let comparisonCities = [];
 
   function fmtNum(value) {
-    if (value === null || value === undefined || value === "") return "-";
+    if (value === null || value === undefined || value === "") return "—";
     const num = Number(value);
     if (Number.isNaN(num)) return String(value);
     return num.toLocaleString(undefined, { maximumFractionDigits: 0 });
   }
 
   function fmtMoney(value) {
-    if (value === null || value === undefined || value === "") return "-";
+    if (value === null || value === undefined || value === "") return "—";
     const num = Number(value);
     if (Number.isNaN(num)) return String(value);
     return num.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
   }
 
   function fmtPct(value) {
-    if (value === null || value === undefined || value === "") return "-";
+    if (value === null || value === undefined || value === "") return "—";
     const num = Number(value);
     if (Number.isNaN(num)) return String(value);
     return `${num.toFixed(2)}%`;
   }
 
   function fmtScore(value) {
-    if (value === null || value === undefined || value === "") return "-";
+    if (value === null || value === undefined || value === "") return "—";
     const num = Number(value);
     if (Number.isNaN(num)) return String(value);
     return num.toFixed(2);
@@ -281,7 +281,7 @@
   function normalizeLandlordLabel(city) {
     if (city.landlord_friendliness_label) return String(city.landlord_friendliness_label);
     const score = Number(city.landlord_friendliness_score);
-    if (Number.isNaN(score)) return "-";
+    if (Number.isNaN(score)) return "—";
     if (score > 0) return "Landlord-friendly";
     if (score < 0) return "Tenant-friendly";
     return "Balanced";
@@ -350,7 +350,7 @@
   function createRatingChip(label, className) {
     const span = document.createElement("span");
     span.className = `comparison-chip ${className}`;
-    span.textContent = label || "-";
+    span.textContent = label || "—";
     return span;
   }
 
@@ -368,8 +368,8 @@
     comparisonCities.forEach((city) => {
       const tr = document.createElement("tr");
       const values = [
-        city.city || "-",
-        city.state || "-",
+        city.city || "—",
+        city.state || "—",
         fmtNum(city.population_current),
         fmtNum(city.population_rank),
         fmtPct(city.population_growth_2020_2025),
@@ -395,11 +395,11 @@
       values.forEach((value, idx) => {
         const td = document.createElement("td");
         if (idx === 16) {
-          td.appendChild(createRatingChip(city.climate_risk_rating || "-", normalizeScoreClass(city.climate_risk_score)));
+          td.appendChild(createRatingChip(city.climate_risk_rating || "—", normalizeScoreClass(city.climate_risk_score)));
         } else if (idx === 18) {
-          td.appendChild(createRatingChip(city.crime_rating || "-", normalizeScoreClass(city.crime_index_score)));
+          td.appendChild(createRatingChip(city.crime_rating || "—", normalizeScoreClass(city.crime_index_score)));
         } else if (idx === 20) {
-          td.appendChild(createRatingChip(city.density_adjusted_crime_rating || "-", normalizeScoreClass(city.density_adjusted_crime_score)));
+          td.appendChild(createRatingChip(city.density_adjusted_crime_rating || "—", normalizeScoreClass(city.density_adjusted_crime_score)));
         } else if (idx === 21) {
           td.appendChild(createRatingChip(normalizeLandlordLabel(city), landlordChipClass(city)));
         } else {
@@ -461,8 +461,8 @@
     const lines = [headers.join("\t")];
     comparisonCities.forEach((city) => {
       lines.push([
-        city.city || "-",
-        city.state || "-",
+        city.city || "—",
+        city.state || "—",
         fmtNum(city.population_current),
         fmtNum(city.population_rank),
         fmtPct(city.population_growth_2020_2025),
@@ -477,11 +477,11 @@
         fmtPct(city.employment_growth_2021_2025),
         fmtPct(city.employment_growth_recent),
         fmtScore(city.climate_risk_score),
-        city.climate_risk_rating || "-",
+        city.climate_risk_rating || "—",
         fmtScore(city.crime_index_score),
-        city.crime_rating || "-",
+        city.crime_rating || "—",
         fmtScore(city.density_adjusted_crime_score),
-        city.density_adjusted_crime_rating || "-",
+        city.density_adjusted_crime_rating || "—",
         normalizeLandlordLabel(city),
       ].join("\t"));
     });
