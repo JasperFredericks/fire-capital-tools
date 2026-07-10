@@ -39,11 +39,22 @@ def _step(steps: list[dict[str, Any]], name: str, fn, *args, **kwargs) -> Any:
     """Run one pipeline step, recording success/failure without aborting
     the whole refresh -- one metric family failing (e.g. a transient BLS
     API hiccup) shouldn't prevent the others from refreshing.
+
+    Also catches SystemExit: a missing optional dependency (e.g. geopandas
+    not installed in a given environment) surfaces as `sys.exit(1)` from
+    that module's own import guard, and SystemExit is a BaseException, not
+    an Exception -- left uncaught, it silently kills the background
+    refresh thread with no trace anywhere, leaving that metric's
+    last-refreshed timestamp untouched with no visible sign of failure.
     """
     try:
         result = fn(*args, **kwargs)
         steps.append({"step": name, "status": "ok"})
         return result
+    except SystemExit as exc:
+        detail = f"step exited via sys.exit({exc.code}) -- likely a missing dependency in this environment; check server logs"
+        steps.append({"step": name, "status": "error", "error": detail})
+        return None
     except Exception as exc:
         steps.append({"step": name, "status": "error", "error": str(exc)})
         return None
@@ -106,9 +117,19 @@ def run_full_refresh(
         # 5. Climate risk -- slow (nationwide shapefile download on a cold
         #    cache), so skippable independently of the fast Census/ACS/BLS
         #    metrics above.
-        if not skip_climate:
+        #
+        #    The import is wrapped inside the _step()-covered call (rather
+        #    than done bare, above the call) specifically so a missing
+        #    optional dependency in this environment -- which surfaces as
+        #    SystemExit from add_climate_risk.py's own import guard -- is
+        #    recorded as a climate_fetch error instead of silently killing
+        #    the whole background refresh thread.
+        def _run_climate_fetch():
             from add_climate_risk import run_climate_risk
-            _step(steps, "climate_fetch", run_climate_risk)
+            return run_climate_risk()
+
+        if not skip_climate:
+            _step(steps, "climate_fetch", _run_climate_fetch)
             if CLIMATE_RISK_FILE.exists():
                 ingest_results["climate"] = _step(
                     steps, "climate_ingest", index_builder.ingest_climate_risk, CLIMATE_RISK_FILE, conn
@@ -119,20 +140,30 @@ def run_full_refresh(
         # 6. Crime -- manual/periodic. Only refreshes if a manually-placed
         #    FBI Table 8 workbook already exists; otherwise this is a no-op,
         #    not an error, and crime_updated_at is left untouched.
-        if not skip_crime:
+        #
+        #    The imports themselves are wrapped in a crime_import step for
+        #    the same reason as climate above -- a failure here (missing
+        #    dependency, etc.) must be recorded, not silently swallowed.
+        def _load_crime_modules():
             from crime_pipeline import run_crime_pipeline
             from add_crime_index import FBI_TABLE_8_FILE
-            if FBI_TABLE_8_FILE.exists():
-                _step(steps, "crime_fetch", run_crime_pipeline)
-                if CRIME_FINAL_FILE.exists():
-                    ingest_results["crime"] = _step(
-                        steps, "crime_ingest", index_builder.ingest_crime, CRIME_FINAL_FILE, conn
-                    )
-            else:
-                steps.append({
-                    "step": "crime_fetch", "status": "skipped",
-                    "reason": f"No manually-provided FBI Table 8 workbook at {FBI_TABLE_8_FILE}",
-                })
+            return run_crime_pipeline, FBI_TABLE_8_FILE
+
+        if not skip_crime:
+            loaded = _step(steps, "crime_import", _load_crime_modules)
+            if loaded is not None:
+                run_crime_pipeline, FBI_TABLE_8_FILE = loaded
+                if FBI_TABLE_8_FILE.exists():
+                    _step(steps, "crime_fetch", run_crime_pipeline)
+                    if CRIME_FINAL_FILE.exists():
+                        ingest_results["crime"] = _step(
+                            steps, "crime_ingest", index_builder.ingest_crime, CRIME_FINAL_FILE, conn
+                        )
+                else:
+                    steps.append({
+                        "step": "crime_fetch", "status": "skipped",
+                        "reason": f"No manually-provided FBI Table 8 workbook at {FBI_TABLE_8_FILE}",
+                    })
         else:
             steps.append({"step": "crime_fetch", "status": "skipped"})
 

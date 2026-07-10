@@ -1,3 +1,6 @@
 pandas
 openpyxl
 requests
+geopandas
+shapely
+pyogrio
