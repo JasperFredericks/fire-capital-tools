@@ -12,11 +12,13 @@
   <h1 class="page-title">FIRE Metric</h1>
   <p class="page-subtitle">Search city-level market indicators</p>
   <div class="status-chip-row" style="margin-top:10px;">
-    <span class="source-badge source-badge-{{ status.status|default('unknown') }}">Data status: {{ status.status|default('unknown')|upper }}</span>
-    <span class="result-period">Last refreshed: {{ status.last_refresh_at or 'Not yet refreshed' }}</span>
-    <span class="result-period">Source updated: {{ status.source_last_updated or 'Unknown' }}</span>
+    <span id="status-chip" class="source-badge source-badge-{{ status.status|default('missing') }}">{{ status.status|default('missing')|upper }}</span>
+    <span id="last-refreshed-text" class="result-period">Last refreshed: {{ status.last_refresh_at or 'Never' }}</span>
+    <span id="city-count-text" class="result-period">Cities indexed: {{ status.city_count or 0 }}</span>
   </div>
-  <p class="page-subtitle" style="max-width:900px; margin-top:8px;">{{ status.message }}</p>
+  <p id="last-refresh-error-text" class="page-subtitle" style="max-width:900px; margin-top:8px; color:#991b1b; {% if not status.last_refresh_error %}display:none;{% endif %}">
+    {% if status.last_refresh_error %}Last refresh had errors: {{ status.last_refresh_error }}{% endif %}
+  </p>
 </div>
 
 <div class="card">
@@ -46,19 +48,53 @@
     </div>
 
     <div class="fire-metric-grid">
-      <div class="stat-box"><div class="stat-box-label">Population Growth</div><div id="metric-pop-current" class="stat-box-value">-</div><div id="metric-pop-growth" class="stat-box-sub">-</div></div>
-      <div class="stat-box"><div class="stat-box-label">Median Household Income</div><div id="metric-income-current" class="stat-box-value">-</div><div id="metric-income-growth" class="stat-box-sub">-</div></div>
-      <div class="stat-box"><div class="stat-box-label">Median Home Value</div><div id="metric-home-current" class="stat-box-value">-</div><div id="metric-home-growth" class="stat-box-sub">-</div></div>
-      <div class="stat-box"><div class="stat-box-label">Resident Employment</div><div id="metric-employment-current" class="stat-box-value">-</div><div id="metric-employment-growth" class="stat-box-sub">-</div></div>
-      <div class="stat-box"><div class="stat-box-label">Climate Risk</div><div id="metric-climate-score" class="stat-box-value">-</div><div id="metric-climate-rating" class="stat-box-sub">-</div></div>
-      <div class="stat-box"><div class="stat-box-label">Crime Index</div><div id="metric-crime-score" class="stat-box-value">-</div><div id="metric-crime-rating" class="stat-box-sub">-</div></div>
-      <div class="stat-box"><div class="stat-box-label">Density-Adjusted Crime</div><div id="metric-density-score" class="stat-box-value">-</div><div id="metric-density-rating" class="stat-box-sub">-</div></div>
-      <div class="stat-box"><div class="stat-box-label">Landlord Friendliness</div><div id="metric-landlord-score" class="stat-box-value">-</div><div id="metric-landlord-label" class="stat-box-sub">-</div></div>
-    </div>
-
-    <p id="city-source-note" class="result-note"></p>
-    <div class="fire-city-actions">
-      <button id="add-to-comparison-btn" type="button" class="btn btn-primary">Add to Comparison</button>
+      <div class="stat-box">
+        <div class="stat-box-label">Population Growth</div>
+        <div id="metric-pop-current" class="stat-box-value">-</div>
+        <div id="metric-pop-growth" class="stat-box-sub">-</div>
+        <div id="metric-pop-updated" class="stat-box-freshness"></div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Median Household Income</div>
+        <div id="metric-income-current" class="stat-box-value">-</div>
+        <div id="metric-income-growth" class="stat-box-sub">-</div>
+        <div id="metric-income-updated" class="stat-box-freshness"></div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Median Home Value</div>
+        <div id="metric-home-current" class="stat-box-value">-</div>
+        <div id="metric-home-growth" class="stat-box-sub">-</div>
+        <div id="metric-home-updated" class="stat-box-freshness"></div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Resident Employment</div>
+        <div id="metric-employment-current" class="stat-box-value">-</div>
+        <div id="metric-employment-growth" class="stat-box-sub">-</div>
+        <div id="metric-employment-updated" class="stat-box-freshness"></div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Climate Risk</div>
+        <div id="metric-climate-score" class="stat-box-value">-</div>
+        <div id="metric-climate-rating" class="stat-box-sub">-</div>
+        <div id="metric-climate-updated" class="stat-box-freshness"></div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Crime Index</div>
+        <div id="metric-crime-score" class="stat-box-value">-</div>
+        <div id="metric-crime-rating" class="stat-box-sub">-</div>
+        <div id="metric-crime-updated" class="stat-box-freshness"></div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Density-Adjusted Crime</div>
+        <div id="metric-density-score" class="stat-box-value">-</div>
+        <div id="metric-density-rating" class="stat-box-sub">-</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Landlord Friendliness</div>
+        <div id="metric-landlord-score" class="stat-box-value">-</div>
+        <div id="metric-landlord-label" class="stat-box-sub">-</div>
+        <div id="metric-population-family-updated" class="stat-box-freshness"></div>
+      </div>
     </div>
   </div>
 
@@ -73,140 +109,24 @@
 </div>
 
 <div class="card">
-  <div class="result-header">
-    <div>
-      <h2 class="dashboard-section-title">City Comparison</h2>
-      <p class="page-subtitle" style="margin-top:4px;">Search and add cities to compare market metrics.</p>
-    </div>
-    <div class="comparison-actions">
-      <button id="copy-comparison-btn" type="button" class="btn btn-ghost">Copy Comparison Table</button>
-      <button id="download-comparison-csv-btn" type="button" class="btn btn-ghost">Download Comparison CSV</button>
-      <button id="clear-comparison-btn" type="button" class="btn btn-ghost">Clear All</button>
-    </div>
-  </div>
-
-  <div id="comparison-empty-message" class="result-note">Search and add cities to compare market metrics.</div>
-
-  <div id="comparison-table-wrap" class="comparison-table-wrap" style="display:none;">
-    <table id="comparison-table" class="comparison-table">
-      <thead>
-        <tr>
-          <th>City</th>
-          <th>State</th>
-          <th>Population</th>
-          <th>Population Rank</th>
-          <th>Population Growth 2020-Latest</th>
-          <th>Recent Population Growth</th>
-          <th>Median Household Income</th>
-          <th>Income Growth 2021-Latest</th>
-          <th>Recent Income Growth</th>
-          <th>Median Owner-Occupied Home Value</th>
-          <th>Home Value Growth 2021-Latest</th>
-          <th>Recent Home Value Growth</th>
-          <th>Resident Employment</th>
-          <th>Employment Growth 2021-Latest</th>
-          <th>Recent Employment Growth</th>
-          <th>Climate Risk Score</th>
-          <th>Climate Risk Rating</th>
-          <th>Crime Index Score</th>
-          <th>Crime Rating</th>
-          <th>Density-Adjusted Crime Score</th>
-          <th>Density-Adjusted Crime Rating</th>
-          <th>Landlord Friendliness</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody id="comparison-table-body"></tbody>
-    </table>
-  </div>
-</div>
-
-<div class="card">
   <h2 class="dashboard-section-title">Admin Data Tools</h2>
-  <p class="page-subtitle" style="margin-top:0;">Keep workbook data current, then rebuild or verify the search index without running expensive refreshes on every search.</p>
+  <p class="page-subtitle" style="margin-top:0;">
+    Refresh runs in the background and can take several minutes (climate risk especially downloads a nationwide
+    shapefile the first time it runs). Crime index only refreshes if a manually-provided FBI Table 8 workbook is
+    already in place — see the FIRE Metrics README for that file's expected location.
+  </p>
 
-  <form method="post" enctype="multipart/form-data" style="display:grid; gap:16px; margin-top:14px;">
+  <form id="admin-actions-form" method="post" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:14px;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="action" value="run_upload">
-
-    <label style="font-weight:600; color:#374151;">Upload workbook (.xlsx)</label>
-    <input type="file" name="file" accept=".xlsx" required>
-
-    <div style="display:grid; gap:8px;">
-      <label><input type="checkbox" name="refresh_all" {% if selected.refresh_all %}checked{% endif %}> Refresh all data</label>
-      <label><input type="checkbox" name="format_only" {% if selected.format_only %}checked{% endif %}> Format only</label>
-      <label><input type="checkbox" name="dry_run" {% if selected.dry_run %}checked{% endif %}> Dry run</label>
-    </div>
-
-    <div>
-      <button type="submit" class="btn btn-primary">Run FIRE Metric Update</button>
-    </div>
+    <button id="btn-refresh-all" type="submit" name="action" value="refresh_all" class="btn btn-primary" {% if status.running %}disabled{% endif %}>Refresh All Data</button>
+    <button id="btn-refresh-live" type="submit" name="action" value="refresh_live_only" class="btn btn-ghost" {% if status.running %}disabled{% endif %}>Refresh Live Metrics Only</button>
+    <button id="btn-rebuild-index" type="submit" name="action" value="rebuild_index" class="btn btn-ghost" {% if status.running %}disabled{% endif %}>Re-Ingest From Disk</button>
+    <a href="{{ url_for('fire_metrics.download_latest') }}" class="btn btn-success">Download Current Data (.xlsx)</a>
   </form>
 
-  <form method="post" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:16px;">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" name="action" value="check_updates" class="btn btn-ghost">Check for Updates</button>
-    <button type="submit" name="action" value="refresh_all_latest" class="btn btn-primary">Refresh All Data</button>
-    <button type="submit" name="action" value="format_only_latest" class="btn btn-ghost">Format Only</button>
-    <button type="submit" name="action" value="dry_run_latest" class="btn btn-ghost">Dry Run</button>
-    <button type="submit" name="action" value="rebuild_index" class="btn btn-ghost">Rebuild Search Index</button>
-    <a href="{{ url_for('fire_metrics.download_latest') }}" class="btn btn-success">Download Latest Workbook</a>
-  </form>
-
-  {% if success_message %}
-    <div class="alert alert-success" style="margin-top:16px;">{{ success_message }}</div>
-  {% endif %}
-
-  {% if error_message %}
-    <div class="error-panel visible" role="alert" style="margin-top:16px;">{{ error_message }}</div>
-  {% endif %}
+  <div id="admin-success-message" class="alert alert-success" style="margin-top:16px; {% if not success_message %}display:none;{% endif %}">{{ success_message or "" }}</div>
+  <div id="admin-error-message" class="error-panel visible" role="alert" style="margin-top:16px; {% if not error_message %}display:none;{% endif %}">{{ error_message or "" }}</div>
 </div>
-
-{% if run_result %}
-<div class="card result-panel visible" style="display:block;">
-  <div class="result-header">
-    <div>
-      <div class="result-property">FIRE Metric Update Complete</div>
-      <div class="result-period">Last Updated: {{ run_result.last_updated }}</div>
-    </div>
-    {% if download_token %}
-      <a href="{{ url_for('fire_metrics.download', token=download_token) }}" class="btn btn-success">Download Updated Workbook</a>
-    {% endif %}
-  </div>
-
-  <hr class="divider">
-
-  {% if run_result.summary_lines %}
-    <div style="display:grid; gap:6px;">
-      {% for line in run_result.summary_lines %}
-        <div style="font-size:13px; color:#374151;">• {{ line }}</div>
-      {% endfor %}
-    </div>
-  {% endif %}
-
-  {% if run_result.warnings %}
-    <div class="alert alert-warning" style="margin-top:16px;">
-      <strong>Warnings:</strong>
-      <ul style="margin-top:8px; padding-left:18px;">
-        {% for w in run_result.warnings %}
-          <li>{{ w }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-  {% endif %}
-
-  {% if run_result.errors %}
-    <div class="alert alert-error" style="margin-top:16px;">
-      <strong>Errors:</strong>
-      <ul style="margin-top:8px; padding-left:18px;">
-        {% for e in run_result.errors %}
-          <li>{{ e }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-  {% endif %}
-</div>
-{% endif %}
 
 <div class="card">
   <details>
@@ -217,6 +137,7 @@
       <div class="result-note">Job growth uses BLS LAUS resident employment, not physical job locations.</div>
       <div class="result-note">FEMA NRI is county-level and may not perfectly represent multi-county cities.</div>
       <div class="result-note">Some crime rows require manual review where agency/city matching is unreliable.</div>
+      <div class="result-note">Each metric shows its own last-refreshed time — population/income/home value/employment/climate refresh live; crime index refreshes only from a manually-provided source file.</div>
     </div>
   </details>
 </div>
@@ -224,23 +145,16 @@
 <script>
 (() => {
   const searchUrl = "{{ url_for('fire_metrics.search') }}";
+  const statusUrl = "{{ url_for('fire_metrics.refresh_status') }}";
   const form = document.getElementById("fire-search-form");
   const input = document.getElementById("fire-search-input");
   const messageEl = document.getElementById("fire-search-message");
   const suggestionsEl = document.getElementById("fire-suggestions");
   const dashboardEl = document.getElementById("fire-city-dashboard");
-  const addToComparisonBtn = document.getElementById("add-to-comparison-btn");
-  const comparisonEmptyMessage = document.getElementById("comparison-empty-message");
-  const comparisonWrap = document.getElementById("comparison-table-wrap");
-  const comparisonBody = document.getElementById("comparison-table-body");
-  const clearComparisonBtn = document.getElementById("clear-comparison-btn");
-  const copyComparisonBtn = document.getElementById("copy-comparison-btn");
-  const downloadComparisonCsvBtn = document.getElementById("download-comparison-csv-btn");
+  const statusChip = document.getElementById("status-chip");
 
   const payloadFromServer = {{ search_payload|tojson }};
-  const storageKey = "fire_metric_city_comparison_v1";
-  let currentCity = null;
-  let comparisonCities = [];
+  const initiallyRunning = {{ 'true' if status.running else 'false' }};
 
   function fmtNum(value) {
     if (value === null || value === undefined || value === "") return "-";
@@ -258,274 +172,22 @@
 
   function fmtPct(value) {
     if (value === null || value === undefined || value === "") return "-";
-    const num = Number(value);
+    const num = Number(value) * 100;
     if (Number.isNaN(num)) return String(value);
     return `${num.toFixed(2)}%`;
   }
 
-  function fmtScore(value) {
-    if (value === null || value === undefined || value === "") return "-";
-    const num = Number(value);
-    if (Number.isNaN(num)) return String(value);
-    return num.toFixed(2);
-  }
-
-  function normalizeScoreClass(value) {
-    const num = Number(value);
-    if (Number.isNaN(num)) return "chip-neutral";
-    if (num >= 75) return "chip-high-risk";
-    if (num >= 50) return "chip-medium-risk";
-    return "chip-low-risk";
-  }
-
-  function normalizeLandlordLabel(city) {
-    if (city.landlord_friendliness_label) return String(city.landlord_friendliness_label);
-    const score = Number(city.landlord_friendliness_score);
-    if (Number.isNaN(score)) return "-";
-    if (score > 0) return "Landlord-friendly";
-    if (score < 0) return "Tenant-friendly";
-    return "Balanced";
-  }
-
-  function landlordChipClass(city) {
-    const score = Number(city.landlord_friendliness_score);
-    if (Number.isNaN(score)) return "chip-neutral";
-    if (score > 0) return "chip-low-risk";
-    if (score < 0) return "chip-high-risk";
-    return "chip-medium-risk";
-  }
-
-  function cityKey(city) {
-    return `${String(city.city || "").trim().toLowerCase()}|${String(city.state || "").trim().toUpperCase()}`;
-  }
-
-  function sanitizeCityForComparison(city) {
-    return {
-      city: city.city || "",
-      state: city.state || "",
-      display_name: city.display_name || `${city.city || ""}, ${city.state || ""}`,
-      population_current: city.population_current ?? null,
-      population_rank: city.population_rank ?? null,
-      population_growth_2020_2025: city.population_growth_2020_2025 ?? null,
-      population_growth_recent: city.population_growth_recent ?? null,
-      median_income_current: city.median_income_current ?? null,
-      median_income_growth_2021_2024: city.median_income_growth_2021_2024 ?? null,
-      median_income_growth_recent: city.median_income_growth_recent ?? null,
-      median_home_value_current: city.median_home_value_current ?? null,
-      median_home_value_growth_2021_2024: city.median_home_value_growth_2021_2024 ?? null,
-      median_home_value_growth_recent: city.median_home_value_growth_recent ?? null,
-      employment_current: city.employment_current ?? null,
-      employment_growth_2021_2025: city.employment_growth_2021_2025 ?? null,
-      employment_growth_recent: city.employment_growth_recent ?? null,
-      climate_risk_score: city.climate_risk_score ?? null,
-      climate_risk_rating: city.climate_risk_rating ?? "",
-      crime_index_score: city.crime_index_score ?? null,
-      crime_rating: city.crime_rating ?? "",
-      density_adjusted_crime_score: city.density_adjusted_crime_score ?? null,
-      density_adjusted_crime_rating: city.density_adjusted_crime_rating ?? "",
-      landlord_friendliness_score: city.landlord_friendliness_score ?? null,
-      landlord_friendliness_label: city.landlord_friendliness_label ?? "",
-    };
-  }
-
-  function saveComparisonToStorage() {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(comparisonCities));
-    } catch (error) {
-      // Ignore storage failures (private mode/quota) and continue with in-memory state.
-    }
-  }
-
-  function loadComparisonFromStorage() {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (error) {
-      return [];
-    }
-  }
-
-  function createRatingChip(label, className) {
-    const span = document.createElement("span");
-    span.className = `comparison-chip ${className}`;
-    span.textContent = label || "-";
-    return span;
-  }
-
-  function renderComparisonTable() {
-    comparisonBody.innerHTML = "";
-    if (!comparisonCities.length) {
-      comparisonWrap.style.display = "none";
-      comparisonEmptyMessage.style.display = "block";
-      return;
-    }
-
-    comparisonWrap.style.display = "block";
-    comparisonEmptyMessage.style.display = "none";
-
-    comparisonCities.forEach((city) => {
-      const tr = document.createElement("tr");
-      const values = [
-        city.city || "-",
-        city.state || "-",
-        fmtNum(city.population_current),
-        fmtNum(city.population_rank),
-        fmtPct(city.population_growth_2020_2025),
-        fmtPct(city.population_growth_recent),
-        fmtMoney(city.median_income_current),
-        fmtPct(city.median_income_growth_2021_2024),
-        fmtPct(city.median_income_growth_recent),
-        fmtMoney(city.median_home_value_current),
-        fmtPct(city.median_home_value_growth_2021_2024),
-        fmtPct(city.median_home_value_growth_recent),
-        fmtNum(city.employment_current),
-        fmtPct(city.employment_growth_2021_2025),
-        fmtPct(city.employment_growth_recent),
-        fmtScore(city.climate_risk_score),
-        null,
-        fmtScore(city.crime_index_score),
-        null,
-        fmtScore(city.density_adjusted_crime_score),
-        null,
-        null,
-      ];
-
-      values.forEach((value, idx) => {
-        const td = document.createElement("td");
-        if (idx === 16) {
-          td.appendChild(createRatingChip(city.climate_risk_rating || "-", normalizeScoreClass(city.climate_risk_score)));
-        } else if (idx === 18) {
-          td.appendChild(createRatingChip(city.crime_rating || "-", normalizeScoreClass(city.crime_index_score)));
-        } else if (idx === 20) {
-          td.appendChild(createRatingChip(city.density_adjusted_crime_rating || "-", normalizeScoreClass(city.density_adjusted_crime_score)));
-        } else if (idx === 21) {
-          td.appendChild(createRatingChip(normalizeLandlordLabel(city), landlordChipClass(city)));
-        } else {
-          td.textContent = value;
-        }
-        tr.appendChild(td);
-      });
-
-      const actionTd = document.createElement("td");
-      const removeButton = document.createElement("button");
-      removeButton.type = "button";
-      removeButton.className = "btn btn-ghost comparison-remove-btn";
-      removeButton.textContent = "Remove";
-      removeButton.addEventListener("click", () => {
-        comparisonCities = comparisonCities.filter((item) => cityKey(item) !== cityKey(city));
-        saveComparisonToStorage();
-        renderComparisonTable();
-      });
-      actionTd.appendChild(removeButton);
-      tr.appendChild(actionTd);
-
-      comparisonBody.appendChild(tr);
-    });
-  }
-
-  function addCurrentCityToComparison() {
-    if (!currentCity) {
-      showMessage("Search for a city before adding to comparison.", "warning");
-      return;
-    }
-    const key = cityKey(currentCity);
-    if (comparisonCities.some((item) => cityKey(item) === key)) {
-      showMessage(`${currentCity.display_name || "City"} is already in comparison.`, "info");
-      return;
-    }
-
-    comparisonCities.push(sanitizeCityForComparison(currentCity));
-    saveComparisonToStorage();
-    renderComparisonTable();
-    showMessage(`${currentCity.display_name || "City"} added to comparison.`, "success");
-  }
-
-  function clearComparison() {
-    comparisonCities = [];
-    saveComparisonToStorage();
-    renderComparisonTable();
-    showMessage("Comparison cleared.", "info");
-  }
-
-  function comparisonToPlainText() {
-    const headers = [
-      "City","State","Population","Population Rank","Population Growth 2020-Latest","Recent Population Growth",
-      "Median Household Income","Income Growth 2021-Latest","Recent Income Growth",
-      "Median Owner-Occupied Home Value","Home Value Growth 2021-Latest","Recent Home Value Growth",
-      "Resident Employment","Employment Growth 2021-Latest","Recent Employment Growth",
-      "Climate Risk Score","Climate Risk Rating","Crime Index Score","Crime Rating",
-      "Density-Adjusted Crime Score","Density-Adjusted Crime Rating","Landlord Friendliness"
-    ];
-    const lines = [headers.join("\t")];
-    comparisonCities.forEach((city) => {
-      lines.push([
-        city.city || "-",
-        city.state || "-",
-        fmtNum(city.population_current),
-        fmtNum(city.population_rank),
-        fmtPct(city.population_growth_2020_2025),
-        fmtPct(city.population_growth_recent),
-        fmtMoney(city.median_income_current),
-        fmtPct(city.median_income_growth_2021_2024),
-        fmtPct(city.median_income_growth_recent),
-        fmtMoney(city.median_home_value_current),
-        fmtPct(city.median_home_value_growth_2021_2024),
-        fmtPct(city.median_home_value_growth_recent),
-        fmtNum(city.employment_current),
-        fmtPct(city.employment_growth_2021_2025),
-        fmtPct(city.employment_growth_recent),
-        fmtScore(city.climate_risk_score),
-        city.climate_risk_rating || "-",
-        fmtScore(city.crime_index_score),
-        city.crime_rating || "-",
-        fmtScore(city.density_adjusted_crime_score),
-        city.density_adjusted_crime_rating || "-",
-        normalizeLandlordLabel(city),
-      ].join("\t"));
-    });
-    return lines.join("\n");
-  }
-
-  function comparisonToCsv() {
-    const rows = [
-      [
-        "City","State","Population","Population Rank","Population Growth 2020-Latest","Recent Population Growth",
-        "Median Household Income","Income Growth 2021-Latest","Recent Income Growth",
-        "Median Owner-Occupied Home Value","Home Value Growth 2021-Latest","Recent Home Value Growth",
-        "Resident Employment","Employment Growth 2021-Latest","Recent Employment Growth",
-        "Climate Risk Score","Climate Risk Rating","Crime Index Score","Crime Rating",
-        "Density-Adjusted Crime Score","Density-Adjusted Crime Rating","Landlord Friendliness"
-      ]
-    ];
-    comparisonCities.forEach((city) => {
-      rows.push([
-        city.city || "",
-        city.state || "",
-        fmtNum(city.population_current),
-        fmtNum(city.population_rank),
-        fmtPct(city.population_growth_2020_2025),
-        fmtPct(city.population_growth_recent),
-        fmtMoney(city.median_income_current),
-        fmtPct(city.median_income_growth_2021_2024),
-        fmtPct(city.median_income_growth_recent),
-        fmtMoney(city.median_home_value_current),
-        fmtPct(city.median_home_value_growth_2021_2024),
-        fmtPct(city.median_home_value_growth_recent),
-        fmtNum(city.employment_current),
-        fmtPct(city.employment_growth_2021_2025),
-        fmtPct(city.employment_growth_recent),
-        fmtScore(city.climate_risk_score),
-        city.climate_risk_rating || "",
-        fmtScore(city.crime_index_score),
-        city.crime_rating || "",
-        fmtScore(city.density_adjusted_crime_score),
-        city.density_adjusted_crime_rating || "",
-        normalizeLandlordLabel(city),
-      ]);
-    });
-    return rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+  function fmtFreshness(isoString) {
+    if (!isoString) return "Never refreshed";
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return "Unknown";
+    const now = new Date();
+    const diffMs = now - date;
+    const diffDays = Math.floor(diffMs / 86400000);
+    if (diffDays <= 0) return "Refreshed today";
+    if (diffDays === 1) return "Refreshed yesterday";
+    if (diffDays < 30) return `Refreshed ${diffDays} days ago`;
+    return `Last updated ${date.toLocaleDateString(undefined, { year: "numeric", month: "short" })}`;
   }
 
   function showMessage(text, kind = "info") {
@@ -569,29 +231,41 @@
     el.textContent = formatter(value);
   }
 
+  function setFreshness(id, isoString) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = fmtFreshness(isoString);
+  }
+
   function renderCity(city) {
-    currentCity = sanitizeCityForComparison(city);
     dashboardEl.style.display = "block";
     document.getElementById("city-display-name").textContent = city.display_name || `${city.city}, ${city.state}`;
     document.getElementById("city-subline").textContent = `Population rank: ${fmtNum(city.population_rank)} | Population: ${fmtNum(city.population_current)}`;
 
     setMetric("metric-pop-current", city.population_current);
     setMetric("metric-pop-growth", `2020-latest: ${fmtPct(city.population_growth_2020_2025)} | Recent: ${fmtPct(city.population_growth_recent)}`, String);
+    setFreshness("metric-pop-updated", city.population_updated_at);
+    setFreshness("metric-population-family-updated", city.population_updated_at);
 
     setMetric("metric-income-current", city.median_income_current, fmtMoney);
     setMetric("metric-income-growth", `2021-latest: ${fmtPct(city.median_income_growth_2021_2024)} | Recent: ${fmtPct(city.median_income_growth_recent)}`, String);
+    setFreshness("metric-income-updated", city.income_updated_at);
 
     setMetric("metric-home-current", city.median_home_value_current, fmtMoney);
     setMetric("metric-home-growth", `2021-latest: ${fmtPct(city.median_home_value_growth_2021_2024)} | Recent: ${fmtPct(city.median_home_value_growth_recent)}`, String);
+    setFreshness("metric-home-updated", city.home_value_updated_at);
 
     setMetric("metric-employment-current", city.employment_current);
     setMetric("metric-employment-growth", `2021-latest: ${fmtPct(city.employment_growth_2021_2025)} | Recent: ${fmtPct(city.employment_growth_recent)}`, String);
+    setFreshness("metric-employment-updated", city.employment_updated_at);
 
     setMetric("metric-climate-score", city.climate_risk_score);
     setMetric("metric-climate-rating", city.climate_risk_rating, String);
+    setFreshness("metric-climate-updated", city.climate_updated_at);
 
     setMetric("metric-crime-score", city.crime_index_score);
     setMetric("metric-crime-rating", city.crime_rating, String);
+    setFreshness("metric-crime-updated", city.crime_updated_at);
 
     setMetric("metric-density-score", city.density_adjusted_crime_score);
     setMetric("metric-density-rating", city.density_adjusted_crime_rating, String);
@@ -608,14 +282,6 @@
       chip.textContent = warning;
       warningsWrap.appendChild(chip);
     });
-
-    const sourceNote = document.getElementById("city-source-note");
-    sourceNote.textContent = `Source last updated: ${city.source_last_updated || "unknown"}`;
-
-    const currentKey = cityKey(currentCity);
-    const alreadyAdded = comparisonCities.some((item) => cityKey(item) === currentKey);
-    addToComparisonBtn.disabled = alreadyAdded;
-    addToComparisonBtn.textContent = alreadyAdded ? "Already in Comparison" : "Add to Comparison";
   }
 
   async function performSearch(query) {
@@ -639,31 +305,20 @@
       }
 
       if (status === "suggestions") {
-        currentCity = null;
-        addToComparisonBtn.disabled = true;
-        addToComparisonBtn.textContent = "Add to Comparison";
         dashboardEl.style.display = "none";
         showMessage(payload.user_message || "No exact match found.", "info");
         renderSuggestions(payload.suggestions || []);
         return;
       }
 
-      currentCity = null;
-      addToComparisonBtn.disabled = true;
-      addToComparisonBtn.textContent = "Add to Comparison";
       dashboardEl.style.display = "none";
       hideSuggestions();
-      if (status === "excluded") {
-        showMessage(payload.user_message, "warning");
-      } else if (status === "not_found") {
+      if (status === "excluded" || status === "not_found") {
         showMessage(payload.user_message, "warning");
       } else {
         showMessage(payload.user_message || "Search failed.", "error");
       }
     } catch (err) {
-      currentCity = null;
-      addToComparisonBtn.disabled = true;
-      addToComparisonBtn.textContent = "Add to Comparison";
       dashboardEl.style.display = "none";
       hideSuggestions();
       showMessage(`Search failed: ${err}`, "error");
@@ -675,43 +330,6 @@
     performSearch(input.value);
   });
 
-  addToComparisonBtn.addEventListener("click", addCurrentCityToComparison);
-
-  clearComparisonBtn.addEventListener("click", () => {
-    clearComparison();
-  });
-
-  copyComparisonBtn.addEventListener("click", async () => {
-    if (!comparisonCities.length) {
-      showMessage("Add at least one city before copying comparison data.", "warning");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(comparisonToPlainText());
-      showMessage("Comparison table copied to clipboard.", "success");
-    } catch (error) {
-      showMessage("Could not copy comparison table in this browser context.", "warning");
-    }
-  });
-
-  downloadComparisonCsvBtn.addEventListener("click", () => {
-    if (!comparisonCities.length) {
-      showMessage("Add at least one city before downloading comparison CSV.", "warning");
-      return;
-    }
-    const blob = new Blob([comparisonToCsv()], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "fire_metric_city_comparison.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-  });
-
-  comparisonCities = loadComparisonFromStorage();
-  renderComparisonTable();
-  addToComparisonBtn.disabled = true;
-
   if (payloadFromServer) {
     if (payloadFromServer.status === "found") {
       showMessage(payloadFromServer.user_message || "City found.", "success");
@@ -722,6 +340,118 @@
     } else if (payloadFromServer.user_message) {
       showMessage(payloadFromServer.user_message, payloadFromServer.status === "excluded" ? "warning" : "info");
     }
+  }
+
+  // Poll refresh status while a background refresh is running, updating
+  // only the status chip / header text / admin button disabled-state --
+  // this must NEVER touch dashboardEl/messageEl/suggestionsEl or call
+  // location.reload(). A full reload discards whatever the user is
+  // currently looking at (the search dashboard only exists in this page's
+  // live DOM, and the URL never had a ?q= param since search runs over
+  // fetch(), not navigation) and drops them back to an empty page with no
+  // indication why. The refresh-status indicator and the search results
+  // are independent pieces of state and must be updated independently.
+  function applyStatusPayload(payload) {
+    if (statusChip) {
+      statusChip.className = `source-badge source-badge-${payload.status}`;
+      statusChip.textContent = String(payload.status).toUpperCase();
+    }
+    const lastRefreshedEl = document.getElementById("last-refreshed-text");
+    if (lastRefreshedEl) {
+      lastRefreshedEl.textContent = `Last refreshed: ${payload.last_refresh_at || "Never"}`;
+    }
+    const cityCountEl = document.getElementById("city-count-text");
+    if (cityCountEl) {
+      cityCountEl.textContent = `Cities indexed: ${payload.city_count || 0}`;
+    }
+    const errorEl = document.getElementById("last-refresh-error-text");
+    if (errorEl) {
+      if (payload.last_refresh_error) {
+        errorEl.textContent = `Last refresh had errors: ${payload.last_refresh_error}`;
+        errorEl.style.display = "";
+      } else {
+        errorEl.textContent = "";
+        errorEl.style.display = "none";
+      }
+    }
+    ["btn-refresh-all", "btn-refresh-live", "btn-rebuild-index"].forEach((id) => {
+      const btn = document.getElementById(id);
+      if (btn) btn.disabled = !!payload.running;
+    });
+  }
+
+  let activePoll = null;
+
+  function startStatusPolling() {
+    if (activePoll) return;
+    activePoll = setInterval(async () => {
+      try {
+        const res = await fetch(statusUrl);
+        const payload = await res.json();
+        applyStatusPayload(payload);
+        if (!payload.running) {
+          clearInterval(activePoll);
+          activePoll = null;
+        }
+      } catch (err) {
+        clearInterval(activePoll);
+        activePoll = null;
+      }
+    }, 5000);
+  }
+
+  if (initiallyRunning) {
+    startStatusPolling();
+  }
+
+  // Admin actions (Refresh All Data / Refresh Live Metrics Only /
+  // Re-Ingest From Disk) submit via fetch rather than a normal form POST,
+  // for the same reason as above: a normal submit navigates the page,
+  // which would discard the search dashboard just as much as the old
+  // reload-on-poll-completion did.
+  const adminForm = document.getElementById("admin-actions-form");
+  const adminSuccessEl = document.getElementById("admin-success-message");
+  const adminErrorEl = document.getElementById("admin-error-message");
+
+  function showAdminMessage(successText, errorText) {
+    if (adminSuccessEl) {
+      adminSuccessEl.textContent = successText || "";
+      adminSuccessEl.style.display = successText ? "" : "none";
+    }
+    if (adminErrorEl) {
+      adminErrorEl.textContent = errorText || "";
+      adminErrorEl.style.display = errorText ? "" : "none";
+    }
+  }
+
+  if (adminForm) {
+    adminForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(adminForm, event.submitter);
+      try {
+        // NOT adminForm.action: the three admin buttons all share
+        // name="action" (refresh_all / refresh_live_only / rebuild_index),
+        // and a form's named-control lookup resolves that shared name to a
+        // RadioNodeList (a collection), shadowing the form's own reserved
+        // `action` URL property. fetch() then silently stringifies that
+        // object ("[object RadioNodeList]") instead of using a real URL.
+        // This form always submits back to the page it's on, so just use
+        // the current path directly.
+        const res = await fetch(window.location.pathname, {
+          method: "POST",
+          body: formData,
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+        });
+        const payload = await res.json();
+        showAdminMessage(payload.success_message, payload.error_message);
+        applyStatusPayload(payload);
+        if (payload.running) {
+          startStatusPolling();
+        }
+      } catch (err) {
+        showAdminMessage(null, `Request failed: ${err}`);
+      }
+    });
   }
 })();
 </script>
