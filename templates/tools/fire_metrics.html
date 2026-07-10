@@ -13,12 +13,12 @@
   <p class="page-subtitle">Search city-level market indicators</p>
   <div class="status-chip-row" style="margin-top:10px;">
     <span id="status-chip" class="source-badge source-badge-{{ status.status|default('missing') }}">{{ status.status|default('missing')|upper }}</span>
-    <span class="result-period">Last refreshed: {{ status.last_refresh_at or 'Never' }}</span>
-    <span class="result-period">Cities indexed: {{ status.city_count or 0 }}</span>
+    <span id="last-refreshed-text" class="result-period">Last refreshed: {{ status.last_refresh_at or 'Never' }}</span>
+    <span id="city-count-text" class="result-period">Cities indexed: {{ status.city_count or 0 }}</span>
   </div>
-  {% if status.last_refresh_error %}
-    <p class="page-subtitle" style="max-width:900px; margin-top:8px; color:#991b1b;">Last refresh had errors: {{ status.last_refresh_error }}</p>
-  {% endif %}
+  <p id="last-refresh-error-text" class="page-subtitle" style="max-width:900px; margin-top:8px; color:#991b1b; {% if not status.last_refresh_error %}display:none;{% endif %}">
+    {% if status.last_refresh_error %}Last refresh had errors: {{ status.last_refresh_error }}{% endif %}
+  </p>
 </div>
 
 <div class="card">
@@ -116,21 +116,16 @@
     already in place — see the FIRE Metrics README for that file's expected location.
   </p>
 
-  <form method="post" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:14px;">
+  <form id="admin-actions-form" method="post" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:14px;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" name="action" value="refresh_all" class="btn btn-primary" {% if status.running %}disabled{% endif %}>Refresh All Data</button>
-    <button type="submit" name="action" value="refresh_live_only" class="btn btn-ghost" {% if status.running %}disabled{% endif %}>Refresh Live Metrics Only</button>
-    <button type="submit" name="action" value="rebuild_index" class="btn btn-ghost" {% if status.running %}disabled{% endif %}>Re-Ingest From Disk</button>
+    <button id="btn-refresh-all" type="submit" name="action" value="refresh_all" class="btn btn-primary" {% if status.running %}disabled{% endif %}>Refresh All Data</button>
+    <button id="btn-refresh-live" type="submit" name="action" value="refresh_live_only" class="btn btn-ghost" {% if status.running %}disabled{% endif %}>Refresh Live Metrics Only</button>
+    <button id="btn-rebuild-index" type="submit" name="action" value="rebuild_index" class="btn btn-ghost" {% if status.running %}disabled{% endif %}>Re-Ingest From Disk</button>
     <a href="{{ url_for('fire_metrics.download_latest') }}" class="btn btn-success">Download Current Data (.xlsx)</a>
   </form>
 
-  {% if success_message %}
-    <div class="alert alert-success" style="margin-top:16px;">{{ success_message }}</div>
-  {% endif %}
-
-  {% if error_message %}
-    <div class="error-panel visible" role="alert" style="margin-top:16px;">{{ error_message }}</div>
-  {% endif %}
+  <div id="admin-success-message" class="alert alert-success" style="margin-top:16px; {% if not success_message %}display:none;{% endif %}">{{ success_message or "" }}</div>
+  <div id="admin-error-message" class="error-panel visible" role="alert" style="margin-top:16px; {% if not error_message %}display:none;{% endif %}">{{ error_message or "" }}</div>
 </div>
 
 <div class="card">
@@ -347,25 +342,108 @@
     }
   }
 
-  // Poll refresh status while a background refresh is running, so the
-  // page reflects completion without a manual reload.
-  if (initiallyRunning) {
-    const poll = setInterval(async () => {
+  // Poll refresh status while a background refresh is running, updating
+  // only the status chip / header text / admin button disabled-state --
+  // this must NEVER touch dashboardEl/messageEl/suggestionsEl or call
+  // location.reload(). A full reload discards whatever the user is
+  // currently looking at (the search dashboard only exists in this page's
+  // live DOM, and the URL never had a ?q= param since search runs over
+  // fetch(), not navigation) and drops them back to an empty page with no
+  // indication why. The refresh-status indicator and the search results
+  // are independent pieces of state and must be updated independently.
+  function applyStatusPayload(payload) {
+    if (statusChip) {
+      statusChip.className = `source-badge source-badge-${payload.status}`;
+      statusChip.textContent = String(payload.status).toUpperCase();
+    }
+    const lastRefreshedEl = document.getElementById("last-refreshed-text");
+    if (lastRefreshedEl) {
+      lastRefreshedEl.textContent = `Last refreshed: ${payload.last_refresh_at || "Never"}`;
+    }
+    const cityCountEl = document.getElementById("city-count-text");
+    if (cityCountEl) {
+      cityCountEl.textContent = `Cities indexed: ${payload.city_count || 0}`;
+    }
+    const errorEl = document.getElementById("last-refresh-error-text");
+    if (errorEl) {
+      if (payload.last_refresh_error) {
+        errorEl.textContent = `Last refresh had errors: ${payload.last_refresh_error}`;
+        errorEl.style.display = "";
+      } else {
+        errorEl.textContent = "";
+        errorEl.style.display = "none";
+      }
+    }
+    ["btn-refresh-all", "btn-refresh-live", "btn-rebuild-index"].forEach((id) => {
+      const btn = document.getElementById(id);
+      if (btn) btn.disabled = !!payload.running;
+    });
+  }
+
+  let activePoll = null;
+
+  function startStatusPolling() {
+    if (activePoll) return;
+    activePoll = setInterval(async () => {
       try {
         const res = await fetch(statusUrl);
         const payload = await res.json();
-        if (statusChip) {
-          statusChip.className = `source-badge source-badge-${payload.status}`;
-          statusChip.textContent = String(payload.status).toUpperCase();
-        }
+        applyStatusPayload(payload);
         if (!payload.running) {
-          clearInterval(poll);
-          window.location.reload();
+          clearInterval(activePoll);
+          activePoll = null;
         }
       } catch (err) {
-        clearInterval(poll);
+        clearInterval(activePoll);
+        activePoll = null;
       }
     }, 5000);
+  }
+
+  if (initiallyRunning) {
+    startStatusPolling();
+  }
+
+  // Admin actions (Refresh All Data / Refresh Live Metrics Only /
+  // Re-Ingest From Disk) submit via fetch rather than a normal form POST,
+  // for the same reason as above: a normal submit navigates the page,
+  // which would discard the search dashboard just as much as the old
+  // reload-on-poll-completion did.
+  const adminForm = document.getElementById("admin-actions-form");
+  const adminSuccessEl = document.getElementById("admin-success-message");
+  const adminErrorEl = document.getElementById("admin-error-message");
+
+  function showAdminMessage(successText, errorText) {
+    if (adminSuccessEl) {
+      adminSuccessEl.textContent = successText || "";
+      adminSuccessEl.style.display = successText ? "" : "none";
+    }
+    if (adminErrorEl) {
+      adminErrorEl.textContent = errorText || "";
+      adminErrorEl.style.display = errorText ? "" : "none";
+    }
+  }
+
+  if (adminForm) {
+    adminForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const formData = new FormData(adminForm, event.submitter);
+      try {
+        const res = await fetch(adminForm.action || window.location.href, {
+          method: "POST",
+          body: formData,
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+        });
+        const payload = await res.json();
+        showAdminMessage(payload.success_message, payload.error_message);
+        applyStatusPayload(payload);
+        if (payload.running) {
+          startStatusPolling();
+        }
+      } catch (err) {
+        showAdminMessage(null, `Request failed: ${err}`);
+      }
+    });
   }
 })();
 </script>

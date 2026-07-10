@@ -170,15 +170,31 @@ def index():
         return render_template("tools/fire_metrics.html", **context)
 
     action = request.form.get("action", "")
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+
+    def respond(status_code: int = 200):
+        if is_ajax:
+            # Admin actions are triggered via fetch() from the page's own
+            # JS specifically so they don't navigate away -- a full-page
+            # render/redirect here would reload the page and discard
+            # whatever search result the user currently has on screen
+            # (client-side only state, never persisted server-side).
+            payload = {
+                "success_message": context["success_message"],
+                "error_message": context["error_message"],
+            }
+            payload.update(_refresh_status())
+            return jsonify(payload), status_code
+        return render_template("tools/fire_metrics.html", **context), status_code
 
     if action == "refresh_all":
         started = _start_refresh(skip_climate=False, skip_crime=False)
         if started:
-            context["success_message"] = "Refresh started in the background. This can take several minutes (climate risk especially, on a cold cache). Reload this page to check progress."
+            context["success_message"] = "Refresh started in the background. This can take several minutes (climate risk especially, on a cold cache)."
         else:
             context["error_message"] = "A refresh is already running. Check back shortly."
         context["status"] = _refresh_status()
-        return render_template("tools/fire_metrics.html", **context)
+        return respond()
 
     if action == "refresh_live_only":
         # Population/income/home-value/employment only -- skips the slow
@@ -189,7 +205,7 @@ def index():
         else:
             context["error_message"] = "A refresh is already running. Check back shortly."
         context["status"] = _refresh_status()
-        return render_template("tools/fire_metrics.html", **context)
+        return respond()
 
     if action == "rebuild_index":
         try:
@@ -201,10 +217,10 @@ def index():
         except Exception as exc:
             context["error_message"] = f"Could not re-ingest from disk: {exc}"
         context["status"] = _refresh_status()
-        return render_template("tools/fire_metrics.html", **context)
+        return respond()
 
     context["error_message"] = "Unknown action."
-    return render_template("tools/fire_metrics.html", **context), 400
+    return respond(status_code=400)
 
 
 @fire_metrics_bp.route("/search")
