@@ -57,9 +57,6 @@
     </div>
 
     <p id="city-source-note" class="result-note"></p>
-    <div class="fire-city-actions">
-      <button id="add-to-comparison-btn" type="button" class="btn btn-primary">Add to Comparison</button>
-    </div>
   </div>
 
   {% if city_preview %}
@@ -70,55 +67,6 @@
     {% endfor %}
   </div>
   {% endif %}
-</div>
-
-<div class="card">
-  <div class="result-header">
-    <div>
-      <h2 class="dashboard-section-title">City Comparison</h2>
-      <p class="page-subtitle" style="margin-top:4px;">Search and add cities to compare market metrics.</p>
-    </div>
-    <div class="comparison-actions">
-      <button id="copy-comparison-btn" type="button" class="btn btn-ghost">Copy Comparison Table</button>
-      <button id="download-comparison-csv-btn" type="button" class="btn btn-ghost">Download Comparison CSV</button>
-      <button id="clear-comparison-btn" type="button" class="btn btn-ghost">Clear All</button>
-    </div>
-  </div>
-
-  <div id="comparison-empty-message" class="result-note">Search and add cities to compare market metrics.</div>
-
-  <div id="comparison-table-wrap" class="comparison-table-wrap" style="display:none;">
-    <table id="comparison-table" class="comparison-table">
-      <thead>
-        <tr>
-          <th>City</th>
-          <th>State</th>
-          <th>Population</th>
-          <th>Population Rank</th>
-          <th>Population Growth 2020-Latest</th>
-          <th>Recent Population Growth</th>
-          <th>Median Household Income</th>
-          <th>Income Growth 2021-Latest</th>
-          <th>Recent Income Growth</th>
-          <th>Median Owner-Occupied Home Value</th>
-          <th>Home Value Growth 2021-Latest</th>
-          <th>Recent Home Value Growth</th>
-          <th>Resident Employment</th>
-          <th>Employment Growth 2021-Latest</th>
-          <th>Recent Employment Growth</th>
-          <th>Climate Risk Score</th>
-          <th>Climate Risk Rating</th>
-          <th>Crime Index Score</th>
-          <th>Crime Rating</th>
-          <th>Density-Adjusted Crime Score</th>
-          <th>Density-Adjusted Crime Rating</th>
-          <th>Landlord Friendliness</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody id="comparison-table-body"></tbody>
-    </table>
-  </div>
 </div>
 
 <div class="card">
@@ -229,18 +177,8 @@
   const messageEl = document.getElementById("fire-search-message");
   const suggestionsEl = document.getElementById("fire-suggestions");
   const dashboardEl = document.getElementById("fire-city-dashboard");
-  const addToComparisonBtn = document.getElementById("add-to-comparison-btn");
-  const comparisonEmptyMessage = document.getElementById("comparison-empty-message");
-  const comparisonWrap = document.getElementById("comparison-table-wrap");
-  const comparisonBody = document.getElementById("comparison-table-body");
-  const clearComparisonBtn = document.getElementById("clear-comparison-btn");
-  const copyComparisonBtn = document.getElementById("copy-comparison-btn");
-  const downloadComparisonCsvBtn = document.getElementById("download-comparison-csv-btn");
 
   const payloadFromServer = {{ search_payload|tojson }};
-  const storageKey = "fire_metric_city_comparison_v1";
-  let currentCity = null;
-  let comparisonCities = [];
 
   function fmtNum(value) {
     if (value === null || value === undefined || value === "") return "-";
@@ -261,271 +199,6 @@
     const num = Number(value);
     if (Number.isNaN(num)) return String(value);
     return `${num.toFixed(2)}%`;
-  }
-
-  function fmtScore(value) {
-    if (value === null || value === undefined || value === "") return "-";
-    const num = Number(value);
-    if (Number.isNaN(num)) return String(value);
-    return num.toFixed(2);
-  }
-
-  function normalizeScoreClass(value) {
-    const num = Number(value);
-    if (Number.isNaN(num)) return "chip-neutral";
-    if (num >= 75) return "chip-high-risk";
-    if (num >= 50) return "chip-medium-risk";
-    return "chip-low-risk";
-  }
-
-  function normalizeLandlordLabel(city) {
-    if (city.landlord_friendliness_label) return String(city.landlord_friendliness_label);
-    const score = Number(city.landlord_friendliness_score);
-    if (Number.isNaN(score)) return "-";
-    if (score > 0) return "Landlord-friendly";
-    if (score < 0) return "Tenant-friendly";
-    return "Balanced";
-  }
-
-  function landlordChipClass(city) {
-    const score = Number(city.landlord_friendliness_score);
-    if (Number.isNaN(score)) return "chip-neutral";
-    if (score > 0) return "chip-low-risk";
-    if (score < 0) return "chip-high-risk";
-    return "chip-medium-risk";
-  }
-
-  function cityKey(city) {
-    return `${String(city.city || "").trim().toLowerCase()}|${String(city.state || "").trim().toUpperCase()}`;
-  }
-
-  function sanitizeCityForComparison(city) {
-    return {
-      city: city.city || "",
-      state: city.state || "",
-      display_name: city.display_name || `${city.city || ""}, ${city.state || ""}`,
-      population_current: city.population_current ?? null,
-      population_rank: city.population_rank ?? null,
-      population_growth_2020_2025: city.population_growth_2020_2025 ?? null,
-      population_growth_recent: city.population_growth_recent ?? null,
-      median_income_current: city.median_income_current ?? null,
-      median_income_growth_2021_2024: city.median_income_growth_2021_2024 ?? null,
-      median_income_growth_recent: city.median_income_growth_recent ?? null,
-      median_home_value_current: city.median_home_value_current ?? null,
-      median_home_value_growth_2021_2024: city.median_home_value_growth_2021_2024 ?? null,
-      median_home_value_growth_recent: city.median_home_value_growth_recent ?? null,
-      employment_current: city.employment_current ?? null,
-      employment_growth_2021_2025: city.employment_growth_2021_2025 ?? null,
-      employment_growth_recent: city.employment_growth_recent ?? null,
-      climate_risk_score: city.climate_risk_score ?? null,
-      climate_risk_rating: city.climate_risk_rating ?? "",
-      crime_index_score: city.crime_index_score ?? null,
-      crime_rating: city.crime_rating ?? "",
-      density_adjusted_crime_score: city.density_adjusted_crime_score ?? null,
-      density_adjusted_crime_rating: city.density_adjusted_crime_rating ?? "",
-      landlord_friendliness_score: city.landlord_friendliness_score ?? null,
-      landlord_friendliness_label: city.landlord_friendliness_label ?? "",
-    };
-  }
-
-  function saveComparisonToStorage() {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(comparisonCities));
-    } catch (error) {
-      // Ignore storage failures (private mode/quota) and continue with in-memory state.
-    }
-  }
-
-  function loadComparisonFromStorage() {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (error) {
-      return [];
-    }
-  }
-
-  function createRatingChip(label, className) {
-    const span = document.createElement("span");
-    span.className = `comparison-chip ${className}`;
-    span.textContent = label || "-";
-    return span;
-  }
-
-  function renderComparisonTable() {
-    comparisonBody.innerHTML = "";
-    if (!comparisonCities.length) {
-      comparisonWrap.style.display = "none";
-      comparisonEmptyMessage.style.display = "block";
-      return;
-    }
-
-    comparisonWrap.style.display = "block";
-    comparisonEmptyMessage.style.display = "none";
-
-    comparisonCities.forEach((city) => {
-      const tr = document.createElement("tr");
-      const values = [
-        city.city || "-",
-        city.state || "-",
-        fmtNum(city.population_current),
-        fmtNum(city.population_rank),
-        fmtPct(city.population_growth_2020_2025),
-        fmtPct(city.population_growth_recent),
-        fmtMoney(city.median_income_current),
-        fmtPct(city.median_income_growth_2021_2024),
-        fmtPct(city.median_income_growth_recent),
-        fmtMoney(city.median_home_value_current),
-        fmtPct(city.median_home_value_growth_2021_2024),
-        fmtPct(city.median_home_value_growth_recent),
-        fmtNum(city.employment_current),
-        fmtPct(city.employment_growth_2021_2025),
-        fmtPct(city.employment_growth_recent),
-        fmtScore(city.climate_risk_score),
-        null,
-        fmtScore(city.crime_index_score),
-        null,
-        fmtScore(city.density_adjusted_crime_score),
-        null,
-        null,
-      ];
-
-      values.forEach((value, idx) => {
-        const td = document.createElement("td");
-        if (idx === 16) {
-          td.appendChild(createRatingChip(city.climate_risk_rating || "-", normalizeScoreClass(city.climate_risk_score)));
-        } else if (idx === 18) {
-          td.appendChild(createRatingChip(city.crime_rating || "-", normalizeScoreClass(city.crime_index_score)));
-        } else if (idx === 20) {
-          td.appendChild(createRatingChip(city.density_adjusted_crime_rating || "-", normalizeScoreClass(city.density_adjusted_crime_score)));
-        } else if (idx === 21) {
-          td.appendChild(createRatingChip(normalizeLandlordLabel(city), landlordChipClass(city)));
-        } else {
-          td.textContent = value;
-        }
-        tr.appendChild(td);
-      });
-
-      const actionTd = document.createElement("td");
-      const removeButton = document.createElement("button");
-      removeButton.type = "button";
-      removeButton.className = "btn btn-ghost comparison-remove-btn";
-      removeButton.textContent = "Remove";
-      removeButton.addEventListener("click", () => {
-        comparisonCities = comparisonCities.filter((item) => cityKey(item) !== cityKey(city));
-        saveComparisonToStorage();
-        renderComparisonTable();
-      });
-      actionTd.appendChild(removeButton);
-      tr.appendChild(actionTd);
-
-      comparisonBody.appendChild(tr);
-    });
-  }
-
-  function addCurrentCityToComparison() {
-    if (!currentCity) {
-      showMessage("Search for a city before adding to comparison.", "warning");
-      return;
-    }
-    const key = cityKey(currentCity);
-    if (comparisonCities.some((item) => cityKey(item) === key)) {
-      showMessage(`${currentCity.display_name || "City"} is already in comparison.`, "info");
-      return;
-    }
-
-    comparisonCities.push(sanitizeCityForComparison(currentCity));
-    saveComparisonToStorage();
-    renderComparisonTable();
-    showMessage(`${currentCity.display_name || "City"} added to comparison.`, "success");
-  }
-
-  function clearComparison() {
-    comparisonCities = [];
-    saveComparisonToStorage();
-    renderComparisonTable();
-    showMessage("Comparison cleared.", "info");
-  }
-
-  function comparisonToPlainText() {
-    const headers = [
-      "City","State","Population","Population Rank","Population Growth 2020-Latest","Recent Population Growth",
-      "Median Household Income","Income Growth 2021-Latest","Recent Income Growth",
-      "Median Owner-Occupied Home Value","Home Value Growth 2021-Latest","Recent Home Value Growth",
-      "Resident Employment","Employment Growth 2021-Latest","Recent Employment Growth",
-      "Climate Risk Score","Climate Risk Rating","Crime Index Score","Crime Rating",
-      "Density-Adjusted Crime Score","Density-Adjusted Crime Rating","Landlord Friendliness"
-    ];
-    const lines = [headers.join("\t")];
-    comparisonCities.forEach((city) => {
-      lines.push([
-        city.city || "-",
-        city.state || "-",
-        fmtNum(city.population_current),
-        fmtNum(city.population_rank),
-        fmtPct(city.population_growth_2020_2025),
-        fmtPct(city.population_growth_recent),
-        fmtMoney(city.median_income_current),
-        fmtPct(city.median_income_growth_2021_2024),
-        fmtPct(city.median_income_growth_recent),
-        fmtMoney(city.median_home_value_current),
-        fmtPct(city.median_home_value_growth_2021_2024),
-        fmtPct(city.median_home_value_growth_recent),
-        fmtNum(city.employment_current),
-        fmtPct(city.employment_growth_2021_2025),
-        fmtPct(city.employment_growth_recent),
-        fmtScore(city.climate_risk_score),
-        city.climate_risk_rating || "-",
-        fmtScore(city.crime_index_score),
-        city.crime_rating || "-",
-        fmtScore(city.density_adjusted_crime_score),
-        city.density_adjusted_crime_rating || "-",
-        normalizeLandlordLabel(city),
-      ].join("\t"));
-    });
-    return lines.join("\n");
-  }
-
-  function comparisonToCsv() {
-    const rows = [
-      [
-        "City","State","Population","Population Rank","Population Growth 2020-Latest","Recent Population Growth",
-        "Median Household Income","Income Growth 2021-Latest","Recent Income Growth",
-        "Median Owner-Occupied Home Value","Home Value Growth 2021-Latest","Recent Home Value Growth",
-        "Resident Employment","Employment Growth 2021-Latest","Recent Employment Growth",
-        "Climate Risk Score","Climate Risk Rating","Crime Index Score","Crime Rating",
-        "Density-Adjusted Crime Score","Density-Adjusted Crime Rating","Landlord Friendliness"
-      ]
-    ];
-    comparisonCities.forEach((city) => {
-      rows.push([
-        city.city || "",
-        city.state || "",
-        fmtNum(city.population_current),
-        fmtNum(city.population_rank),
-        fmtPct(city.population_growth_2020_2025),
-        fmtPct(city.population_growth_recent),
-        fmtMoney(city.median_income_current),
-        fmtPct(city.median_income_growth_2021_2024),
-        fmtPct(city.median_income_growth_recent),
-        fmtMoney(city.median_home_value_current),
-        fmtPct(city.median_home_value_growth_2021_2024),
-        fmtPct(city.median_home_value_growth_recent),
-        fmtNum(city.employment_current),
-        fmtPct(city.employment_growth_2021_2025),
-        fmtPct(city.employment_growth_recent),
-        fmtScore(city.climate_risk_score),
-        city.climate_risk_rating || "",
-        fmtScore(city.crime_index_score),
-        city.crime_rating || "",
-        fmtScore(city.density_adjusted_crime_score),
-        city.density_adjusted_crime_rating || "",
-        normalizeLandlordLabel(city),
-      ]);
-    });
-    return rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
   }
 
   function showMessage(text, kind = "info") {
@@ -570,7 +243,6 @@
   }
 
   function renderCity(city) {
-    currentCity = sanitizeCityForComparison(city);
     dashboardEl.style.display = "block";
     document.getElementById("city-display-name").textContent = city.display_name || `${city.city}, ${city.state}`;
     document.getElementById("city-subline").textContent = `Population rank: ${fmtNum(city.population_rank)} | Population: ${fmtNum(city.population_current)}`;
@@ -611,11 +283,6 @@
 
     const sourceNote = document.getElementById("city-source-note");
     sourceNote.textContent = `Source last updated: ${city.source_last_updated || "unknown"}`;
-
-    const currentKey = cityKey(currentCity);
-    const alreadyAdded = comparisonCities.some((item) => cityKey(item) === currentKey);
-    addToComparisonBtn.disabled = alreadyAdded;
-    addToComparisonBtn.textContent = alreadyAdded ? "Already in Comparison" : "Add to Comparison";
   }
 
   async function performSearch(query) {
@@ -639,18 +306,12 @@
       }
 
       if (status === "suggestions") {
-        currentCity = null;
-        addToComparisonBtn.disabled = true;
-        addToComparisonBtn.textContent = "Add to Comparison";
         dashboardEl.style.display = "none";
         showMessage(payload.user_message || "No exact match found.", "info");
         renderSuggestions(payload.suggestions || []);
         return;
       }
 
-      currentCity = null;
-      addToComparisonBtn.disabled = true;
-      addToComparisonBtn.textContent = "Add to Comparison";
       dashboardEl.style.display = "none";
       hideSuggestions();
       if (status === "excluded") {
@@ -661,9 +322,6 @@
         showMessage(payload.user_message || "Search failed.", "error");
       }
     } catch (err) {
-      currentCity = null;
-      addToComparisonBtn.disabled = true;
-      addToComparisonBtn.textContent = "Add to Comparison";
       dashboardEl.style.display = "none";
       hideSuggestions();
       showMessage(`Search failed: ${err}`, "error");
@@ -674,43 +332,6 @@
     event.preventDefault();
     performSearch(input.value);
   });
-
-  addToComparisonBtn.addEventListener("click", addCurrentCityToComparison);
-
-  clearComparisonBtn.addEventListener("click", () => {
-    clearComparison();
-  });
-
-  copyComparisonBtn.addEventListener("click", async () => {
-    if (!comparisonCities.length) {
-      showMessage("Add at least one city before copying comparison data.", "warning");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(comparisonToPlainText());
-      showMessage("Comparison table copied to clipboard.", "success");
-    } catch (error) {
-      showMessage("Could not copy comparison table in this browser context.", "warning");
-    }
-  });
-
-  downloadComparisonCsvBtn.addEventListener("click", () => {
-    if (!comparisonCities.length) {
-      showMessage("Add at least one city before downloading comparison CSV.", "warning");
-      return;
-    }
-    const blob = new Blob([comparisonToCsv()], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "fire_metric_city_comparison.csv";
-    link.click();
-    URL.revokeObjectURL(url);
-  });
-
-  comparisonCities = loadComparisonFromStorage();
-  renderComparisonTable();
-  addToComparisonBtn.disabled = true;
 
   if (payloadFromServer) {
     if (payloadFromServer.status === "found") {

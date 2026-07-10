@@ -969,89 +969,6 @@ hr.divider {
   gap: 10px;
 }
 
-.fire-city-actions {
-  margin-top: 12px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.comparison-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.comparison-table-wrap {
-  margin-top: 12px;
-  overflow-x: auto;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-}
-
-.comparison-table {
-  width: 100%;
-  border-collapse: collapse;
-  min-width: 1600px;
-  font-size: 12px;
-}
-
-.comparison-table th,
-.comparison-table td {
-  border-bottom: 1px solid #f3f4f6;
-  padding: 10px 10px;
-  text-align: left;
-  white-space: nowrap;
-  vertical-align: middle;
-}
-
-.comparison-table th {
-  background: #f9fafb;
-  color: #4b5563;
-  font-size: 10.5px;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-}
-
-.comparison-remove-btn {
-  padding: 6px 10px;
-  font-size: 12px;
-}
-
-.comparison-chip {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  padding: 3px 8px;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.chip-low-risk {
-  background: #dcfce7;
-  border-color: #86efac;
-  color: #166534;
-}
-
-.chip-medium-risk {
-  background: #fef3c7;
-  border-color: #fcd34d;
-  color: #92400e;
-}
-
-.chip-high-risk {
-  background: #fee2e2;
-  border-color: #fca5a5;
-  color: #991b1b;
-}
-
-.chip-neutral {
-  background: #f3f4f6;
-  border-color: #e5e7eb;
-  color: #374151;
-}
-
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .sidebar {
@@ -1068,15 +985,6 @@ hr.divider {
 
   .fire-search-row {
     grid-template-columns: 1fr;
-  }
-
-  .comparison-actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .comparison-table {
-    min-width: 1200px;
   }
 
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
