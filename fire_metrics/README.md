@@ -42,8 +42,10 @@ python3 main.py
 - Set production secrets in Railway under Service -> Variables.
 - Required Railway variable:
 	- `CENSUS_API_KEY`
+	- `FBI_CRIME_WORKBOOK_PATH=/data/crime/CIUS_Table_8_Offenses_Known_to_Law_Enforcement_by_State_by_City_2024.xlsx`
 - Flask app variables:
 	- `FLASK_SECRET_KEY`
 	- `ADMIN_USERNAME`
 	- `ADMIN_PASSWORD_HASH`
 - Local development can use `.env` or `data/cache/census_api_key.txt`, and both are ignored by Git.
+- Locally, if `FBI_CRIME_WORKBOOK_PATH` is not set, the FBI crime workbook defaults to `data/cache/crime/CIUS_Table_8_Offenses_Known_to_Law_Enforcement_by_State_by_City_2024.xlsx`.

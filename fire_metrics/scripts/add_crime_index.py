@@ -9,6 +9,7 @@ File: CIUS_Table_8_Offenses_Known_to_Law_Enforcement_by_State_by_City_2024.xlsx
 """
 import argparse
 import datetime
+import os
 import re
 import urllib.request
 import zipfile
@@ -22,9 +23,54 @@ INPUT_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_LANDLO
 OUTPUT_FILE = BASE_DIR / "output" / "us_cities_100k_population_ranked_WITH_CRIME_INDEX.xlsx"
 CACHE_DIR = BASE_DIR / "data" / "cache" / "crime"
 GAZETTEER_DIR = BASE_DIR / "data" / "cache" / "census_gazetteer"
+FBI_TABLE_8_FILENAME = "CIUS_Table_8_Offenses_Known_to_Law_Enforcement_by_State_by_City_2024.xlsx"
 
-# FBI CIUS Table 8 data file
-FBI_TABLE_8_FILE = CACHE_DIR / "real_download_test" / "offenses-known-to-le-2024" / "CIUS_Table_8_Offenses_Known_to_Law_Enforcement_by_State_by_City_2024.xlsx"
+# Default (local-dev) location of the manually-provided FBI CIUS Table 8
+# workbook. Production should set FBI_CRIME_WORKBOOK_PATH explicitly; if it
+# is missing but the app is clearly running on Railway or already using a
+# /data SQLite path, fall back to the attached /data volume.
+_LOCAL_FBI_TABLE_8_FILE = CACHE_DIR / FBI_TABLE_8_FILENAME
+_VOLUME_FBI_TABLE_8_FILE = Path("/data/crime") / FBI_TABLE_8_FILENAME
+
+
+def _looks_like_volume_runtime() -> bool:
+    if any(
+        os.getenv(name)
+        for name in (
+            "RAILWAY_ENVIRONMENT",
+            "RAILWAY_ENVIRONMENT_NAME",
+            "RAILWAY_PROJECT_ID",
+            "RAILWAY_SERVICE_ID",
+        )
+    ):
+        return True
+    db_path = os.getenv("FIRE_METRICS_DB_PATH", "").strip().replace("\\", "/")
+    return db_path == "/data/fire_metrics.db" or db_path.startswith("/data/")
+
+
+def normalize_table_8_header(value) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def get_fbi_crime_workbook_path() -> Path:
+    """Path to the manually-provided FBI Table 8 workbook.
+
+    Configurable via FBI_CRIME_WORKBOOK_PATH. In production, set it to:
+    /data/crime/CIUS_Table_8_Offenses_Known_to_Law_Enforcement_by_State_by_City_2024.xlsx
+
+    This mirrors FIRE_METRICS_DB_PATH in db.py: production data belongs on
+    the persistent volume, while local dev can fall back to a repo-local
+    ignored cache path.
+
+    Evaluated at call time (not a module-level constant) so it always
+    reflects the current environment, matching get_db_path()'s pattern.
+    """
+    configured = os.getenv("FBI_CRIME_WORKBOOK_PATH", "").strip()
+    if configured:
+        return Path(configured)
+    if _looks_like_volume_runtime():
+        return _VOLUME_FBI_TABLE_8_FILE
+    return _LOCAL_FBI_TABLE_8_FILE
 
 CITY_COL_CANDIDATES = ["city", "City"]
 STATE_COL_CANDIDATES = ["state", "State", "state_abbr"]  # Prefer full state names
@@ -249,14 +295,12 @@ def load_fbi_table_8(fbi_file=None):
     - Larceny-theft
     - Motor vehicle theft
     """
-    fbi_file = Path(fbi_file) if fbi_file is not None else FBI_TABLE_8_FILE
+    fbi_file = Path(fbi_file) if fbi_file is not None else get_fbi_crime_workbook_path()
     if not fbi_file.exists():
         print(f"\n❌ FBI Table 8 file not found:")
         print(f"   {fbi_file}")
-        print(f"\n📥 Download from:")
-        print(f"   https://cde.ucr.cjis.gov/LATEST/webapp/#/pages/downloads")
-        print(f"\n📋 Look for: 'Crime in the United States Annual Reports'")
-        print(f"   2024 Download → Extract → CIUS_Table_8_Offenses_Known_to_Law_Enforcement_by_State_by_City_2024.xlsx")
+        print("\nUpload it from the FIRE Metric Admin Data Tools page, or set FBI_CRIME_WORKBOOK_PATH.")
+        print("Official source: https://cde.ucr.cjis.gov/")
         raise RuntimeError(f"FBI Table 8 file required at: {fbi_file}")
 
     # Read Excel with header at row 3 (0-indexed)
@@ -265,8 +309,9 @@ def load_fbi_table_8(fbi_file=None):
     print(f"✓ Loaded FBI Table 8 data: {len(df)} records")
     print(f"  Columns: {', '.join(str(c) for c in df.columns.tolist()[:5])}...")
     
-    # Clean up column names: convert to string, remove newlines, lowercase, strip
-    df.columns = [str(c).replace('\n', ' ').strip().lower() for c in df.columns]
+    # Clean up column names: multiline/extra whitespace/case all normalize
+    # to the same keys used by the pipeline.
+    df.columns = [normalize_table_8_header(c) for c in df.columns]
     
     # Normalize State and City
     df = df.copy()
@@ -470,7 +515,7 @@ def build_output_sheet(crime_data_df):
 
 
 def build_crime_index(input_path=None, output_path=None, fbi_file=None, sample=None):
-    """Build the Crime Index sheet from the manually-provided FBI Table 8 file.
+    """Build the Crime Index sheet from the uploaded/configured FBI Table 8 file.
 
     Raises on any step failure (previously some steps silently printed an
     error and returned early — that's unsafe for orchestration, since a

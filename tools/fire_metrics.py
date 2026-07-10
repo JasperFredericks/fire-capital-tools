@@ -39,8 +39,10 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -102,6 +104,93 @@ def _refresh_status() -> dict:
         "last_refresh_error": metadata.get("last_refresh_error"),
         "city_count": total_cities,
     }
+
+
+_SCRIPTS_DIR = REPO_ROOT / "fire_metrics" / "scripts"
+
+# The real FBI Table 8 workbook is a few MB; this is generous headroom
+# while still catching an obviously-wrong file quickly with a clear
+# message. Flask's own global MAX_CONTENT_LENGTH (20 MB, see config.py) is
+# a hard backstop above this for the whole app, independent of this check.
+MAX_CRIME_WORKBOOK_BYTES = 10 * 1024 * 1024
+
+# Matches add_crime_index.load_fbi_table_8's header=3 (0-indexed) -- the
+# workbook has a few title rows before the real header.
+CRIME_WORKBOOK_HEADER_ROW = 4
+CRIME_WORKBOOK_REQUIRED_COLUMNS = {"state", "city", "population", "violent crime", "property crime"}
+
+
+def _normalize_crime_workbook_header(value) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip().casefold()
+
+
+def _get_crime_workbook_path() -> Path:
+    """fire_metrics/scripts isn't a real package -- it's a directory of
+    standalone scripts imported via sys.path insertion, the same way
+    orchestrator.py does it. Mirrored here (rather than importing
+    orchestrator itself) since this web process deliberately doesn't
+    import the pipeline/orchestration modules otherwise -- only the
+    refresh subprocess does; see _start_refresh()'s docstring for why.
+    """
+    if str(_SCRIPTS_DIR) not in sys.path:
+        sys.path.insert(0, str(_SCRIPTS_DIR))
+    from add_crime_index import get_fbi_crime_workbook_path
+    return get_fbi_crime_workbook_path()
+
+
+def _crime_workbook_status() -> dict:
+    path = _get_crime_workbook_path()
+    if not path.exists():
+        return {"exists": False, "uploaded_at": None, "path": str(path)}
+    uploaded_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+    return {"exists": True, "uploaded_at": uploaded_at, "path": str(path)}
+
+
+def _validate_crime_workbook_bytes(data: bytes) -> str | None:
+    """Return an error message if `data` doesn't look like a real FBI
+    Table 8 workbook, or None if it looks valid enough to save.
+
+    This is a structural sanity check, not a re-implementation of the
+    crime pipeline's own matching/scoring logic -- just enough to reject
+    an obviously-wrong file (wrong format, wrong sheet layout, wrong
+    columns) with a clear reason up front, instead of silently accepting
+    it and having the actual pipeline run fail confusingly later, or
+    worse, "succeed" on garbage data.
+    """
+    import openpyxl
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except Exception as exc:
+        return f"Could not read this file as an Excel workbook: {exc}"
+
+    try:
+        ws = wb.worksheets[0]
+        header_cells = next(
+            ws.iter_rows(min_row=CRIME_WORKBOOK_HEADER_ROW, max_row=CRIME_WORKBOOK_HEADER_ROW, values_only=True),
+            None,
+        )
+        if header_cells is None:
+            return (
+                f"This workbook doesn't have a row {CRIME_WORKBOOK_HEADER_ROW} -- the FBI "
+                f"Table 8 workbook has a few title rows before its real header row, which "
+                f"is expected there."
+            )
+
+        normalized = {_normalize_crime_workbook_header(cell) for cell in header_cells if cell is not None}
+        missing = CRIME_WORKBOOK_REQUIRED_COLUMNS - normalized
+        if missing:
+            found_preview = ", ".join(sorted(normalized)[:15]) or "(no column headers found)"
+            return (
+                f"This doesn't look like an FBI Table 8 workbook. Expected a header row at "
+                f"row {CRIME_WORKBOOK_HEADER_ROW} including columns "
+                f"{sorted(CRIME_WORKBOOK_REQUIRED_COLUMNS)}, but couldn't find: {sorted(missing)}. "
+                f"Found instead: {found_preview}"
+            )
+    finally:
+        wb.close()
+
+    return None
 
 
 def _start_refresh(skip_climate: bool = False, skip_crime: bool = True) -> bool:
@@ -232,6 +321,7 @@ def index():
         status = safe_refresh_status()
         context = {
             "status": status,
+            "crime_workbook": _crime_workbook_status(),
             "success_message": None,
             "error_message": None,
             "search_query": "",
@@ -265,6 +355,7 @@ def index():
                 payload = {
                     "success_message": context["success_message"],
                     "error_message": context["error_message"],
+                    "crime_workbook": _crime_workbook_status(),
                 }
                 payload.update(safe_refresh_status())
                 return jsonify(payload), status_code
@@ -323,6 +414,7 @@ def index():
                 "last_refresh_at": None,
                 "last_refresh_error": str(exc),
                 "city_count": 0,
+                "crime_workbook": {"exists": False, "uploaded_at": None},
             }), 500
         raise
 
@@ -347,6 +439,72 @@ def search():
 @login_required
 def refresh_status():
     return jsonify(_refresh_status())
+
+
+@fire_metrics_bp.route("/upload-crime-workbook", methods=["POST"])
+@login_required
+def upload_crime_workbook():
+    def safe_crime_workbook_status() -> dict:
+        try:
+            return _crime_workbook_status()
+        except Exception:
+            return {"exists": False, "uploaded_at": None}
+
+    def respond(success: bool, message: str, status_code: int = 200):
+        return jsonify({
+            "success": success,
+            "message": message,
+            "crime_workbook": safe_crime_workbook_status(),
+        }), status_code
+
+    try:
+        file = request.files.get("crime_workbook")
+        if file is None or not file.filename:
+            return respond(False, "No file selected.", 400)
+
+        if not file.filename.lower().endswith(".xlsx"):
+            return respond(False, "File must be a .xlsx workbook.", 400)
+
+        data = file.read()
+        if not data:
+            return respond(False, "File is empty. Upload the .xlsx workbook exactly as downloaded from the FBI.", 400)
+
+        if len(data) > MAX_CRIME_WORKBOOK_BYTES:
+            size_mb = len(data) / (1024 * 1024)
+            return respond(
+                False,
+                f"File is too large ({size_mb:.1f} MB) -- the real FBI Table 8 workbook is "
+                f"only a few MB. Check you selected the right file.",
+                400,
+            )
+
+        validation_error = _validate_crime_workbook_bytes(data)
+        if validation_error:
+            return respond(False, validation_error, 400)
+
+        # Uses the same resolver the crime pipeline uses. In production
+        # this should be FBI_CRIME_WORKBOOK_PATH on the persistent /data
+        # volume, so the file survives redeploys the same way the SQLite
+        # DB now does via FIRE_METRICS_DB_PATH.
+        target_path = _get_crime_workbook_path()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile("wb", dir=target_path.parent, delete=False) as tmp:
+                tmp.write(data)
+                tmp_path = Path(tmp.name)
+            os.replace(tmp_path, target_path)
+        finally:
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink()
+
+        return respond(
+            True,
+            "Crime workbook uploaded. It will be picked up the next time you run "
+            "\"Refresh All Data\".",
+        )
+    except Exception as exc:
+        return respond(False, f"Unexpected error while uploading: {exc}", 500)
 
 
 @fire_metrics_bp.route("/debug-refresh")

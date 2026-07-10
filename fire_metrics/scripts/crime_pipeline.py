@@ -18,7 +18,8 @@ the same underlying matching/scoring/override/fill logic, unchanged, but
 chains them internally through a temp directory instead.
 
 Crime data itself stays manual/periodic: this pipeline still requires a
-manually-downloaded FBI Table 8 workbook (see add_crime_index.py's module
+manually-downloaded FBI Table 8 workbook uploaded through Admin Data Tools
+or configured with FBI_CRIME_WORKBOOK_PATH (see add_crime_index.py's module
 docstring) -- there is no live crime API to call instead.
 """
 
@@ -47,7 +48,7 @@ def run_crime_pipeline(input_path=None, output_path=None, fbi_file=None, sample=
         and the decision-useful crime columns merged onto "Clean Cities
         100k+".
     fbi_file: the manually-downloaded FBI Table 8 workbook (defaults to
-        add_crime_index.py's own default cache location).
+        add_crime_index.py's FBI_CRIME_WORKBOOK_PATH resolver).
     sample: passed through to build_crime_index (limits to N cities, 1 per
         state, for a quick test run).
 

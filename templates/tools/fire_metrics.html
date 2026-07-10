@@ -112,8 +112,8 @@
   <h2 class="dashboard-section-title">Admin Data Tools</h2>
   <p class="page-subtitle" style="margin-top:0;">
     Refresh runs in the background and can take several minutes (climate risk especially downloads a nationwide
-    shapefile the first time it runs). Crime index only refreshes if a manually-provided FBI Table 8 workbook is
-    already in place — see the FIRE Metrics README for that file's expected location.
+    shapefile the first time it runs). Crime index only refreshes if a manually-provided FBI Table 8 workbook has
+    been uploaded below.
   </p>
 
   <form id="admin-actions-form" method="post" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:14px;">
@@ -126,6 +126,54 @@
 
   <div id="admin-success-message" class="alert alert-success" style="margin-top:16px; {% if not success_message %}display:none;{% endif %}">{{ success_message or "" }}</div>
   <div id="admin-error-message" class="error-panel visible" role="alert" style="margin-top:16px; {% if not error_message %}display:none;{% endif %}">{{ error_message or "" }}</div>
+
+  <div class="admin-data-panel">
+    <div class="dashboard-section-title" style="font-size:1rem;">FBI Table 8 Crime Workbook Upload</div>
+    <p class="page-subtitle" style="margin-top:4px;">
+      Use this when the FBI publishes a new annual city-level crime workbook. Uploading the file only replaces the
+      stored source workbook; the crime scores update the next time you run Refresh All Data.
+    </p>
+
+    <a href="https://cde.ucr.cjis.gov/" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="margin-top:10px;">
+      Open FBI Crime Data Explorer
+    </a>
+
+    <ol class="admin-instruction-list">
+      <li>Go to the FBI Crime Data Explorer using the link above.</li>
+      <li>Find the documents or downloads area for downloadable FBI crime data files.</li>
+      <li>Look for CIUS Annual Reports. CIUS means Crime in the United States.</li>
+      <li>Find the most recent year's report and locate Table 8 - Offenses Known to Law Enforcement by State by City.</li>
+      <li>Download that file. It should be an .xlsx workbook.</li>
+      <li>Come back here and upload that .xlsx file below.</li>
+    </ol>
+
+    <div class="alert alert-warning" style="margin-top:12px;">
+      Do not rename the file. Do not open it and re-save it in Excel first. Upload the workbook exactly as downloaded
+      from the FBI, because re-saving can silently change formatting the import depends on.
+    </div>
+
+    <div class="status-chip-row" style="margin-top:8px;">
+      <span id="crime-workbook-chip" class="source-badge source-badge-{{ 'current' if crime_workbook.exists else 'missing' }}">
+        {{ 'UPLOADED' if crime_workbook.exists else 'NOT UPLOADED' }}
+      </span>
+      <span id="crime-workbook-uploaded-text" class="result-period">
+        {{ 'Last uploaded: ' + crime_workbook.uploaded_at if crime_workbook.exists else 'No workbook uploaded yet' }}
+      </span>
+    </div>
+    <div id="crime-workbook-path-text" class="result-note" style="margin-top:6px;">
+      Expected path: {{ crime_workbook.path }}
+    </div>
+
+    <form id="crime-upload-form" class="admin-upload-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="form-label" for="crime-workbook-file">FBI Table 8 .xlsx file</label>
+      <div class="admin-upload-row">
+        <input id="crime-workbook-file" type="file" name="crime_workbook" accept=".xlsx">
+        <button id="btn-upload-crime" type="submit" class="btn btn-ghost">Upload Crime Workbook</button>
+      </div>
+    </form>
+    <div id="crime-upload-message" class="alert alert-info" style="margin-top:10px; display:none;"></div>
+  </div>
 </div>
 
 <div class="card">
@@ -137,7 +185,7 @@
       <div class="result-note">Job growth uses BLS LAUS resident employment, not physical job locations.</div>
       <div class="result-note">FEMA NRI is county-level and may not perfectly represent multi-county cities.</div>
       <div class="result-note">Some crime rows require manual review where agency/city matching is unreliable.</div>
-      <div class="result-note">Each metric shows its own last-refreshed time — population/income/home value/employment/climate refresh live; crime index refreshes only from a manually-provided source file.</div>
+      <div class="result-note">Each metric shows its own last-refreshed time — population/income/home value/employment/climate refresh live; crime index refreshes only after a FBI Table 8 workbook has been uploaded in Admin Data Tools.</div>
     </div>
   </details>
 </div>
@@ -146,6 +194,7 @@
 (() => {
   const searchUrl = "{{ url_for('fire_metrics.search') }}";
   const statusUrl = "{{ url_for('fire_metrics.refresh_status') }}";
+  const uploadCrimeUrl = "{{ url_for('fire_metrics.upload_crime_workbook') }}";
   const form = document.getElementById("fire-search-form");
   const input = document.getElementById("fire-search-input");
   const messageEl = document.getElementById("fire-search-message");
@@ -445,11 +494,75 @@
         const payload = await res.json();
         showAdminMessage(payload.success_message, payload.error_message);
         applyStatusPayload(payload);
+        applyCrimeWorkbookStatus(payload.crime_workbook);
         if (payload.running) {
           startStatusPolling();
         }
       } catch (err) {
         showAdminMessage(null, `Request failed: ${err}`);
+      }
+    });
+  }
+
+  // Crime workbook upload -- its own form/fetch() call for the same reason
+  // as the admin actions above: a normal form submit would navigate the
+  // page and discard the search dashboard.
+  const crimeChip = document.getElementById("crime-workbook-chip");
+  const crimeUploadedText = document.getElementById("crime-workbook-uploaded-text");
+  const crimePathText = document.getElementById("crime-workbook-path-text");
+  const crimeUploadForm = document.getElementById("crime-upload-form");
+  const crimeUploadMessage = document.getElementById("crime-upload-message");
+
+  function applyCrimeWorkbookStatus(crimeStatus) {
+    if (!crimeStatus) return;
+    if (crimeChip) {
+      crimeChip.className = `source-badge source-badge-${crimeStatus.exists ? "current" : "missing"}`;
+      crimeChip.textContent = crimeStatus.exists ? "UPLOADED" : "NOT UPLOADED";
+    }
+    if (crimeUploadedText) {
+      crimeUploadedText.textContent = crimeStatus.exists
+        ? `Last uploaded: ${crimeStatus.uploaded_at}`
+        : "No workbook uploaded yet";
+    }
+    if (crimePathText) {
+      crimePathText.textContent = `Expected path: ${crimeStatus.path || ""}`;
+    }
+  }
+
+  function showCrimeUploadMessage(text, kind = "info") {
+    if (!crimeUploadMessage) return;
+    if (!text) {
+      crimeUploadMessage.style.display = "none";
+      return;
+    }
+    crimeUploadMessage.className = `alert alert-${kind}`;
+    crimeUploadMessage.textContent = text;
+    crimeUploadMessage.style.display = "block";
+  }
+
+  if (crimeUploadForm) {
+    crimeUploadForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const fileInput = document.getElementById("crime-workbook-file");
+      if (!fileInput || !fileInput.files || !fileInput.files.length) {
+        showCrimeUploadMessage("Choose a .xlsx file first.", "warning");
+        return;
+      }
+      const formData = new FormData(crimeUploadForm);
+      try {
+        const res = await fetch(uploadCrimeUrl, {
+          method: "POST",
+          body: formData,
+          headers: { "X-Requested-With": "XMLHttpRequest" },
+        });
+        const payload = await res.json();
+        showCrimeUploadMessage(payload.message, payload.success ? "success" : "error");
+        applyCrimeWorkbookStatus(payload.crime_workbook);
+        if (payload.success) {
+          fileInput.value = "";
+        }
+      } catch (err) {
+        showCrimeUploadMessage(`Upload failed: ${err}`, "error");
       }
     });
   }

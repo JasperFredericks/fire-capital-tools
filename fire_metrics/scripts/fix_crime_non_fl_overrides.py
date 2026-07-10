@@ -16,11 +16,12 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import load_workbook
 
+from add_crime_index import get_fbi_crime_workbook_path, normalize_table_8_header
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_WB = BASE_DIR / "output" / "us_cities_100k_population_ranked_FORMATTED_FINAL_BEFORE_CRIME_FIX.xlsx"
 OUTPUT_WB = BASE_DIR / "output" / "us_cities_100k_population_ranked_CRIME_NON_FL_FIXED.xlsx"
 BACKUP_WB = BASE_DIR / "output" / "us_cities_100k_population_ranked_FORMATTED_FINAL_BEFORE_CRIME_FIX.backup_before_non_fl_crime_fix.xlsx"
-FBI_TABLE_8 = BASE_DIR / "data" / "cache" / "crime" / "real_download_test" / "offenses-known-to-le-2024" / "CIUS_Table_8_Offenses_Known_to_Law_Enforcement_by_State_by_City_2024.xlsx"
 
 STATE_TO_ABBR = {
     "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR", "CALIFORNIA": "CA",
@@ -179,9 +180,9 @@ def ensure_columns(ws, col_idx, required):
 
 
 def load_fbi_table_8(fbi_file=None):
-    fbi_file = Path(fbi_file) if fbi_file is not None else FBI_TABLE_8
+    fbi_file = Path(fbi_file) if fbi_file is not None else get_fbi_crime_workbook_path()
     df = pd.read_excel(fbi_file, sheet_name=0, header=3, engine="openpyxl")
-    df.columns = [str(c).replace("\n", " ").strip().lower() for c in df.columns]
+    df.columns = [normalize_table_8_header(c) for c in df.columns]
     df = df.copy()
     df["state"] = df["state"].astype(str).str.upper().map(STATE_TO_ABBR)
     df["city"] = df["city"].astype(str).str.strip()
@@ -267,7 +268,7 @@ def fix_crime_non_fl_overrides(input_path=None, output_path=None, backup_path=No
     input_wb = Path(input_path) if input_path is not None else INPUT_WB
     output_wb = Path(output_path) if output_path is not None else OUTPUT_WB
     backup_wb = Path(backup_path) if backup_path is not None else BACKUP_WB
-    fbi_file = Path(fbi_file) if fbi_file is not None else FBI_TABLE_8
+    fbi_file = Path(fbi_file) if fbi_file is not None else get_fbi_crime_workbook_path()
 
     if not input_wb.exists():
         raise FileNotFoundError(f"Input workbook not found: {input_wb}")

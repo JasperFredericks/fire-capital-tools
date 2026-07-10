@@ -74,30 +74,41 @@ def header_map(ws, row):
     }
 
 
+def detect_clean_header_row(clean_ws):
+    for row in (2, 1):
+        headers = header_map(clean_ws, row)
+        if "city" in headers and "state_abbr" in headers:
+            return row, headers
+    return 2, header_map(clean_ws, 2)
+
+
 def ensure_clean_crime_columns(clean_ws):
-    row2_headers = header_map(clean_ws, 2)
-    start_col = clean_ws.max_column + 1
+    header_row, headers = detect_clean_header_row(clean_ws)
     for name in CRIME_COLUMNS:
-        if name not in row2_headers:
+        if name not in headers:
             col = clean_ws.max_column + 1
-            clean_ws.cell(row=2, column=col, value=name)
-            row2_headers[name] = col
+            clean_ws.cell(row=header_row, column=col, value=name)
+            headers[name] = col
     # Reset start based on first crime column now present.
-    crime_cols = [row2_headers[name] for name in CRIME_COLUMNS]
+    crime_cols = [headers[name] for name in CRIME_COLUMNS]
     start_col = min(crime_cols)
     end_col = max(crime_cols)
 
-    # Section row label and header styling.
+    # Section row label and header styling. Some source workbooks have a
+    # two-row section/header layout; current generated workbooks have
+    # headers on row 1. Support both shapes without changing any crime
+    # scoring or matching behavior.
     for c in range(start_col, end_col + 1):
-        clean_ws.cell(row=1, column=c, value="Crime Index")
-        clean_ws.cell(row=1, column=c).fill = CRIME_SECTION_FILL
-        clean_ws.cell(row=1, column=c).font = Font(bold=True)
+        if header_row > 1:
+            clean_ws.cell(row=header_row - 1, column=c, value="Crime Index")
+            clean_ws.cell(row=header_row - 1, column=c).fill = CRIME_SECTION_FILL
+            clean_ws.cell(row=header_row - 1, column=c).font = Font(bold=True)
 
-        clean_ws.cell(row=2, column=c).fill = CRIME_SECTION_FILL
-        clean_ws.cell(row=2, column=c).font = Font(bold=True)
-        clean_ws.cell(row=2, column=c).alignment = Alignment(wrap_text=True, horizontal="center", vertical="center")
+        clean_ws.cell(row=header_row, column=c).fill = CRIME_SECTION_FILL
+        clean_ws.cell(row=header_row, column=c).font = Font(bold=True)
+        clean_ws.cell(row=header_row, column=c).alignment = Alignment(wrap_text=True, horizontal="center", vertical="center")
 
-    return row2_headers
+    return header_row, headers
 
 
 def update_readme_crime_section(readme_ws):
@@ -195,7 +206,7 @@ def integrate_crime_into_clean_cities(input_path=None, output_path=None):
     crime_ws = wb["Crime Index"]
     readme_ws = wb["README"]
 
-    clean_headers = ensure_clean_crime_columns(clean_ws)
+    clean_header_row, clean_headers = ensure_clean_crime_columns(clean_ws)
     crime_headers = header_map(crime_ws, 1)
 
     # Build lookup from Crime Index.
@@ -208,7 +219,8 @@ def integrate_crime_into_clean_cities(input_path=None, output_path=None):
             continue
         crime_lookup[key] = r
 
-    total_rows = clean_ws.max_row - 2
+    data_start_row = clean_header_row + 1
+    total_rows = clean_ws.max_row - clean_header_row
     matched = 0
     unmatched = 0
     unmatched_rows = []
@@ -221,7 +233,7 @@ def integrate_crime_into_clean_cities(input_path=None, output_path=None):
     manual_col_start = clean_headers[CRIME_COLUMNS[0]]
     manual_col_end = clean_headers[CRIME_COLUMNS[-1]]
 
-    for r in range(3, clean_ws.max_row + 1):
+    for r in range(data_start_row, clean_ws.max_row + 1):
         city = clean_ws.cell(row=r, column=clean_headers["city"]).value
         state = clean_ws.cell(row=r, column=clean_headers["state_abbr"]).value
         st_abbr = normalize_state(state)

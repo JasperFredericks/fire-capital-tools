@@ -9,10 +9,10 @@ its own metric-family timestamp.
 
 Crime stays manual/periodic (see crime_pipeline.py's own docstring -- the
 FBI API is dead, there is no live source): this orchestrator only refreshes
-crime from whatever FBI Table 8 workbook is already sitting at its default
-cache location. If that file isn't present, crime is skipped (not an
-error) and its timestamp is left untouched, exactly like the rest of the
-"only stamp what actually refreshed" rule below.
+crime from the FBI Table 8 workbook uploaded through Admin Data Tools and
+resolved by FBI_CRIME_WORKBOOK_PATH. If that file isn't present, crime is
+skipped (not an error) and its timestamp is left untouched, exactly like
+the rest of the "only stamp what actually refreshed" rule below.
 """
 
 from __future__ import annotations
@@ -66,13 +66,13 @@ def run_full_refresh(
     skip_crime: bool = False,
 ) -> dict[str, Any]:
     """Run the real Census/ACS chain, BLS job growth, climate risk, and
-    (if a manually-provided FBI file is present) the crime pipeline, then
+    (if an uploaded FBI file is present) the crime pipeline, then
     ingest everything into SQLite. Returns a summary of what ran and what
     got skipped/failed, plus each metric family's row/timestamp outcome.
 
     skip_climate/skip_crime exist because both are slow (climate: a
     nationwide TIGER download the first time it runs; crime: requires a
-    manually-placed file) -- a caller doing a quick "refresh the live
+    uploaded FBI workbook) -- a caller doing a quick "refresh the live
     stuff" pass can skip them without losing anything, since neither one's
     timestamp gets touched unless it actually ran.
     """
@@ -137,23 +137,24 @@ def run_full_refresh(
         else:
             steps.append({"step": "climate_fetch", "status": "skipped"})
 
-        # 6. Crime -- manual/periodic. Only refreshes if a manually-placed
-        #    FBI Table 8 workbook already exists; otherwise this is a no-op,
-        #    not an error, and crime_updated_at is left untouched.
+        # 6. Crime -- manual/periodic. Only refreshes if an uploaded FBI
+        #    Table 8 workbook already exists at FBI_CRIME_WORKBOOK_PATH;
+        #    otherwise this is a no-op, not an error, and crime_updated_at
+        #    is left untouched.
         #
         #    The imports themselves are wrapped in a crime_import step for
         #    the same reason as climate above -- a failure here (missing
         #    dependency, etc.) must be recorded, not silently swallowed.
         def _load_crime_modules():
             from crime_pipeline import run_crime_pipeline
-            from add_crime_index import FBI_TABLE_8_FILE
-            return run_crime_pipeline, FBI_TABLE_8_FILE
+            from add_crime_index import get_fbi_crime_workbook_path
+            return run_crime_pipeline, get_fbi_crime_workbook_path()
 
         if not skip_crime:
             loaded = _step(steps, "crime_import", _load_crime_modules)
             if loaded is not None:
-                run_crime_pipeline, FBI_TABLE_8_FILE = loaded
-                if FBI_TABLE_8_FILE.exists():
+                run_crime_pipeline, fbi_workbook_path = loaded
+                if fbi_workbook_path.exists():
                     _step(steps, "crime_fetch", run_crime_pipeline)
                     if CRIME_FINAL_FILE.exists():
                         ingest_results["crime"] = _step(
@@ -162,7 +163,7 @@ def run_full_refresh(
                 else:
                     steps.append({
                         "step": "crime_fetch", "status": "skipped",
-                        "reason": f"No manually-provided FBI Table 8 workbook at {FBI_TABLE_8_FILE}",
+                        "reason": f"No uploaded FBI Table 8 workbook at {fbi_workbook_path} -- upload one via Admin Data Tools.",
                     })
         else:
             steps.append({"step": "crime_fetch", "status": "skipped"})
