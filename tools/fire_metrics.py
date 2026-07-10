@@ -18,9 +18,14 @@ Changes from Beckett's version, and why (see final report for full detail):
 - Format Only / Dry Run options are removed along with it -- both were
   specific to the old single-workbook run_update() scaffold and don't map
   to the new per-metric-family orchestration.
-- Refresh All Data now runs the real orchestrator as a background thread
+- Refresh All Data now runs the real orchestrator in a separate OS process
+  (fire_metrics_updater/refresh_worker.py, launched via subprocess.Popen),
+  with status tracked in the refresh_metadata table rather than an
+  in-process thread/lock -- a prior in-process-thread version of this
+  caused 502s in production, since the CPU-heavy climate-risk step shares
+  this process's GIL with (and starves) the request that triggered it.
   (Beckett's version called it synchronously, guarded only by a
-  re-entrancy lock -- not actually a background job).
+  re-entrancy lock -- not actually a background job.)
 - Rebuild Search Index is repurposed: it now re-ingests from whatever
   pipeline output files already exist on disk, without calling any live
   API -- useful after running a script by hand from the CLI.
@@ -32,7 +37,9 @@ Changes from Beckett's version, and why (see final report for full detail):
 from __future__ import annotations
 
 import io
-import threading
+import os
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -41,16 +48,42 @@ from flask_login import login_required
 
 from fire_metrics.fire_metrics_updater import db as db_module
 from fire_metrics.fire_metrics_updater.city_search import find_city_match
-from fire_metrics.fire_metrics_updater.orchestrator import run_full_refresh
 
 fire_metrics_bp = Blueprint("fire_metrics", __name__)
 
-_refresh_lock = threading.Lock()
-_refresh_thread: threading.Thread | None = None
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# A refresh in the "running" state for longer than this is treated as
+# crashed/stuck rather than genuinely in progress, so one dead subprocess
+# (e.g. killed by an OOM or a Railway restart) can't permanently block
+# every future refresh. Generous relative to the real chain (climate risk
+# alone is documented elsewhere in this file as "several minutes" on a
+# cold cache) but still bounded.
+REFRESH_STALE_AFTER_SECONDS = 60 * 60
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_refresh_running(metadata: dict) -> bool:
+    """Derive "is a refresh actually running" from persisted state alone --
+    no in-process thread/lock object, since the real work now happens in a
+    separate OS process (possibly started by a different web request than
+    the one asking) and status must be readable regardless of which
+    process/request is checking.
+    """
+    if metadata.get("refresh_running") != "1":
+        return False
+    started_at = metadata.get("refresh_started_at")
+    if not started_at:
+        return False
+    try:
+        started = datetime.fromisoformat(started_at)
+    except ValueError:
+        return False
+    age_seconds = (datetime.now(timezone.utc) - started).total_seconds()
+    return age_seconds < REFRESH_STALE_AFTER_SECONDS
 
 
 def _refresh_status() -> dict:
@@ -58,7 +91,7 @@ def _refresh_status() -> dict:
         metadata = db_module.get_metadata(conn)
         total_cities = conn.execute("SELECT COUNT(*) FROM cities").fetchone()[0]
 
-    running = _refresh_thread is not None and _refresh_thread.is_alive()
+    running = _is_refresh_running(metadata)
     status = "running" if running else metadata.get("last_refresh_status", "missing" if total_cities == 0 else "current")
 
     return {
@@ -70,34 +103,55 @@ def _refresh_status() -> dict:
     }
 
 
-def _run_refresh_background(skip_climate: bool, skip_crime: bool) -> None:
-    try:
-        result = run_full_refresh(skip_climate=skip_climate, skip_crime=skip_crime)
-        with db_module.get_connection() as conn:
-            db_module.set_metadata(
-                conn,
-                last_refresh_status="current" if not result["errors"] else "error",
-                last_refresh_error="; ".join(f"{e['step']}: {e['error']}" for e in result["errors"]) or None,
-            )
-    except Exception as exc:
-        with db_module.get_connection() as conn:
-            db_module.set_metadata(conn, last_refresh_status="error", last_refresh_error=str(exc))
-    finally:
-        _refresh_lock.release()
-
-
 def _start_refresh(skip_climate: bool = False, skip_crime: bool = True) -> bool:
-    """Start the refresh as a background thread. Returns False if a refresh
-    is already running (the caller should show that as a message, not
-    start a second overlapping one).
+    """Start the refresh as a real, separate OS process (fire_metrics/
+    fire_metrics_updater/refresh_worker.py) -- not a thread. Threads share
+    this process's GIL, so the CPU-heavy climate-risk step (geopandas/GDAL
+    processing) was starving this same process's ability to answer the
+    request that triggered it, until Railway's proxy gave up and returned
+    a 502 -- confirmed empirically, and confirmed NOT fixed by
+    threaded=True (that only helps connection-accept concurrency, not
+    GIL/CPU contention). A real subprocess has its own GIL.
+
+    Returns False if a refresh is already running and not stale (the
+    caller should show that as a message, not start a second overlapping
+    one). There's a small theoretical check-then-write race if two
+    requests hit this within microseconds of each other -- acceptable for
+    an admin button a human clicks, not worth the extra complexity of a
+    manual SQLite write-lock for.
     """
-    global _refresh_thread
-    if not _refresh_lock.acquire(blocking=False):
-        return False
-    _refresh_thread = threading.Thread(
-        target=_run_refresh_background, args=(skip_climate, skip_crime), daemon=True
-    )
-    _refresh_thread.start()
+    with db_module.get_connection() as conn:
+        metadata = db_module.get_metadata(conn)
+        if _is_refresh_running(metadata):
+            return False
+
+        args = [sys.executable, "-m", "fire_metrics.fire_metrics_updater.refresh_worker"]
+        if skip_climate:
+            args.append("--skip-climate")
+        if skip_crime:
+            args.append("--skip-crime")
+
+        proc = subprocess.Popen(
+            args,
+            cwd=str(REPO_ROOT),
+            env=os.environ.copy(),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        # Written here (the parent), not by the worker at its own startup:
+        # this must be visible to a second request arriving microseconds
+        # later, before the subprocess has even finished interpreter
+        # startup and its own imports -- Popen() already returns proc.pid
+        # synchronously, so there's no need to wait on the child to report
+        # it back.
+        db_module.set_metadata(
+            conn,
+            refresh_running="1",
+            refresh_started_at=_utc_now(),
+            refresh_pid=str(proc.pid),
+        )
     return True
 
 
@@ -153,18 +207,21 @@ def index():
 
     def safe_refresh_status() -> dict:
         # _refresh_status() opens its own SQLite connection -- and, right
-        # after _start_refresh() below, so does the background thread it
+        # after _start_refresh() below, so does the refresh subprocess it
         # just spawned (schema-init runs on every get_connection() call).
         # A transient "database is locked" race between those two is
         # possible. If it happens, fall back to a status payload built
         # from what we already know rather than letting the exception
-        # propagate out of this view.
+        # propagate out of this view. "running" defaults to False here --
+        # if we can't even read the DB, we genuinely don't know, and
+        # assuming "not running" lets the user retry rather than looking
+        # permanently stuck.
         try:
             return _refresh_status()
         except Exception as exc:
             return {
                 "status": "error",
-                "running": _refresh_thread is not None and _refresh_thread.is_alive(),
+                "running": False,
                 "last_refresh_at": None,
                 "last_refresh_error": f"Could not read refresh status: {exc}",
                 "city_count": 0,
