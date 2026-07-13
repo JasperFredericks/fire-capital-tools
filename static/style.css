@@ -975,6 +975,54 @@ hr.divider {
   gap: 10px;
 }
 
+.fire-city-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.comparison-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.comparison-table-wrap {
+  margin-top: 12px;
+  overflow-x: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1300px;
+  font-size: 12px;
+}
+
+.comparison-table th,
+.comparison-table td {
+  border-bottom: 1px solid #f3f4f6;
+  padding: 10px;
+  text-align: left;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.comparison-table th {
+  background: #f9fafb;
+  color: #4b5563;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.comparison-remove-btn {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
 .stat-box-freshness {
   font-size: 11px;
   color: #9ca3af;
@@ -997,6 +1045,15 @@ hr.divider {
 
   .fire-search-row {
     grid-template-columns: 1fr;
+  }
+
+  .comparison-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .comparison-table {
+    min-width: 1100px;
   }
 
   .stats-grid { grid-template-columns: repeat(2, 1fr); }

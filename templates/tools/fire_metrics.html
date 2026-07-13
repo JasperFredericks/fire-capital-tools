@@ -96,6 +96,10 @@
         <div id="metric-population-family-updated" class="stat-box-freshness"></div>
       </div>
     </div>
+
+    <div class="fire-city-actions">
+      <button id="add-to-comparison-btn" type="button" class="btn btn-primary">Add to Comparison</button>
+    </div>
   </div>
 
   {% if city_preview %}
@@ -106,6 +110,44 @@
     {% endfor %}
   </div>
   {% endif %}
+</div>
+
+<div class="card">
+  <div class="result-header">
+    <div>
+      <h2 class="dashboard-section-title">City Comparison</h2>
+      <p class="page-subtitle" style="margin-top:4px;">Compare multiple cities from successful search results.</p>
+    </div>
+    <div class="comparison-actions">
+      <button id="clear-comparison-btn" type="button" class="btn btn-ghost">Clear All</button>
+    </div>
+  </div>
+
+  <div id="comparison-empty-message" class="result-note">Search and add cities to build a comparison table.</div>
+
+  <div id="comparison-table-wrap" class="comparison-table-wrap" style="display:none;">
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th>City</th>
+          <th>State</th>
+          <th>Population</th>
+          <th>Population Growth</th>
+          <th>Median Income</th>
+          <th>Income Growth</th>
+          <th>Home Value</th>
+          <th>Home Value Growth</th>
+          <th>Employment</th>
+          <th>Employment Growth</th>
+          <th>Climate</th>
+          <th>Crime</th>
+          <th>Landlord</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="comparison-table-body"></tbody>
+    </table>
+  </div>
 </div>
 
 <div class="card">
@@ -203,9 +245,17 @@
   const suggestionsEl = document.getElementById("fire-suggestions");
   const dashboardEl = document.getElementById("fire-city-dashboard");
   const statusChip = document.getElementById("status-chip");
+  const addToComparisonBtn = document.getElementById("add-to-comparison-btn");
+  const clearComparisonBtn = document.getElementById("clear-comparison-btn");
+  const comparisonEmptyMessage = document.getElementById("comparison-empty-message");
+  const comparisonWrap = document.getElementById("comparison-table-wrap");
+  const comparisonBody = document.getElementById("comparison-table-body");
 
   const payloadFromServer = {{ search_payload|tojson }};
   const initiallyRunning = {{ 'true' if status.running else 'false' }};
+  const comparisonStorageKey = "fire_metrics_city_comparison_master_v1";
+  let currentCity = null;
+  let comparisonCities = [];
 
   function fmtNum(value) {
     if (value === null || value === undefined || value === "") return "-";
@@ -239,6 +289,139 @@
     if (diffDays === 1) return "Refreshed yesterday";
     if (diffDays < 30) return `Refreshed ${diffDays} days ago`;
     return `Last updated ${date.toLocaleDateString(undefined, { year: "numeric", month: "short" })}`;
+  }
+
+  function cmpFmtNum(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    const num = Number(value);
+    if (Number.isNaN(num)) return String(value);
+    return num.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  }
+
+  function cmpFmtMoney(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    const num = Number(value);
+    if (Number.isNaN(num)) return String(value);
+    return num.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  }
+
+  function cmpFmtPct(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    const num = Number(value) * 100;
+    if (Number.isNaN(num)) return String(value);
+    return `${num.toFixed(2)}%`;
+  }
+
+  function cityKey(city) {
+    return `${String(city.city || "").trim().toLowerCase()}|${String(city.state || "").trim().toUpperCase()}`;
+  }
+
+  function saveComparison() {
+    try {
+      localStorage.setItem(comparisonStorageKey, JSON.stringify(comparisonCities));
+    } catch (error) {
+      // Keep working in-memory if browser storage is unavailable.
+    }
+  }
+
+  function loadComparison() {
+    try {
+      const raw = localStorage.getItem(comparisonStorageKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function sanitizeCity(city) {
+    return {
+      city: city.city || "",
+      state: city.state || "",
+      display_name: city.display_name || "",
+      population_current: city.population_current ?? null,
+      population_growth_recent: city.population_growth_recent ?? null,
+      median_income_current: city.median_income_current ?? null,
+      median_income_growth_recent: city.median_income_growth_recent ?? null,
+      median_home_value_current: city.median_home_value_current ?? null,
+      median_home_value_growth_recent: city.median_home_value_growth_recent ?? null,
+      employment_current: city.employment_current ?? null,
+      employment_growth_recent: city.employment_growth_recent ?? null,
+      climate_risk_score: city.climate_risk_score ?? null,
+      climate_risk_rating: city.climate_risk_rating || "",
+      crime_index_score: city.crime_index_score ?? null,
+      crime_rating: city.crime_rating || "",
+      landlord_friendliness_score: city.landlord_friendliness_score ?? null,
+      landlord_friendliness_label: city.landlord_friendliness_label || "",
+    };
+  }
+
+  function renderComparisonTable() {
+    comparisonBody.innerHTML = "";
+    if (!comparisonCities.length) {
+      comparisonWrap.style.display = "none";
+      comparisonEmptyMessage.style.display = "block";
+      return;
+    }
+
+    comparisonWrap.style.display = "block";
+    comparisonEmptyMessage.style.display = "none";
+
+    comparisonCities.forEach((city) => {
+      const tr = document.createElement("tr");
+      const rowValues = [
+        city.city || "—",
+        city.state || "—",
+        cmpFmtNum(city.population_current),
+        cmpFmtPct(city.population_growth_recent),
+        cmpFmtMoney(city.median_income_current),
+        cmpFmtPct(city.median_income_growth_recent),
+        cmpFmtMoney(city.median_home_value_current),
+        cmpFmtPct(city.median_home_value_growth_recent),
+        cmpFmtNum(city.employment_current),
+        cmpFmtPct(city.employment_growth_recent),
+        `${cmpFmtNum(city.climate_risk_score)} (${city.climate_risk_rating || "—"})`,
+        `${cmpFmtNum(city.crime_index_score)} (${city.crime_rating || "—"})`,
+        city.landlord_friendliness_label || cmpFmtNum(city.landlord_friendliness_score),
+      ];
+
+      rowValues.forEach((value) => {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.appendChild(td);
+      });
+
+      const actionTd = document.createElement("td");
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "btn btn-ghost comparison-remove-btn";
+      removeButton.textContent = "Remove";
+      removeButton.addEventListener("click", () => {
+        comparisonCities = comparisonCities.filter((item) => cityKey(item) !== cityKey(city));
+        saveComparison();
+        renderComparisonTable();
+      });
+      actionTd.appendChild(removeButton);
+      tr.appendChild(actionTd);
+
+      comparisonBody.appendChild(tr);
+    });
+  }
+
+  function resetComparisonAddButton() {
+    addToComparisonBtn.disabled = true;
+    addToComparisonBtn.textContent = "Add to Comparison";
+  }
+
+  function syncComparisonAddButton() {
+    if (!currentCity) {
+      resetComparisonAddButton();
+      return;
+    }
+    const exists = comparisonCities.some((item) => cityKey(item) === cityKey(currentCity));
+    addToComparisonBtn.disabled = exists;
+    addToComparisonBtn.textContent = exists ? "Already in Comparison" : "Add to Comparison";
   }
 
   function showMessage(text, kind = "info") {
@@ -289,6 +472,7 @@
   }
 
   function renderCity(city) {
+    currentCity = sanitizeCity(city);
     dashboardEl.style.display = "block";
     document.getElementById("city-display-name").textContent = city.display_name || `${city.city}, ${city.state}`;
     document.getElementById("city-subline").textContent = `Population rank: ${fmtNum(city.population_rank)} | Population: ${fmtNum(city.population_current)}`;
@@ -333,6 +517,8 @@
       chip.textContent = warning;
       warningsWrap.appendChild(chip);
     });
+
+    syncComparisonAddButton();
   }
 
   async function performSearch(query) {
@@ -356,12 +542,16 @@
       }
 
       if (status === "suggestions") {
+        currentCity = null;
+        resetComparisonAddButton();
         dashboardEl.style.display = "none";
         showMessage(payload.user_message || "No exact match found.", "info");
         renderSuggestions(payload.suggestions || []);
         return;
       }
 
+      currentCity = null;
+      resetComparisonAddButton();
       dashboardEl.style.display = "none";
       hideSuggestions();
       if (status === "excluded" || status === "not_found") {
@@ -370,6 +560,8 @@
         showMessage(payload.user_message || "Search failed.", "error");
       }
     } catch (err) {
+      currentCity = null;
+      resetComparisonAddButton();
       dashboardEl.style.display = "none";
       hideSuggestions();
       showMessage(`Search failed: ${err}`, "error");
@@ -380,6 +572,30 @@
     event.preventDefault();
     performSearch(input.value);
   });
+
+  addToComparisonBtn.addEventListener("click", () => {
+    if (!currentCity) return;
+    const key = cityKey(currentCity);
+    if (comparisonCities.some((item) => cityKey(item) === key)) {
+      syncComparisonAddButton();
+      return;
+    }
+    comparisonCities.push(sanitizeCity(currentCity));
+    saveComparison();
+    renderComparisonTable();
+    syncComparisonAddButton();
+  });
+
+  clearComparisonBtn.addEventListener("click", () => {
+    comparisonCities = [];
+    saveComparison();
+    renderComparisonTable();
+    syncComparisonAddButton();
+  });
+
+  comparisonCities = loadComparison();
+  renderComparisonTable();
+  resetComparisonAddButton();
 
   if (payloadFromServer) {
     if (payloadFromServer.status === "found") {
