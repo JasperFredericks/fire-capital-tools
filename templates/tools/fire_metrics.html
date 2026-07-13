@@ -107,10 +107,15 @@
         <div id="fire-map-note" class="result-note">Current and compared city dots</div>
       </div>
       <div class="fire-map-svg-wrap">
-        <svg id="fire-us-map" viewBox="0 0 1000 600" role="img" aria-label="Map of the contiguous United States">
+        <svg id="fire-us-map" viewBox="0 0 960 600" role="img" aria-label="Map of the contiguous United States">
+          <rect class="us-water" x="0" y="0" width="960" height="600"></rect>
           <path
             class="us-silhouette"
-            d="M88 262 L111 224 L155 210 L185 186 L233 183 L271 162 L315 154 L345 142 L389 151 L433 147 L473 164 L524 171 L570 187 L620 184 L668 200 L706 224 L754 224 L790 244 L838 268 L862 301 L854 332 L814 349 L777 380 L728 377 L680 394 L632 406 L591 422 L544 427 L502 456 L451 472 L397 470 L354 447 L311 450 L273 429 L226 426 L197 395 L146 372 L115 333 L95 296 Z"
+            d="M92 286 L112 244 L138 222 L166 210 L194 201 L228 196 L258 184 L286 170 L322 158 L358 150 L396 150 L436 157 L476 168 L516 178 L556 186 L598 190 L642 194 L684 202 L722 214 L756 232 L786 252 L816 272 L838 294 L854 320 L860 344 L854 366 L840 386 L826 404 L812 428 L792 452 L764 472 L734 480 L702 478 L668 470 L636 468 L604 474 L570 486 L542 500 L524 516 L512 540 L500 554 L482 562 L464 554 L448 536 L430 520 L410 510 L388 504 L362 500 L334 500 L308 504 L280 500 L254 492 L232 478 L214 460 L196 446 L176 434 L156 420 L140 402 L126 384 L112 364 L102 344 L96 322 Z"
+          ></path>
+          <path
+            class="us-coastline"
+            d="M92 286 L112 244 L138 222 L166 210 L194 201 L228 196 L258 184 L286 170 L322 158 L358 150 L396 150 L436 157 L476 168 L516 178 L556 186 L598 190 L642 194 L684 202 L722 214 L756 232 L786 252 L816 272 L838 294 L854 320 L860 344 L854 366 L840 386 L826 404 L812 428 L792 452 L764 472 L734 480 L702 478 L668 470 L636 468 L604 474 L570 486 L542 500 L524 516 L512 540 L500 554 L482 562 L464 554 L448 536 L430 520 L410 510 L388 504 L362 500 L334 500 L308 504 L280 500 L254 492 L232 478 L214 460 L196 446 L176 434 L156 420 L140 402 L126 384 L112 364 L102 344 L96 322 Z"
           ></path>
           <g id="fire-map-compared-points"></g>
           <g id="fire-map-current-point"></g>
@@ -283,11 +288,37 @@
     maxLon: -66,
     minLat: 24,
     maxLat: 50,
-    width: 1000,
+    width: 960,
     height: 600,
+  };
+  const mapProjectionInset = {
+    left: 112,
+    right: 96,
+    top: 150,
+    bottom: 544,
+  };
+  const cityTokenAliases = {
+    "nyc": "new york",
+    "new york city": "new york",
+    "st louis": "st louis",
+    "st louis city": "st louis",
+    "saint louis": "st louis",
+    "saint louis city": "st louis",
+    "st louis city mo": "st louis",
+    "st louis mo": "st louis",
+    "fort worth city": "fort worth",
+    "oklahoma city city": "oklahoma city",
+    "kansas city city": "kansas city",
+    "salt lake city city": "salt lake city",
+    "carson city city": "carson city",
+    "las vegas city": "las vegas",
+    "phoenix city": "phoenix",
+    "atlanta city": "atlanta",
+    "los angeles city": "los angeles",
   };
   const fallbackCoordinates = {
     "new york|NY": { lat: 40.7128, lon: -74.0060 },
+    "new york|NJ": { lat: 40.7291, lon: -74.0776 },
     "los angeles|CA": { lat: 34.0522, lon: -118.2437 },
     "chicago|IL": { lat: 41.8781, lon: -87.6298 },
     "houston|TX": { lat: 29.7604, lon: -95.3698 },
@@ -296,12 +327,42 @@
     "st louis|MO": { lat: 38.6270, lon: -90.1994 },
     "washington|DC": { lat: 38.9072, lon: -77.0369 },
     "dallas|TX": { lat: 32.7767, lon: -96.7970 },
-    "san francisco|CA": { lat: 37.7749, lon: -122.4194 },
-    "seattle|WA": { lat: 47.6062, lon: -122.3321 },
-    "miami|FL": { lat: 25.7617, lon: -80.1918 },
-    "boston|MA": { lat: 42.3601, lon: -71.0589 },
-    "denver|CO": { lat: 39.7392, lon: -104.9903 },
+    "fort worth|TX": { lat: 32.7555, lon: -97.3308 },
+    "san antonio|TX": { lat: 29.4241, lon: -98.4936 },
+    "austin|TX": { lat: 30.2672, lon: -97.7431 },
+    "oklahoma city|OK": { lat: 35.4676, lon: -97.5164 },
+    "kansas city|MO": { lat: 39.0997, lon: -94.5786 },
+    "kansas city|KS": { lat: 39.1141, lon: -94.6275 },
+    "salt lake city|UT": { lat: 40.7608, lon: -111.8910 },
+    "carson city|NV": { lat: 39.1638, lon: -119.7674 },
     "las vegas|NV": { lat: 36.1699, lon: -115.1398 },
+    "tucson|AZ": { lat: 32.2226, lon: -110.9747 },
+    "mesa|AZ": { lat: 33.4152, lon: -111.8315 },
+    "san diego|CA": { lat: 32.7157, lon: -117.1611 },
+    "san jose|CA": { lat: 37.3382, lon: -121.8863 },
+    "san francisco|CA": { lat: 37.7749, lon: -122.4194 },
+    "sacramento|CA": { lat: 38.5816, lon: -121.4944 },
+    "fresno|CA": { lat: 36.7378, lon: -119.7871 },
+    "seattle|WA": { lat: 47.6062, lon: -122.3321 },
+    "portland|OR": { lat: 45.5152, lon: -122.6784 },
+    "miami|FL": { lat: 25.7617, lon: -80.1918 },
+    "tampa|FL": { lat: 27.9506, lon: -82.4572 },
+    "orlando|FL": { lat: 28.5383, lon: -81.3792 },
+    "jacksonville|FL": { lat: 30.3322, lon: -81.6557 },
+    "boston|MA": { lat: 42.3601, lon: -71.0589 },
+    "philadelphia|PA": { lat: 39.9526, lon: -75.1652 },
+    "charlotte|NC": { lat: 35.2271, lon: -80.8431 },
+    "raleigh|NC": { lat: 35.7796, lon: -78.6382 },
+    "nashville|TN": { lat: 36.1627, lon: -86.7816 },
+    "minneapolis|MN": { lat: 44.9778, lon: -93.2650 },
+    "detroit|MI": { lat: 42.3314, lon: -83.0458 },
+    "cleveland|OH": { lat: 41.4993, lon: -81.6944 },
+    "columbus|OH": { lat: 39.9612, lon: -82.9988 },
+    "indianapolis|IN": { lat: 39.7684, lon: -86.1581 },
+    "milwaukee|WI": { lat: 43.0389, lon: -87.9065 },
+    "new orleans|LA": { lat: 29.9511, lon: -90.0715 },
+    "baton rouge|LA": { lat: 30.4515, lon: -91.1871 },
+    "denver|CO": { lat: 39.7392, lon: -104.9903 },
   };
   let currentCity = null;
   let comparisonCities = [];
@@ -399,6 +460,11 @@
       .trim();
   }
 
+  function canonicalCityToken(token) {
+    const normalized = String(token || "").trim().toLowerCase();
+    return cityTokenAliases[normalized] || normalized;
+  }
+
   function cleanDisplayFromCityObject(city) {
     const fallbackDisplay = `${city.city || ""}${city.state ? `, ${city.state}` : ""}`;
     const base = city.display_name || fallbackDisplay;
@@ -412,7 +478,8 @@
   }
 
   function fallbackCoordKey(city) {
-    return `${normalizedCityToken(city.city || city.display_name || "")}|${String(city.state || "").trim().toUpperCase()}`;
+    const canonicalToken = canonicalCityToken(normalizedCityToken(city.city || city.display_name || ""));
+    return `${canonicalToken}|${String(city.state || "").trim().toUpperCase()}`;
   }
 
   function asNumber(value) {
@@ -447,16 +514,31 @@
     if (lat < mapBounds.minLat || lat > mapBounds.maxLat || lon < mapBounds.minLon || lon > mapBounds.maxLon) {
       return null;
     }
-    const x = ((lon - mapBounds.minLon) / (mapBounds.maxLon - mapBounds.minLon)) * mapBounds.width;
-    const y = ((mapBounds.maxLat - lat) / (mapBounds.maxLat - mapBounds.minLat)) * mapBounds.height;
+    const usableWidth = mapBounds.width - mapProjectionInset.left - mapProjectionInset.right;
+    const usableHeight = mapProjectionInset.bottom - mapProjectionInset.top;
+    const x = mapProjectionInset.left + ((lon - mapBounds.minLon) / (mapBounds.maxLon - mapBounds.minLon)) * usableWidth;
+    const y = mapProjectionInset.top + ((mapBounds.maxLat - lat) / (mapBounds.maxLat - mapBounds.minLat)) * usableHeight;
     return { x, y };
   }
 
-  function appendMapPoint(group, point, label, className) {
+  function populationRadius(population) {
+    const numeric = asNumber(population);
+    if (numeric === null || numeric <= 0) return 5;
+
+    const minRadius = 4;
+    const maxRadius = 14;
+    const minPopulation = 50000;
+    const maxPopulation = 9000000;
+    const clampedPopulation = Math.min(Math.max(numeric, minPopulation), maxPopulation);
+    const ratio = (Math.log(clampedPopulation) - Math.log(minPopulation)) / (Math.log(maxPopulation) - Math.log(minPopulation));
+    return Number((minRadius + ratio * (maxRadius - minRadius)).toFixed(1));
+  }
+
+  function appendMapPoint(group, point, label, className, radius) {
     const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     circle.setAttribute("cx", String(point.x));
     circle.setAttribute("cy", String(point.y));
-    circle.setAttribute("r", "8");
+    circle.setAttribute("r", String(radius));
     circle.setAttribute("class", className);
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
     title.textContent = label;
@@ -486,7 +568,16 @@
         missing += 1;
         return;
       }
-      appendMapPoint(mapComparedGroup, point, `${cleanDisplayFromCityObject(city)} (Compared)`, "fire-map-point fire-map-point-compared");
+      const population = asNumber(city.population_current);
+      const populationLabel = population === null ? "Population unavailable" : `Population ${Math.round(population).toLocaleString()}`;
+      const radius = populationRadius(population);
+      appendMapPoint(
+        mapComparedGroup,
+        point,
+        `${cleanDisplayFromCityObject(city)} — ${populationLabel} (Compared)`,
+        "fire-map-point fire-map-point-compared",
+        radius,
+      );
     });
 
     if (currentCity) {
@@ -498,13 +589,22 @@
         if (!point) {
           missing += 1;
         } else {
-          appendMapPoint(mapCurrentGroup, point, `${cleanDisplayFromCityObject(currentCity)} (Current)`, "fire-map-point fire-map-point-current");
+          const population = asNumber(currentCity.population_current);
+          const populationLabel = population === null ? "Population unavailable" : `Population ${Math.round(population).toLocaleString()}`;
+          const radius = populationRadius(population);
+          appendMapPoint(
+            mapCurrentGroup,
+            point,
+            `${cleanDisplayFromCityObject(currentCity)} — ${populationLabel} (Current)`,
+            "fire-map-point fire-map-point-current",
+            radius,
+          );
         }
       }
     }
 
     if (missing > 0) {
-      mapNote.textContent = `${missing} location${missing === 1 ? "" : "s"} unavailable on map.`;
+      mapNote.textContent = `Map location unavailable for ${missing} ${missing === 1 ? "city" : "cities"}.`;
     } else {
       mapNote.textContent = "Current and compared city dots";
     }

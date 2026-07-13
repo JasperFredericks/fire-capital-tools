@@ -968,7 +968,7 @@ hr.divider {
   padding: 18px;
   background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 390px);
   grid-template-areas:
     "header map"
     "metrics map"
@@ -1047,11 +1047,11 @@ hr.divider {
   grid-area: map;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
-  background: #fbfdff;
-  padding: 10px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .fire-map-header {
@@ -1065,28 +1065,43 @@ hr.divider {
   border-radius: 8px;
   background: #ffffff;
   overflow: hidden;
+  aspect-ratio: 16 / 10;
+  min-height: 240px;
 }
 
 #fire-us-map {
   width: 100%;
-  height: auto;
+  height: 100%;
   display: block;
+}
+
+.us-water {
+  fill: #f8fbff;
 }
 
 .us-silhouette {
   fill: #e5e7eb;
   stroke: #9ca3af;
-  stroke-width: 8;
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
+
+.us-coastline {
+  fill: none;
+  stroke: #6b7280;
+  stroke-width: 2;
   stroke-linejoin: round;
 }
 
 .fire-map-point {
   stroke: #ffffff;
-  stroke-width: 2;
+  stroke-width: 1.5;
+  opacity: 0.9;
 }
 
 .fire-map-point-current {
   fill: #dc2626;
+  opacity: 1;
 }
 
 .fire-map-point-compared {
@@ -1120,6 +1135,17 @@ hr.divider {
 
 .fire-map-dot-compared {
   background: #2563eb;
+}
+
+@media (max-width: 1180px) {
+  .fire-city-dashboard {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "header"
+      "metrics"
+      "actions"
+      "map";
+  }
 }
 
 .stat-box-freshness {
