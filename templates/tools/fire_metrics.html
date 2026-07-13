@@ -100,13 +100,34 @@
     <div class="fire-city-actions">
       <button id="add-to-comparison-btn" type="button" class="btn btn-primary">Add to Comparison</button>
     </div>
+
+    <div id="fire-map-panel" class="fire-map-panel">
+      <div class="fire-map-header">
+        <div class="dashboard-section-title" style="font-size:14px;">US City Map</div>
+        <div id="fire-map-note" class="result-note">Current and compared city dots</div>
+      </div>
+      <div class="fire-map-svg-wrap">
+        <svg id="fire-us-map" viewBox="0 0 1000 600" role="img" aria-label="Map of the contiguous United States">
+          <path
+            class="us-silhouette"
+            d="M88 262 L111 224 L155 210 L185 186 L233 183 L271 162 L315 154 L345 142 L389 151 L433 147 L473 164 L524 171 L570 187 L620 184 L668 200 L706 224 L754 224 L790 244 L838 268 L862 301 L854 332 L814 349 L777 380 L728 377 L680 394 L632 406 L591 422 L544 427 L502 456 L451 472 L397 470 L354 447 L311 450 L273 429 L226 426 L197 395 L146 372 L115 333 L95 296 Z"
+          ></path>
+          <g id="fire-map-compared-points"></g>
+          <g id="fire-map-current-point"></g>
+        </svg>
+      </div>
+      <div class="fire-map-legend">
+        <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-current"></span>Current city</span>
+        <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-compared"></span>Compared cities</span>
+      </div>
+    </div>
   </div>
 
   {% if city_preview %}
   <div class="result-note" style="margin-top:16px;">
     Indexed city samples:
     {% for row in city_preview %}
-      <span class="source-badge source-badge-neutral" style="margin-top:6px;">{{ row.display_name }}</span>
+      <span class="source-badge source-badge-neutral indexed-city-sample" data-display-name="{{ row.display_name }}" style="margin-top:6px;">{{ row.display_name }}</span>
     {% endfor %}
   </div>
   {% endif %}
@@ -250,10 +271,38 @@
   const comparisonEmptyMessage = document.getElementById("comparison-empty-message");
   const comparisonWrap = document.getElementById("comparison-table-wrap");
   const comparisonBody = document.getElementById("comparison-table-body");
+  const mapComparedGroup = document.getElementById("fire-map-compared-points");
+  const mapCurrentGroup = document.getElementById("fire-map-current-point");
+  const mapNote = document.getElementById("fire-map-note");
 
   const payloadFromServer = {{ search_payload|tojson }};
   const initiallyRunning = {{ 'true' if status.running else 'false' }};
   const comparisonStorageKey = "fire_metrics_city_comparison_master_v1";
+  const mapBounds = {
+    minLon: -125,
+    maxLon: -66,
+    minLat: 24,
+    maxLat: 50,
+    width: 1000,
+    height: 600,
+  };
+  const fallbackCoordinates = {
+    "new york|NY": { lat: 40.7128, lon: -74.0060 },
+    "los angeles|CA": { lat: 34.0522, lon: -118.2437 },
+    "chicago|IL": { lat: 41.8781, lon: -87.6298 },
+    "houston|TX": { lat: 29.7604, lon: -95.3698 },
+    "phoenix|AZ": { lat: 33.4484, lon: -112.0740 },
+    "atlanta|GA": { lat: 33.7490, lon: -84.3880 },
+    "st louis|MO": { lat: 38.6270, lon: -90.1994 },
+    "washington|DC": { lat: 38.9072, lon: -77.0369 },
+    "dallas|TX": { lat: 32.7767, lon: -96.7970 },
+    "san francisco|CA": { lat: 37.7749, lon: -122.4194 },
+    "seattle|WA": { lat: 47.6062, lon: -122.3321 },
+    "miami|FL": { lat: 25.7617, lon: -80.1918 },
+    "boston|MA": { lat: 42.3601, lon: -71.0589 },
+    "denver|CO": { lat: 39.7392, lon: -104.9903 },
+    "las vegas|NV": { lat: 36.1699, lon: -115.1398 },
+  };
   let currentCity = null;
   let comparisonCities = [];
 
@@ -312,8 +361,160 @@
     return `${num.toFixed(2)}%`;
   }
 
+  function cleanCityDisplayName(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return raw;
+
+    const commaPos = raw.indexOf(",");
+    let cityPart = commaPos >= 0 ? raw.slice(0, commaPos).trim() : raw;
+    const rest = commaPos >= 0 ? raw.slice(commaPos) : "";
+
+    const suffixes = [" municipality", " village", " town", " city", " cdp", " CDP"];
+    let changed = true;
+    while (changed) {
+      changed = false;
+      suffixes.forEach((suffix) => {
+        if (cityPart.endsWith(suffix)) {
+          const trimmed = cityPart.slice(0, -suffix.length).trim();
+          if (trimmed) {
+            cityPart = trimmed;
+            changed = true;
+          }
+        }
+      });
+    }
+
+    return `${cityPart}${rest}`;
+  }
+
+  function cityCoreName(value) {
+    const cleaned = cleanCityDisplayName(value || "");
+    return cleaned.split(",")[0].trim();
+  }
+
+  function normalizedCityToken(value) {
+    return cityCoreName(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+  }
+
+  function cleanDisplayFromCityObject(city) {
+    const fallbackDisplay = `${city.city || ""}${city.state ? `, ${city.state}` : ""}`;
+    const base = city.display_name || fallbackDisplay;
+    return cleanCityDisplayName(base);
+  }
+
   function cityKey(city) {
-    return `${String(city.city || "").trim().toLowerCase()}|${String(city.state || "").trim().toUpperCase()}`;
+    const cityToken = normalizedCityToken(city.city || city.display_name || "");
+    const stateToken = String(city.state || "").trim().toUpperCase();
+    return `${cityToken}|${stateToken}`;
+  }
+
+  function fallbackCoordKey(city) {
+    return `${normalizedCityToken(city.city || city.display_name || "")}|${String(city.state || "").trim().toUpperCase()}`;
+  }
+
+  function asNumber(value) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  }
+
+  function extractCoordinates(city) {
+    const latCandidates = [city.lat, city.latitude, city.centroid_lat, city.intptlat];
+    const lonCandidates = [city.lon, city.lng, city.longitude, city.centroid_lon, city.intptlon];
+
+    let lat = null;
+    let lon = null;
+    for (const candidate of latCandidates) {
+      lat = asNumber(candidate);
+      if (lat !== null) break;
+    }
+    for (const candidate of lonCandidates) {
+      lon = asNumber(candidate);
+      if (lon !== null) break;
+    }
+
+    if (lat !== null && lon !== null) {
+      return { lat, lon };
+    }
+
+    const fallback = fallbackCoordinates[fallbackCoordKey(city)];
+    return fallback || null;
+  }
+
+  function projectPoint(lat, lon) {
+    if (lat < mapBounds.minLat || lat > mapBounds.maxLat || lon < mapBounds.minLon || lon > mapBounds.maxLon) {
+      return null;
+    }
+    const x = ((lon - mapBounds.minLon) / (mapBounds.maxLon - mapBounds.minLon)) * mapBounds.width;
+    const y = ((mapBounds.maxLat - lat) / (mapBounds.maxLat - mapBounds.minLat)) * mapBounds.height;
+    return { x, y };
+  }
+
+  function appendMapPoint(group, point, label, className) {
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttribute("cx", String(point.x));
+    circle.setAttribute("cy", String(point.y));
+    circle.setAttribute("r", "8");
+    circle.setAttribute("class", className);
+    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    title.textContent = label;
+    circle.appendChild(title);
+    group.appendChild(circle);
+  }
+
+  function clearMapPoints() {
+    mapComparedGroup.innerHTML = "";
+    mapCurrentGroup.innerHTML = "";
+  }
+
+  function renderMapPoints() {
+    clearMapPoints();
+    const currentKey = currentCity ? cityKey(currentCity) : null;
+    let missing = 0;
+
+    comparisonCities.forEach((city) => {
+      if (currentKey && cityKey(city) === currentKey) return;
+      const coords = extractCoordinates(city);
+      if (!coords) {
+        missing += 1;
+        return;
+      }
+      const point = projectPoint(coords.lat, coords.lon);
+      if (!point) {
+        missing += 1;
+        return;
+      }
+      appendMapPoint(mapComparedGroup, point, `${cleanDisplayFromCityObject(city)} (Compared)`, "fire-map-point fire-map-point-compared");
+    });
+
+    if (currentCity) {
+      const coords = extractCoordinates(currentCity);
+      if (!coords) {
+        missing += 1;
+      } else {
+        const point = projectPoint(coords.lat, coords.lon);
+        if (!point) {
+          missing += 1;
+        } else {
+          appendMapPoint(mapCurrentGroup, point, `${cleanDisplayFromCityObject(currentCity)} (Current)`, "fire-map-point fire-map-point-current");
+        }
+      }
+    }
+
+    if (missing > 0) {
+      mapNote.textContent = `${missing} location${missing === 1 ? "" : "s"} unavailable on map.`;
+    } else {
+      mapNote.textContent = "Current and compared city dots";
+    }
+  }
+
+  function cleanIndexedCitySamples() {
+    document.querySelectorAll(".indexed-city-sample").forEach((node) => {
+      const raw = node.getAttribute("data-display-name") || node.textContent || "";
+      node.textContent = cleanCityDisplayName(raw);
+    });
   }
 
   function saveComparison() {
@@ -336,10 +537,12 @@
   }
 
   function sanitizeCity(city) {
+    const cleanedDisplay = cleanDisplayFromCityObject(city);
+    const cleanedCity = cityCoreName(city.city || city.display_name || "");
     return {
-      city: city.city || "",
+      city: cleanedCity || city.city || "",
       state: city.state || "",
-      display_name: city.display_name || "",
+      display_name: cleanedDisplay,
       population_current: city.population_current ?? null,
       population_growth_recent: city.population_growth_recent ?? null,
       median_income_current: city.median_income_current ?? null,
@@ -354,6 +557,8 @@
       crime_rating: city.crime_rating || "",
       landlord_friendliness_score: city.landlord_friendliness_score ?? null,
       landlord_friendliness_label: city.landlord_friendliness_label || "",
+      lat: city.lat ?? city.latitude ?? city.centroid_lat ?? city.intptlat ?? null,
+      lon: city.lon ?? city.lng ?? city.longitude ?? city.centroid_lon ?? city.intptlon ?? null,
     };
   }
 
@@ -370,8 +575,9 @@
 
     comparisonCities.forEach((city) => {
       const tr = document.createElement("tr");
+      const cleanedCityName = cityCoreName(cleanDisplayFromCityObject(city));
       const rowValues = [
-        city.city || "—",
+        cleanedCityName || "—",
         city.state || "—",
         cmpFmtNum(city.population_current),
         cmpFmtPct(city.population_growth_recent),
@@ -401,6 +607,7 @@
         comparisonCities = comparisonCities.filter((item) => cityKey(item) !== cityKey(city));
         saveComparison();
         renderComparisonTable();
+          renderMapPoints();
       });
       actionTd.appendChild(removeButton);
       tr.appendChild(actionTd);
@@ -449,7 +656,8 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "btn btn-ghost";
-      button.textContent = item.display_name || `${item.city}, ${item.state}`;
+      const rawName = item.display_name || `${item.city}, ${item.state}`;
+      button.textContent = cleanCityDisplayName(rawName);
       button.addEventListener("click", () => {
         input.value = button.textContent;
         performSearch(button.textContent);
@@ -473,8 +681,8 @@
 
   function renderCity(city) {
     currentCity = sanitizeCity(city);
-    dashboardEl.style.display = "block";
-    document.getElementById("city-display-name").textContent = city.display_name || `${city.city}, ${city.state}`;
+    dashboardEl.style.display = "grid";
+    document.getElementById("city-display-name").textContent = cleanDisplayFromCityObject(city);
     document.getElementById("city-subline").textContent = `Population rank: ${fmtNum(city.population_rank)} | Population: ${fmtNum(city.population_current)}`;
 
     setMetric("metric-pop-current", city.population_current);
@@ -519,6 +727,7 @@
     });
 
     syncComparisonAddButton();
+    renderMapPoints();
   }
 
   async function performSearch(query) {
@@ -547,6 +756,7 @@
         dashboardEl.style.display = "none";
         showMessage(payload.user_message || "No exact match found.", "info");
         renderSuggestions(payload.suggestions || []);
+        renderMapPoints();
         return;
       }
 
@@ -559,12 +769,14 @@
       } else {
         showMessage(payload.user_message || "Search failed.", "error");
       }
+      renderMapPoints();
     } catch (err) {
       currentCity = null;
       resetComparisonAddButton();
       dashboardEl.style.display = "none";
       hideSuggestions();
       showMessage(`Search failed: ${err}`, "error");
+      renderMapPoints();
     }
   }
 
@@ -584,6 +796,7 @@
     saveComparison();
     renderComparisonTable();
     syncComparisonAddButton();
+    renderMapPoints();
   });
 
   clearComparisonBtn.addEventListener("click", () => {
@@ -591,11 +804,15 @@
     saveComparison();
     renderComparisonTable();
     syncComparisonAddButton();
+    renderMapPoints();
   });
 
   comparisonCities = loadComparison();
+  comparisonCities = comparisonCities.map((city) => sanitizeCity(city));
   renderComparisonTable();
   resetComparisonAddButton();
+  cleanIndexedCitySamples();
+  renderMapPoints();
 
   if (payloadFromServer) {
     if (payloadFromServer.status === "found") {

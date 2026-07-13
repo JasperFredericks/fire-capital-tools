@@ -967,6 +967,26 @@ hr.divider {
   border-radius: 12px;
   padding: 18px;
   background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-areas:
+    "header map"
+    "metrics map"
+    "actions map";
+  column-gap: 16px;
+  row-gap: 12px;
+}
+
+.fire-city-dashboard .result-header {
+  grid-area: header;
+}
+
+.fire-city-dashboard .fire-metric-grid {
+  grid-area: metrics;
+}
+
+.fire-city-dashboard .fire-city-actions {
+  grid-area: actions;
 }
 
 .fire-metric-grid {
@@ -1023,6 +1043,85 @@ hr.divider {
   font-size: 12px;
 }
 
+.fire-map-panel {
+  grid-area: map;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fbfdff;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fire-map-header {
+  display: grid;
+  gap: 4px;
+}
+
+.fire-map-svg-wrap {
+  width: 100%;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+#fire-us-map {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.us-silhouette {
+  fill: #e5e7eb;
+  stroke: #9ca3af;
+  stroke-width: 8;
+  stroke-linejoin: round;
+}
+
+.fire-map-point {
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.fire-map-point-current {
+  fill: #dc2626;
+}
+
+.fire-map-point-compared {
+  fill: #2563eb;
+}
+
+.fire-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.fire-map-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #374151;
+}
+
+.fire-map-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.fire-map-dot-current {
+  background: #dc2626;
+}
+
+.fire-map-dot-compared {
+  background: #2563eb;
+}
+
 .stat-box-freshness {
   font-size: 11px;
   color: #9ca3af;
@@ -1045,6 +1144,15 @@ hr.divider {
 
   .fire-search-row {
     grid-template-columns: 1fr;
+  }
+
+  .fire-city-dashboard {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "header"
+      "metrics"
+      "actions"
+      "map";
   }
 
   .comparison-actions {
