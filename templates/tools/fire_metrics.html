@@ -107,19 +107,17 @@
         <div id="fire-map-note" class="result-note">Current and compared city dots</div>
       </div>
       <div class="fire-map-svg-wrap">
-        <svg id="fire-us-map" viewBox="0 0 960 600" role="img" aria-label="Map of the contiguous United States">
-          <image
+        <div class="fire-map-canvas">
+          <img
             id="fire-us-base-map"
-            href="{{ url_for('static', filename='us-map.svg') }}"
-            x="0"
-            y="0"
-            width="960"
-            height="600"
-            preserveAspectRatio="xMidYMid meet"
-          ></image>
+            src="{{ url_for('static', filename='us-map.svg') }}"
+            alt="Map of the contiguous United States"
+          >
+          <svg id="fire-us-map-overlay" viewBox="0 0 960 600" role="img" aria-label="Current and compared city locations on the contiguous United States map">
           <g id="fire-map-compared-points"></g>
           <g id="fire-map-current-point"></g>
-        </svg>
+          </svg>
+        </div>
       </div>
       <div class="fire-map-legend">
         <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-current"></span>Current city</span>
@@ -292,10 +290,10 @@
     height: 600,
   };
   const mapProjectionInset = {
-    left: 94,
-    right: 83,
-    top: 141,
-    bottom: 563,
+    left: 110,
+    right: 55,
+    top: 70,
+    bottom: 520,
   };
   const stateAbbreviations = {
     ALABAMA: "AL",

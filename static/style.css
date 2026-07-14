@@ -1069,28 +1069,29 @@ hr.divider {
   min-height: 240px;
 }
 
-#fire-us-map {
+.fire-map-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+#fire-us-base-map,
+#fire-us-map-overlay {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: block;
 }
 
-.us-water {
-  fill: #f8fbff;
+#fire-us-base-map {
+  object-fit: cover;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  filter: grayscale(1) saturate(0) brightness(1.26) contrast(0.9);
 }
 
-.us-silhouette {
-  fill: #e5e7eb;
-  stroke: #9ca3af;
-  stroke-width: 3;
-  stroke-linejoin: round;
-}
-
-.us-coastline {
-  fill: none;
-  stroke: #6b7280;
-  stroke-width: 2;
-  stroke-linejoin: round;
+#fire-us-map-overlay {
+  overflow: visible;
 }
 
 .fire-map-point {
