@@ -108,15 +108,15 @@
       </div>
       <div class="fire-map-svg-wrap">
         <svg id="fire-us-map" viewBox="0 0 960 600" role="img" aria-label="Map of the contiguous United States">
-          <rect class="us-water" x="0" y="0" width="960" height="600"></rect>
-          <path
-            class="us-silhouette"
-            d="M92 286 L112 244 L138 222 L166 210 L194 201 L228 196 L258 184 L286 170 L322 158 L358 150 L396 150 L436 157 L476 168 L516 178 L556 186 L598 190 L642 194 L684 202 L722 214 L756 232 L786 252 L816 272 L838 294 L854 320 L860 344 L854 366 L840 386 L826 404 L812 428 L792 452 L764 472 L734 480 L702 478 L668 470 L636 468 L604 474 L570 486 L542 500 L524 516 L512 540 L500 554 L482 562 L464 554 L448 536 L430 520 L410 510 L388 504 L362 500 L334 500 L308 504 L280 500 L254 492 L232 478 L214 460 L196 446 L176 434 L156 420 L140 402 L126 384 L112 364 L102 344 L96 322 Z"
-          ></path>
-          <path
-            class="us-coastline"
-            d="M92 286 L112 244 L138 222 L166 210 L194 201 L228 196 L258 184 L286 170 L322 158 L358 150 L396 150 L436 157 L476 168 L516 178 L556 186 L598 190 L642 194 L684 202 L722 214 L756 232 L786 252 L816 272 L838 294 L854 320 L860 344 L854 366 L840 386 L826 404 L812 428 L792 452 L764 472 L734 480 L702 478 L668 470 L636 468 L604 474 L570 486 L542 500 L524 516 L512 540 L500 554 L482 562 L464 554 L448 536 L430 520 L410 510 L388 504 L362 500 L334 500 L308 504 L280 500 L254 492 L232 478 L214 460 L196 446 L176 434 L156 420 L140 402 L126 384 L112 364 L102 344 L96 322 Z"
-          ></path>
+          <image
+            id="fire-us-base-map"
+            href="{{ url_for('static', filename='us-map.svg') }}"
+            x="0"
+            y="0"
+            width="960"
+            height="600"
+            preserveAspectRatio="xMidYMid meet"
+          ></image>
           <g id="fire-map-compared-points"></g>
           <g id="fire-map-current-point"></g>
         </svg>
@@ -292,18 +292,79 @@
     height: 600,
   };
   const mapProjectionInset = {
-    left: 112,
-    right: 96,
-    top: 150,
-    bottom: 544,
+    left: 94,
+    right: 83,
+    top: 141,
+    bottom: 563,
+  };
+  const stateAbbreviations = {
+    ALABAMA: "AL",
+    ALASKA: "AK",
+    ARIZONA: "AZ",
+    ARKANSAS: "AR",
+    CALIFORNIA: "CA",
+    COLORADO: "CO",
+    CONNECTICUT: "CT",
+    DELAWARE: "DE",
+    "DISTRICT OF COLUMBIA": "DC",
+    FLORIDA: "FL",
+    GEORGIA: "GA",
+    HAWAII: "HI",
+    IDAHO: "ID",
+    ILLINOIS: "IL",
+    INDIANA: "IN",
+    IOWA: "IA",
+    KANSAS: "KS",
+    KENTUCKY: "KY",
+    LOUISIANA: "LA",
+    MAINE: "ME",
+    MARYLAND: "MD",
+    MASSACHUSETTS: "MA",
+    MICHIGAN: "MI",
+    MINNESOTA: "MN",
+    MISSISSIPPI: "MS",
+    MISSOURI: "MO",
+    MONTANA: "MT",
+    NEBRASKA: "NE",
+    NEVADA: "NV",
+    "NEW HAMPSHIRE": "NH",
+    "NEW JERSEY": "NJ",
+    "NEW MEXICO": "NM",
+    "NEW YORK": "NY",
+    "NORTH CAROLINA": "NC",
+    "NORTH DAKOTA": "ND",
+    OHIO: "OH",
+    OKLAHOMA: "OK",
+    OREGON: "OR",
+    PENNSYLVANIA: "PA",
+    "RHODE ISLAND": "RI",
+    "SOUTH CAROLINA": "SC",
+    "SOUTH DAKOTA": "SD",
+    TENNESSEE: "TN",
+    TEXAS: "TX",
+    UTAH: "UT",
+    VERMONT: "VT",
+    VIRGINIA: "VA",
+    WASHINGTON: "WA",
+    "WEST VIRGINIA": "WV",
+    WISCONSIN: "WI",
+    WYOMING: "WY",
   };
   const cityTokenAliases = {
     "nyc": "new york",
     "new york city": "new york",
+    "new york ny": "new york",
+    "la": "los angeles",
+    "l a": "los angeles",
+    "los angeles la": "los angeles",
     "st louis": "st louis",
     "st louis city": "st louis",
+    "st louis missouri": "st louis",
     "saint louis": "st louis",
     "saint louis city": "st louis",
+    "saint louis missouri": "st louis",
+    "st. louis": "st louis",
+    "st. louis city": "st louis",
     "st louis city mo": "st louis",
     "st louis mo": "st louis",
     "fort worth city": "fort worth",
@@ -465,6 +526,14 @@
     return cityTokenAliases[normalized] || normalized;
   }
 
+  function normalizeStateToken(state) {
+    const raw = String(state || "").trim();
+    if (!raw) return "";
+    const normalized = raw.toUpperCase().replace(/\./g, "");
+    if (normalized.length === 2) return normalized;
+    return stateAbbreviations[normalized] || normalized;
+  }
+
   function cleanDisplayFromCityObject(city) {
     const fallbackDisplay = `${city.city || ""}${city.state ? `, ${city.state}` : ""}`;
     const base = city.display_name || fallbackDisplay;
@@ -479,7 +548,25 @@
 
   function fallbackCoordKey(city) {
     const canonicalToken = canonicalCityToken(normalizedCityToken(city.city || city.display_name || ""));
-    return `${canonicalToken}|${String(city.state || "").trim().toUpperCase()}`;
+    return `${canonicalToken}|${normalizeStateToken(city.state)}`;
+  }
+
+  function resolveFallbackCoordinates(city) {
+    const canonicalToken = canonicalCityToken(normalizedCityToken(city.city || city.display_name || ""));
+    const state = normalizeStateToken(city.state);
+    const keyed = fallbackCoordinates[`${canonicalToken}|${state}`];
+    if (keyed) return keyed;
+
+    const stateless = fallbackCoordinates[`${canonicalToken}|`];
+    if (stateless) return stateless;
+
+    if (state === "") {
+      const byPrefix = Object.keys(fallbackCoordinates)
+        .find((key) => key.startsWith(`${canonicalToken}|`));
+      if (byPrefix) return fallbackCoordinates[byPrefix];
+    }
+
+    return null;
   }
 
   function asNumber(value) {
@@ -506,7 +593,7 @@
       return { lat, lon };
     }
 
-    const fallback = fallbackCoordinates[fallbackCoordKey(city)];
+    const fallback = resolveFallbackCoordinates(city);
     return fallback || null;
   }
 
