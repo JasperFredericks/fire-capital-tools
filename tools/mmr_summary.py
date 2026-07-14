@@ -89,7 +89,7 @@ def process_mmr(filepath: Path) -> dict:
         bs = parse_resman_section("Box Score", parse_box_score, default_box_score())
         dl = parse_resman_section("Delinquency", parse_delinquency, {"total": None, "count": None})
         rr = parse_resman_section("Rent Roll", parse_rent_roll, {"total_rental": None, "avg_rent": None}, bs["occupied"])
-        au = parse_resman_section("Available Units", parse_available_units, {"ready_units": None, "prelease_count": None})
+        au = parse_resman_section("Available Units", parse_available_units, {"ready_units": None, "prelease_count": None, "holding_count": None, "eviction_count": None})
         el = parse_resman_section("Expiring Leases", parse_expiring_leases, None, bs["date_range"])
         ps = parse_resman_section("Prospect Source Summary", parse_prospect_sources, None)
         wo = parse_resman_section("Work Order Summary", parse_work_orders, {"work_orders": None, "issue_counts": {}})
@@ -106,7 +106,7 @@ def process_mmr(filepath: Path) -> dict:
         bs = extract_appfolio_box_score(wb, source_system)
         dl = {"total": 0.0}
         rr = {"total_rental": 0.0, "avg_rent": 0.0}
-        au = {"ready_units": [], "prelease_count": 0}
+        au = {"ready_units": [], "prelease_count": 0, "holding_count": 0, "eviction_count": 0}
         el = []
         ps = {}
         wo = {"work_orders": [], "issue_counts": {}}

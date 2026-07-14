@@ -836,6 +836,17 @@ _VACANT_SECTIONS   = {"vacant", "vacant preleased", "vacant pre-leased"}
 _NOTICE_SECTIONS   = {"notice to vacate", "notice to vacate preleased", "notice to vacate pre-leased"}
 _ALL_AU_SECTIONS   = _VACANT_SECTIONS | _NOTICE_SECTIONS
 _PRELEASE_SECTIONS = {"vacant preleased", "vacant pre-leased", "notice to vacate preleased", "notice to vacate pre-leased"}
+# Units currently in the eviction process — still occupied (not vacant) and
+# not a "gave notice" status, so counted on its own rather than folded into
+# Vacant or On-Notice. Only appears in the report at all when at least one
+# unit is under eviction (confirmed against real Canyon/OXPT Available
+# Units exports; Eagle Rock had none this period, section absent entirely).
+_EVICTION_SECTIONS = {"under eviction"}
+# Units being held for an approved applicant (holding fee paid, not yet
+# moved in) — a section that only appears in the report at all when at
+# least one unit is currently held, confirmed against real Available Units
+# exports (Canyon, High Caliber).
+_HOLDING_SECTIONS  = {"holding units", "holding"}
 _AU_NON_SECTION_HEADERS = {
     "available units",
     "unit",
@@ -925,8 +936,15 @@ def parse_available_units(ws):
         if is_ready_status(u["status"]) and norm(u["section"]) in _ALL_AU_SECTIONS
     ]
     prelease_count = sum(1 for u in all_units if norm(u["section"]) in _PRELEASE_SECTIONS)
+    holding_count = sum(1 for u in all_units if norm(u["section"]) in _HOLDING_SECTIONS)
+    eviction_count = sum(1 for u in all_units if norm(u["section"]) in _EVICTION_SECTIONS)
 
-    return {"ready_units": ready_units, "prelease_count": prelease_count}
+    return {
+        "ready_units": ready_units,
+        "prelease_count": prelease_count,
+        "holding_count": holding_count,
+        "eviction_count": eviction_count,
+    }
 
 
 def parse_expiring_leases(ws, date_range=""):
@@ -1845,7 +1863,7 @@ def setup_summary_print(ws):
     ws.sheet_view.showGridLines = False
     ws.freeze_panes     = None   # BUG2: no frozen rows
     ws.print_title_rows = None   # BUG2: no repeated header on print
-    ws.print_area = "A1:P48"
+    ws.print_area = "A1:P54"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 1
@@ -1925,10 +1943,10 @@ def add_projected_occupancy_chart(ws, entries):
 def add_expiring_leases_chart(ws, months):
     """Matplotlib grouped bar chart: expirations vs renewals per month, as PNG."""
     if months is None:
-        merge_band(ws, 22, 9, 16, "N/A", font="data", fill_color=PALE_BLUE, align=C, border=_box())
+        merge_band(ws, 26, 9, 16, "N/A", font="data", fill_color=PALE_BLUE, align=C, border=_box())
         return
     if not months:
-        merge_band(ws, 22, 9, 16, "No expiring lease data", font="data", fill_color=PALE_BLUE, align=C, border=_box())
+        merge_band(ws, 26, 9, 16, "No expiring lease data", font="data", fill_color=PALE_BLUE, align=C, border=_box())
         return
 
     rows = months[:10]
@@ -1963,7 +1981,7 @@ def add_expiring_leases_chart(ws, months):
     fig.tight_layout()
 
     img = _fig_to_xl_image(fig)
-    ws.add_image(img, "I22")
+    ws.add_image(img, "I26")
 
 
 _PROPERTY_ABBREVS = {
@@ -2054,7 +2072,7 @@ def build_summary(wb, data):
     bs = data.get("box_score", default_box_score())
     dl = data.get("delinquency") or {"total": None}
     rr = data.get("rent_roll") or {"total_rental": None, "avg_rent": None}
-    au = data.get("available_units") or {"ready_units": None, "prelease_count": None}
+    au = data.get("available_units") or {"ready_units": None, "prelease_count": None, "holding_count": None, "eviction_count": None}
     el = data.get("expiring_leases", [])
     ps = data.get("prospect_sources")
     wo = data.get("work_orders") or {"work_orders": None, "issue_counts": {}}
@@ -2062,13 +2080,13 @@ def build_summary(wb, data):
     source_text, source_color, source_fill = source_system_display(source_system)
 
     setup_summary_print(ws)
-    for row in range(1, 49):
+    for row in range(1, 55):
         ws.row_dimensions[row].height = 15
     ws.row_dimensions[1].height = 22
     ws.row_dimensions[3].height = 19
     ws.row_dimensions[5].height = 4
-    ws.row_dimensions[26].height = 4
-    ws.row_dimensions[47].height = 4
+    ws.row_dimensions[30].height = 4
+    ws.row_dimensions[53].height = 4
 
     title = bs.get("property_name") or "MMR Summary"
     period = bs.get("date_range") or ""
@@ -2093,38 +2111,47 @@ def build_summary(wb, data):
     section_band(ws, 6, "OCCUPANCY", 2, 7)
     occupancy_value = fmt_pct(bs.get("pct_occ")) if bs.get("pct_occ") is not None else "N/A"
     write_pair_row(ws, 7, "% Occupancy", occupancy_value, "Occupied", na_if_none(bs.get("occupied")))
-    write_pair_row(ws, 8, "Vacant", na_if_none(bs.get("vacant")), "Total Units", na_if_none(bs.get("total_units")))
-    # Prefer Box Score "Vacant Pre-Leased" column value; fall back to Available Units count
+    # On-Notice (resident gave notice, unit still occupied, no future tenant
+    # lined up yet) is folded into Vacant rather than kept as its own
+    # category — it isn't preleased, so Vacant is the only one of the two
+    # remaining categories it can accurately belong to.
+    vacant_val = bs.get("vacant")
+    vacant_total = None if vacant_val is None else vacant_val + (bs.get("on_notice") or 0)
+    write_pair_row(ws, 8, "Vacant", na_if_none(vacant_total), "Total Units", na_if_none(bs.get("total_units")))
+    # Prefer Box Score "Vacant Pre-Leased" column value; fall back to Available Units count.
+    # This already includes Notice-to-Vacate-Preleased units (see _PRELEASE_SECTIONS).
     prelease_val = bs.get("prelease_count") if bs.get("prelease_count") is not None else au.get("prelease_count", 0)
-    write_pair_row(ws, 9, "Preleases (Vacant + On-Notice)", na_if_none(prelease_val), "On-Notice", na_if_none(bs.get("on_notice")))
+    write_pair_row(ws, 9, "Vacant Preleased", na_if_none(prelease_val))
+    write_pair_row(ws, 10, "Holding", na_if_none(au.get("holding_count")))
+    write_pair_row(ws, 11, "Eviction", na_if_none(au.get("eviction_count")))
 
-    section_band(ws, 11, "LEASING / FINANCIAL", 2, 7)
-    write_pair_row(ws, 12, "Applied", na_if_none(bs.get("applied")), "Approved", na_if_none(bs.get("approved")))
-    write_pair_row(ws, 13, "Signed", na_if_none(bs.get("signed")), "Total Delinquency", na_if_none(dl.get("total")), right_fmt='"$"#,##0.00')
-    write_pair_row(ws, 14, "Total Rental Revenue", na_if_none(rr.get("total_rental")), "Average Rent / Unit", na_if_none(rr.get("avg_rent")),
+    section_band(ws, 14, "LEASING / FINANCIAL", 2, 7)
+    write_pair_row(ws, 15, "Applied", na_if_none(bs.get("applied")), "Approved", na_if_none(bs.get("approved")))
+    write_pair_row(ws, 16, "Signed", na_if_none(bs.get("signed")), "Total Delinquency", na_if_none(dl.get("total")), right_fmt='"$"#,##0.00')
+    write_pair_row(ws, 17, "Total Rental Revenue", na_if_none(rr.get("total_rental")), "Average Rent / Unit", na_if_none(rr.get("avg_rent")),
                    left_fmt='"$"#,##0.00', right_fmt='"$"#,##0.00')
 
     ready_units = au.get("ready_units")
     ready_count = "N/A" if ready_units is None else len(ready_units)
-    section_band(ws, 16, f"READY UNITS ({ready_count} total)", 2, 7)
+    section_band(ws, 20, f"READY UNITS ({ready_count} total)", 2, 7)
     for col, label in zip([2, 3, 4, 5, 6, 7], ["Unit", "Section", "Status", "Unit", "Section", "Status"]):
-        col_hdr(ws, 17, col, label)
+        col_hdr(ws, 21, col, label)
     if ready_units is None:
-        merge_band(ws, 18, 2, 7, "N/A", font="data", fill_color=None, align=C, border=_box())
+        merge_band(ws, 22, 2, 7, "N/A", font="data", fill_color=None, align=C, border=_box())
     elif ready_units:
         for idx, unit in enumerate(ready_units[:18]):
-            row = 18 + (idx % 9)
+            row = 22 + (idx % 9)
             base_col = 2 if idx < 9 else 5
-            z = (row - 18) % 2 == 0
+            z = (row - 22) % 2 == 0
             data_row(ws, row, base_col, unit.get("unit", ""), zebra=z, align=C)
             data_row(ws, row, base_col + 1, unit.get("section", ""), zebra=z, align=L)
             data_row(ws, row, base_col + 2, unit.get("status", ""), zebra=z, align=C)
     else:
-        merge_band(ws, 18, 2, 7, "No ready units found", font="data", fill_color=None, align=C, border=_box())
+        merge_band(ws, 22, 2, 7, "No ready units found", font="data", fill_color=None, align=C, border=_box())
 
-    section_band(ws, 27, "TOP 2 PROSPECT SOURCES", 2, 7)
+    section_band(ws, 32, "TOP 2 PROSPECT SOURCES", 2, 7)
     for col, label in zip([2, 3, 4, 5, 7], ["Category", "#1 Source", "#1 Count", "#2 Source", "#2 Count"]):
-        col_hdr(ws, 28, col, label)
+        col_hdr(ws, 33, col, label)
     metric_labels = {
         "New Prospects": "New Prospects",
         "Return Prospects": "Return Prospects",
@@ -2132,13 +2159,13 @@ def build_summary(wb, data):
         "Net Leases": "Net Leases",
     }
     if ps is None:
-        merge_band(ws, 29, 2, 7, "N/A", font="data", fill_color=None, align=C, border=_box())
+        merge_band(ws, 34, 2, 7, "N/A", font="data", fill_color=None, align=C, border=_box())
         metric_labels = {}
-    for i, (key, label) in enumerate(metric_labels.items(), 29):
+    for i, (key, label) in enumerate(metric_labels.items(), 34):
         ranked = ps.get(key, [])
         s1, c1_v = ranked[0] if len(ranked) > 0 else ("—", 0)
         s2, c2_v = ranked[1] if len(ranked) > 1 else ("—", 0)
-        z = (i - 29) % 2 == 0
+        z = (i - 34) % 2 == 0
         data_row(ws, i, 2, label, zebra=z, align=L)
         data_row(ws, i, 3, s1, zebra=z, align=L)
         data_row(ws, i, 4, c1_v, zebra=z, align=C)
@@ -2147,20 +2174,20 @@ def build_summary(wb, data):
 
     work_orders = wo.get("work_orders")
     work_order_count = "N/A" if work_orders is None else len(work_orders)
-    section_band(ws, 35, f"EMERGENCY WORK ORDERS ({work_order_count} total)", 2, 7)
+    section_band(ws, 41, f"EMERGENCY WORK ORDERS ({work_order_count} total)", 2, 7)
     issue_counts = wo.get("issue_counts", {})
     summary_text = "N/A" if work_orders is None else (" | ".join(f"{issue}: {count}" for issue, count in issue_counts.items()) or "No emergency work orders")
-    wc(ws, 36, 2, "Issue Types", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
-    merge_band(ws, 36, 3, 7, summary_text, font="data", fill_color=LIGHT_BLUE, align=L, border=_box())
+    wc(ws, 42, 2, "Issue Types", font="col_hdr", fill=_fill(LIGHT_BLUE), align=C, border=_box())
+    merge_band(ws, 42, 3, 7, summary_text, font="data", fill_color=LIGHT_BLUE, align=L, border=_box())
 
     for col, label in zip([2, 3, 4, 5], ["WO #", "Unit/Location", "Date Reported", "Category"]):
-        col_hdr(ws, 37, col, label)
-    merge_band(ws, 37, 6, 7, "Description", font="col_hdr", fill_color=LIGHT_BLUE, align=C, border=_box())
+        col_hdr(ws, 43, col, label)
+    merge_band(ws, 43, 6, 7, "Description", font="col_hdr", fill_color=LIGHT_BLUE, align=C, border=_box())
     if work_orders is None:
-        merge_band(ws, 38, 2, 7, "N/A", font="data", fill_color=None, align=C, border=_box())
+        merge_band(ws, 44, 2, 7, "N/A", font="data", fill_color=None, align=C, border=_box())
     elif work_orders:
-        for i, order in enumerate(work_orders[:8], 38):
-            z = (i - 38) % 2 == 0
+        for i, order in enumerate(work_orders[:8], 44):
+            z = (i - 44) % 2 == 0
             data_row(ws, i, 2, order.get("number", ""), zebra=z, align=C)
             data_row(ws, i, 3, order.get("location", ""), zebra=z, align=C)
             data_row(ws, i, 4, order.get("date_reported") or fmt_date(order.get("reported")), zebra=z, align=C)
@@ -2168,9 +2195,9 @@ def build_summary(wb, data):
             merge_band(ws, i, 6, 7, order.get("description", ""), font="data",
                        fill_color=PALE_BLUE if z else None, align=L, border=_box())
     else:
-        merge_band(ws, 38, 2, 7, "No emergency work orders", font="data", fill_color=None, align=C, border=_box())
+        merge_band(ws, 44, 2, 7, "No emergency work orders", font="data", fill_color=None, align=C, border=_box())
 
-    merge_band(ws, 46, 2, 7, f"Generated by FIRE Capital MMR Summary Tool | {datetime.now().strftime('%m/%d/%Y %I:%M %p')}",
+    merge_band(ws, 52, 2, 7, f"Generated by FIRE Capital MMR Summary Tool | {datetime.now().strftime('%m/%d/%Y %I:%M %p')}",
                font=_FONTS["meta"], fill_color=None, align=C)
 
     # Clean up any leftover chart_data sheet from previous runs
@@ -2180,8 +2207,12 @@ def build_summary(wb, data):
     # Right side: charts (matplotlib PNGs embedded as images).
     merge_band(ws, 6, 9, 16, "PROJECTED OCCUPANCY", font="hdr", fill_color=DARK_BLUE, align=C)
     add_projected_occupancy_chart(ws, bs.get("proj_occ", []))
-    merge_band(ws, 21, 9, 16, "EXPIRING LEASES BY MONTH", font="hdr", fill_color=DARK_BLUE, align=C)
+    merge_band(ws, 25, 9, 16, "EXPIRING LEASES BY MONTH", font="hdr", fill_color=DARK_BLUE, align=C)
     add_expiring_leases_chart(ws, el)
+
+    # Open directly to this sheet instead of whatever sheet was active before.
+    wb.active = wb.sheetnames.index("Summary")
+    ws.sheet_view.tabSelected = True
 
     return ws
 
@@ -2251,6 +2282,8 @@ def parse_appfolio(wb):
     delinquency_count = 0
     vacant_prelease_count  = 0
     notice_prelease_count  = 0
+    on_notice_count        = 0
+    eviction_count         = 0
     lease_expiration_dates = []   # Lease To dates for Current/Notice residents
     occupancy_events       = []   # (date, delta) — known future move-ins/move-outs
     ready_list        = []
@@ -2312,6 +2345,19 @@ def parse_appfolio(wb):
                     vacant_prelease_count += 1
                 else:
                     notice_prelease_count += 1
+
+            # On-notice count: residents who gave notice, whether or not the
+            # unit is already re-leased (Notice-Rented is a subset of this,
+            # not a separate population — mirrors ResMan's Box Score, where
+            # "On-Notice" is the total and "On-Notice Pre-Leased" a subset).
+            if status_norm in ("notice-unrented", "notice-rented"):
+                on_notice_count += 1
+
+            # Eviction: still occupied (not vacant), and legally/practically
+            # distinct from a resident who gave notice — counted on its own,
+            # confirmed against the real Maple Valley export's "Evict" status.
+            if status_norm == "evict":
+                eviction_count += 1
 
             if status_norm in _OCCUPIED_STATUSES and len(row) > 10 and isinstance(row[10], datetime):
                 lease_expiration_dates.append(row[10])
@@ -2492,7 +2538,7 @@ def parse_appfolio(wb):
             "prelease_count": prelease_count,
             "vacant_prelease_count": vacant_prelease_count,
             "notice_prelease_count": notice_prelease_count,
-            "on_notice":     0,
+            "on_notice":     on_notice_count,
             "applied":       0,
             "approved":      0,
             "signed":        0,
@@ -2500,7 +2546,7 @@ def parse_appfolio(wb):
         },
         "delinquency":  {"total": delinquency_total, "count": delinquency_count},
         "rent_roll":    {"total_rental": total_rental, "avg_rent": avg_rent_val},
-        "available_units": {"ready_units": ready_list, "prelease_count": prelease_count},
+        "available_units": {"ready_units": ready_list, "prelease_count": prelease_count, "holding_count": None, "eviction_count": eviction_count},
         "expiring_leases":  expiring_leases,
         # No prospect/lead-source data exists anywhere in Appfolio's export
         # (checked all 9 sheets) — None (not {}) so build_summary renders its
@@ -2562,7 +2608,7 @@ def main():
         print(f"  Average rent / unit  : {('$' + format(rr['avg_rent'], ',.2f')) if rr.get('avg_rent') is not None else 'N/A'}")
 
         print("\nParsing Available Units ...")
-        au = parse_optional_sheet(wb, "Available Units", parse_available_units, {"ready_units": None, "prelease_count": None})
+        au = parse_optional_sheet(wb, "Available Units", parse_available_units, {"ready_units": None, "prelease_count": None, "holding_count": None, "eviction_count": None})
         print(f"  Ready units : {len(au['ready_units']) if au.get('ready_units') is not None else 'N/A'}")
         print(f"  Preleases   : {au['prelease_count']}")
 
@@ -2603,7 +2649,7 @@ def main():
         bs = extract_appfolio_box_score(wb, source_system)
         dl = {"total": 0.0}
         rr = {"total_rental": 0.0, "avg_rent": 0.0}
-        au = {"ready_units": [], "prelease_count": 0}
+        au = {"ready_units": [], "prelease_count": 0, "holding_count": 0, "eviction_count": 0}
         el = []
         ps = {}
         wo = {"work_orders": [], "issue_counts": {}}
