@@ -744,13 +744,16 @@ class ScorecardTargetParser:
 # check in ScorecardUpdater.update()); must not affect Eagle Rock or Canyon.
 _OXPT_ROW_GROUPS = {
     "total office expense": ["6100"],                # Administration Costs ("G&A")
-    "total legal & professional fees": ["6200"],      # Legal & Professional
+    "total legal & professional fees": ["6200", "4418"],  # Legal & Professional + Attorney/Court Fees (4418 sits
+                                                       # under Other Income in the P&L, but Michelle wants it
+                                                       # tracked against Legal regardless of that placement)
     "total advertising": ["6300"],                    # Marketing & Leasing ("Marketing")
     "total payroll expense": ["6400"],                 # Salaries & Payroll
     "total cleaning & trash removal": ["6520"],        # Contract Services: housekeeping-specific
     "total outside contractors": ["6540", "6545", "6555", "6565"],  # Contract Services: trades
     "total other expenses": ["6560"],                  # Contract Services: pest control
-    "total repairs": ["6600"],                          # Maintenance Related (non-capital, operating)
+    "total repairs": ["6600", "6700"],                  # Maintenance Related + Turnover Costs (6700 is a
+                                                        # Repairs & Maintenance subcategory, not its own category)
     "total grounds & lawn maintenance": ["6800"],       # Grounds
     "total utilities": ["6900"],                        # Utilities
     "total insurance": ["7120"],                        # Insurance
@@ -774,6 +777,29 @@ _OXPT_ROW_GROUPS = {
     "pet fee-non refundable": ["4455"],
     "nsf fees collected": ["4460"],
     "parking income": ["4508"],
+    # Oddball Other Income lines with no dedicated row of their own — verified
+    # against real OXPT data as revenue (all three post positive values nested
+    # under 4300 Other Income), so they land in the existing catch-all fee
+    # row alongside the ten name-matched lines below, rather than getting a
+    # new row each.
+    "miscellaneous fees": ["4341", "4470", "4500"],
+}
+
+# Other Income detail lines with no assigned P&L code known ahead of time —
+# matched by account name (case-insensitive) rather than code, and routed to
+# the same "Miscellaneous Fees" row as the codes above.
+_OXPT_MISC_FEE_NAMES = {
+    "auto charge",
+    "auto payment fee",
+    "charge off recovery",
+    "corporate housing",
+    "furniture rental income",
+    "housing assistance payment",
+    "insurance - waived",
+    "insurance – waived",
+    "move in charge",
+    "renters insurance income",
+    "storage income",
 }
 
 # Codes whose value is already fully captured by a group above (parent
@@ -795,6 +821,12 @@ _OXPT_EXCLUDED_CODES = {
     "7502", "7505", "7511", "7516", "7518", "7520", "7536", "7543", "7544", "7545",
     "7547", "7549", "7550", "7556", "7560", "7564", "7568", "7570", "7573", "7578", "7595",  # 7500 children
     "4300",  # Other Income rollup, distributed via children individually
+    "6750",  # 6700 (Turnover Costs) child, folded into "total repairs" via the 6700 code above
+    "7400",  # Other Expenses rollup — its only known child (7210, Asset Mgmt Fee) is mapped separately
+             # above and kept below the NOI line; no other 7400 child has appeared in any real OXPT
+             # export seen so far. If one does, it will surface here as unmatched rather than being
+             # silently miscounted — a genuine "Misc Expense" row should be added against real data
+             # at that point, not built speculatively now.
 }
 
 
@@ -947,6 +979,19 @@ class ScorecardUpdater:
                 for code in codes:
                     if code in self.data["accounts"]:
                         account_row_map[code] = row_idx
+
+            # Other Income detail lines with no fixed P&L code (see
+            # _OXPT_MISC_FEE_NAMES) — matched by account name instead,
+            # into the same "Miscellaneous Fees" row as the coded group above.
+            misc_fee_rows = label_rows.get("miscellaneous fees")
+            if misc_fee_rows:
+                if len(misc_fee_rows) > 1:
+                    oxpt_ambiguous_groups.append(("miscellaneous fees (name-matched)", [], misc_fee_rows))
+                else:
+                    for code, acc_data in self.data["accounts"].items():
+                        name = str(acc_data.get("name") or "").strip().lower()
+                        if name in _OXPT_MISC_FEE_NAMES:
+                            account_row_map[code] = misc_fee_rows[0]
 
         # Fallback for accounts not resolved above and not part of an
         # OXPT-excluded group. Match by the parsed P&L account's own name
