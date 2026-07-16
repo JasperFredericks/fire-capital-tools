@@ -845,6 +845,53 @@ _OXPT_EXCLUDED_CODES = {
     # as unmatched rather than getting a new row invented for them.
 }
 
+# Eagle Rock's Scorecard T12 sheet mirrors the P&L's own tree structure (every
+# "Total X" rollup gets its own code-prefixed row, e.g. "6100 Total
+# Administration Costs"), which the existing code-prefix scan already matches
+# directly — no explicit row-group mapping is needed the way OXPT required.
+# The only gap is leaf-level detail codes whose parent rollup IS matched but
+# who don't get their own separate line; excluding them here (so they don't
+# show as unmatched) is safe because their dollar value is already fully
+# captured in that matched parent total. Verified against the real Eagle
+# Rock T12 (annual figures): each child's parent total equals the sum of its
+# section's children exactly, including 7330 Mortgage Payment, which is
+# fully captured by "7300 Total Debt Service" ($18,847.04/month = $6,460.10
+# Mortgage Payment + $12,386.94 Mortgage Interest for May 2026, matching
+# exactly) — unlike OXPT's 7110, this is not a homeless financing item, so
+# it does not need a below-NOI or new-row decision.
+_EAGLE_ROCK_EXCLUDED_CODES = {
+    "4490",  # 4300 (Other Income) child
+    "6125", "6128", "6169",  # 6100 (Administration Costs) children
+    "6639",  # 6600 (Maintenance Related) child
+    "6780",  # 6700 (Turnover Costs) child
+    "7551",  # 7500 (Repairs) child
+    "7330",  # 7300 (Debt Service) child — captured by "7300 Total Debt Service", already matched
+}
+
+# Canyon's Scorecard T12 sheet uses the same mirrored-tree structure as Eagle
+# Rock (confirmed against the real file), in an unrelated older "12 Month
+# Rolling" report's columns (1-14) sitting alongside the real account-code
+# region (column 16+) that the parser actually scans — the two must not be
+# confused. Same logic as Eagle Rock: leaf children of an already-matched
+# parent rollup are excluded here since their value is already captured.
+# 6800 (Grounds) and its only child 6810 (Landscape - Maintenance) are
+# deliberately NOT excluded — verified no "6800 Total Grounds" row (or any
+# other row referencing 6800/6810/Grounds/Landscape) exists anywhere in this
+# Scorecard, so unlike the rest of this list, that one dollar amount
+# ($17,561.50/yr) isn't captured anywhere and is left flagged as unmatched.
+_CANYON_EXCLUDED_CODES = {
+    "4305", "4428", "4470",  # 4300 (Other Income) children
+    "6106", "6178", "6184", "6187",  # 6100 (Administration Costs) children
+    "6330", "6335", "6343",  # 6300 (Marketing & Leasing) children
+    "6415",  # 6400 (Salaries & Payroll Related) child
+    "6530", "6545",  # 6500 (Contract Services) children
+    "6606", "6612", "6636", "6642", "6654",  # 6600 (Maintenance Related) children
+    "6740", "6780",  # 6700 (Turnover Costs) children
+    "6905",  # 6900 (Utilities) child
+    "7240",  # 7200 (Management Company Charges) child
+    "7502", "7518", "7534", "7536", "7537", "7541", "7564", "7570", "7573",  # 7500 (Repairs) children
+}
+
 
 class ScorecardUpdater:
     def __init__(self, scorecard_path, data):
@@ -1008,6 +1055,17 @@ class ScorecardUpdater:
                         name = str(acc_data.get("name") or "").strip().lower()
                         if name in _OXPT_MISC_FEE_NAMES:
                             account_row_map[code] = misc_fee_rows[0]
+
+        # Eagle Rock/Canyon: no explicit row-group mapping needed (see
+        # _EAGLE_ROCK_EXCLUDED_CODES / _CANYON_EXCLUDED_CODES above) — their
+        # Scorecard T12 sheets already code-prefix-match every rollup
+        # directly, so this only excludes already-captured leaf children.
+        is_eagle_rock = "eagle rock" in str(self.data.get("property") or "").strip().lower()
+        is_canyon = "canyon" in str(self.data.get("property") or "").strip().lower()
+        if is_eagle_rock:
+            excluded_codes |= _EAGLE_ROCK_EXCLUDED_CODES
+        if is_canyon:
+            excluded_codes |= _CANYON_EXCLUDED_CODES
 
         # Fallback for accounts not resolved above and not part of an
         # OXPT-excluded group. Match by the parsed P&L account's own name
