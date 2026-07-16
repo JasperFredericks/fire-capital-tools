@@ -1021,6 +1021,34 @@ hr.divider {
   grid-area: actions;
 }
 
+.admin-data-panel {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.admin-instruction-list {
+  color: #374151;
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 14px 0 0 20px;
+  max-width: 820px;
+}
+
+.admin-upload-form {
+  margin-top: 14px;
+  max-width: 680px;
+}
+
+.admin-upload-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .fire-metric-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
