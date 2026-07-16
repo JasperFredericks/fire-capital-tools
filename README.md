@@ -72,8 +72,10 @@ Tested against:
 	- `FLASK_DEBUG`
 	- `ADMIN_USERNAME`
 	- `ADMIN_PASSWORD_HASH`
+	- `SCORECARD_PRO_DB_PATH` (optional; defaults to `scorecard_pro_history.db`)
 	- `CENSUS_API_KEY`
 - Required for the FIRE Metric updater to pull ACS/Census data: `CENSUS_API_KEY`
+- Required for Scorecard Pro's upload history/trend to persist across Railway deploys: `SCORECARD_PRO_DB_PATH`
 
 ### Local development
 

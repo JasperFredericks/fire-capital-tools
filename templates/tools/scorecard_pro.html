@@ -68,6 +68,7 @@
     <button class="scorecard-tab active" data-tab="dashboard" type="button">Dashboard</button>
     <button class="scorecard-tab" data-tab="accounts" type="button">Account Explorer</button>
     <button class="scorecard-tab" data-tab="comparison" type="button">Comparisons</button>
+    <button class="scorecard-tab" data-tab="history" type="button">History</button>
     <button class="scorecard-tab" data-tab="insights" type="button">Insights</button>
     <button class="scorecard-tab" data-tab="export" type="button">Export</button>
   </div>
@@ -144,6 +145,23 @@
       <div id="target-diagnostics" class="scorecard-diagnostics"></div>
       <div class="table-wrap">
         <table class="scorecard-table" id="comparison-table"></table>
+      </div>
+    </div>
+  </section>
+
+  <section class="scorecard-tab-panel" id="tab-history">
+    <div class="card">
+      <div class="scorecard-section-title">Since Your Last Upload</div>
+      <div id="history-callout" class="scorecard-diagnostics"></div>
+    </div>
+    <div class="card">
+      <div class="scorecard-section-title">Trend Across All Saved Uploads</div>
+      <p class="page-subtitle">
+        Every upload for this property is saved automatically, so this covers the full history on
+        file for it &mdash; not just the months in your most recent file.
+      </p>
+      <div class="table-wrap">
+        <table class="scorecard-table" id="history-table"></table>
       </div>
     </div>
   </section>
@@ -353,6 +371,7 @@
     renderAccounts(analysis);
     renderKpiTable(analysis);
     renderComparison(analysis);
+    renderHistory(analysis);
     renderInsights(analysis);
     document.getElementById("report-preview").value = analysis.report_text || "";
   }
@@ -529,6 +548,42 @@
     const foundRows = (diag.found_rows || []).map(item => item.metric + " row " + item.row).join(", ") || "none";
     const missingRows = (diag.missing_rows || []).join(", ") || "none";
     diagEl.textContent = `Target parser: columns found ${foundCols}; missing columns ${missingCols}; rows found ${foundRows}; missing rows ${missingRows}.`;
+  }
+
+  function renderHistory(analysis) {
+    const history = analysis.history || {};
+    const comparison = history.comparison;
+    const calloutEl = document.getElementById("history-callout");
+
+    if (!comparison || !comparison.available) {
+      calloutEl.innerHTML = "";
+      calloutEl.textContent = "First saved upload for this property — nothing to compare yet. " +
+        "Future uploads will show the change here.";
+    } else {
+      const noi = comparison.metrics.noi;
+      const occ = comparison.metrics.occupancy;
+      const exp = comparison.metrics.expense_ratio;
+      const flagClass = noi.pct_change == null ? "" : (noi.pct_change >= 0 ? "flag-cell-green" : "flag-cell-red");
+      const pointText = (label, m) => {
+        if (!m || m.point_change == null) return "";
+        const dir = m.point_change >= 0 ? "+" : "";
+        return `<li>${label}: ${dir}${(m.point_change * 100).toFixed(1)} pts (${fmtPercent(m.previous)} &rarr; ${fmtPercent(m.current)})</li>`;
+      };
+      calloutEl.innerHTML =
+        `<p class="${flagClass}" style="padding:8px 10px; display:inline-block;">${comparison.summary_text}</p>` +
+        `<ul class="scorecard-note-list" style="margin-top:10px;">` +
+        pointText("Occupancy", occ) +
+        pointText("Expense Ratio", exp) +
+        `</ul>`;
+    }
+
+    const rows = (history.trend || []).map(row => [
+      row.month,
+      fmtCurrency(row.noi),
+      row.occupancy == null ? "N/A" : fmtPercent(row.occupancy),
+      row.expense_ratio == null ? "N/A" : fmtPercent(row.expense_ratio),
+    ]);
+    renderTable(document.getElementById("history-table"), ["Month", "NOI", "Occupancy", "Expense Ratio"], rows);
   }
 
   function renderInsights(analysis) {

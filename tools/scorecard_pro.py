@@ -43,6 +43,8 @@ from matplotlib.patches import Polygon
 from openpyxl.styles import Font, PatternFill
 from werkzeug.utils import secure_filename
 
+from tools import scorecard_history
+
 
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 MONTH_INDEX = {month: idx + 1 for idx, month in enumerate(MONTHS)}
@@ -1502,6 +1504,104 @@ def download(token, kind):
     )
 
 
+def _history_months_from_kpis(kpis):
+    """Build the list of per-month dicts scorecard_history.upsert_months()
+    expects, using this module's own month-label parsing (month_sort_key)
+    so the standalone history module stays generic and doesn't need to
+    know anything about "Mon YYYY"-style labels."""
+    months = []
+    for month in kpis["income"]:
+        months.append(
+            {
+                "month": month,
+                "month_start": month_sort_key(month).isoformat(),
+                "income": kpis["income"].get(month),
+                "expenses": kpis["expenses"].get(month),
+                "noi": kpis["noi"].get(month),
+                "occupancy": kpis["physical_occupancy"].get(month),
+                "expense_ratio": kpis["expense_ratio"].get(month),
+            }
+        )
+    return months
+
+
+def _pct_change(current, previous):
+    if current is None or previous is None or previous == 0:
+        return None
+    return (current - previous) / abs(previous)
+
+
+def save_history_and_build_comparison(pnl_data, kpis):
+    """Save this upload's monthly KPIs to the property's history, and
+    compare its most recent month against whatever was on file for this
+    property before this save (across all prior uploads, not just the
+    prior upload's own trailing window). Never raises -- a history/DB
+    hiccup should not break the upload itself."""
+    property_name = pnl_data.get("property") or "Unknown Property"
+    months = _history_months_from_kpis(kpis)
+    if not months:
+        return [], None, None
+
+    current_month = max(months, key=lambda m: m["month_start"])
+    uploaded_at = datetime.datetime.utcnow().isoformat()
+
+    try:
+        with scorecard_history.get_connection() as conn:
+            property_key = scorecard_history.normalize_property_key(property_name)
+            previous_latest = scorecard_history.get_latest(conn, property_key)
+            scorecard_history.upsert_months(conn, property_name, months, uploaded_at)
+            full_history = scorecard_history.get_history(conn, property_key)
+    except Exception as exc:
+        return [], None, f"Scorecard history: could not save/compare this upload ({exc})."
+
+    comparison = {"available": False}
+    if previous_latest:
+        comparison = {
+            "available": True,
+            "previous_month": previous_latest["month"],
+            "previous_uploaded_at": previous_latest["uploaded_at"],
+            "current_month": current_month["month"],
+            "metrics": {
+                "noi": {
+                    "previous": previous_latest["noi"],
+                    "current": current_month["noi"],
+                    "pct_change": _pct_change(current_month["noi"], previous_latest["noi"]),
+                },
+                "occupancy": {
+                    "previous": previous_latest["occupancy"],
+                    "current": current_month["occupancy"],
+                    "point_change": (
+                        None
+                        if current_month["occupancy"] is None or previous_latest["occupancy"] is None
+                        else current_month["occupancy"] - previous_latest["occupancy"]
+                    ),
+                },
+                "expense_ratio": {
+                    "previous": previous_latest["expense_ratio"],
+                    "current": current_month["expense_ratio"],
+                    "point_change": (
+                        None
+                        if current_month["expense_ratio"] is None or previous_latest["expense_ratio"] is None
+                        else current_month["expense_ratio"] - previous_latest["expense_ratio"]
+                    ),
+                },
+            },
+        }
+        noi_pct = comparison["metrics"]["noi"]["pct_change"]
+        if noi_pct is not None:
+            direction = "up" if noi_pct >= 0 else "down"
+            comparison["summary_text"] = (
+                f"NOI {direction} {abs(noi_pct):.1%} since your last upload "
+                f"({previous_latest['month']} -> {current_month['month']})."
+            )
+        else:
+            comparison["summary_text"] = (
+                f"Compared against your last upload ({previous_latest['month']}), "
+                f"but NOI wasn't available for one of the two months."
+            )
+    return full_history, comparison, None
+
+
 def process_scorecard(token, pnl_path, pnl_name, scorecard_path=None, scorecard_name=""):
     parser = PnLParser(pnl_path)
     parser.parse()
@@ -1562,11 +1662,15 @@ def process_scorecard(token, pnl_path, pnl_name, scorecard_path=None, scorecard_
         ext = Path(scorecard_name or files["scorecard"]).suffix.lower() or ".xlsx"
         download_names["scorecard"] = f"{base_name}_updated{ext}"
 
+    history_trend, history_comparison, history_error = save_history_and_build_comparison(pnl_data, kpis)
+
     warnings = list(pnl_data.get("meta", {}).get("warnings", []))
     if target_diagnostics:
         warnings.extend(target_diagnostics.get("warnings", []))
     if update_diagnostics:
         warnings.extend(update_diagnostics.get("warnings", []))
+    if history_error:
+        warnings.append(history_error)
 
     record = {
         "token": token,
@@ -1581,6 +1685,8 @@ def process_scorecard(token, pnl_path, pnl_name, scorecard_path=None, scorecard_
         "files": files,
         "download_names": download_names,
         "warnings": warnings,
+        "history_trend": history_trend,
+        "history_comparison": history_comparison,
         "created_at": datetime.datetime.utcnow().isoformat(),
     }
     _save_record(token, record)
@@ -1620,6 +1726,10 @@ def build_payload(record, selected_months=None):
         "report_text": record.get("report_text", ""),
         "downloads": sorted(record.get("download_names", {}).keys()),
         "charts": build_charts(df_filtered),
+        "history": {
+            "trend": record.get("history_trend") or [],
+            "comparison": record.get("history_comparison"),
+        },
     }
     return clean_for_json(payload)
 
