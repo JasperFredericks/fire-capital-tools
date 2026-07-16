@@ -516,16 +516,7 @@
   }
 
   function renderComparison(analysis) {
-    const rows = (analysis.comparison || []).map(row => [
-      row.month,
-      row.metric,
-      fmtCurrency(row.actual),
-      fmtCurrency(row.uw),
-      fmtCurrency(row.pm),
-      fmtCurrency(row.variance_uw),
-      fmtCurrency(row.variance_pm),
-    ]);
-    renderTable(document.getElementById("comparison-table"), ["Month", "Metric", "Actual", "UW", "PM Budget", "Var UW", "Var PM"], rows);
+    renderComparisonTable(document.getElementById("comparison-table"), analysis.comparison || []);
 
     const diag = analysis.target_diagnostics;
     const diagEl = document.getElementById("target-diagnostics");
@@ -566,6 +557,29 @@
     const thead = "<thead><tr>" + headers.map(h => `<th>${h}</th>`).join("") + "</tr></thead>";
     const bodyRows = rows.length
       ? rows.map(row => "<tr>" + row.map(cell => `<td>${cell == null ? "" : cell}</td>`).join("") + "</tr>").join("")
+      : `<tr><td colspan="${headers.length}">No data available.</td></tr>`;
+    table.innerHTML = thead + "<tbody>" + bodyRows + "</tbody>";
+  }
+
+  // Same shape as renderTable, but the Var UW / Var PM cells get a
+  // flag-cell-red/flag-cell-green class when the row carries a NOI vs
+  // budget flag (see noi_variance_flag() in tools/scorecard_pro.py).
+  function renderComparisonTable(table, rows) {
+    const headers = ["Month", "Metric", "Actual", "UW", "PM Budget", "Var UW", "Var PM"];
+    const thead = "<thead><tr>" + headers.map(h => `<th>${h}</th>`).join("") + "</tr></thead>";
+    const flagClass = flag => flag ? ` class="flag-cell-${flag}"` : "";
+    const bodyRows = rows.length
+      ? rows.map(row => (
+          "<tr>" +
+          `<td>${row.month}</td>` +
+          `<td>${row.metric}</td>` +
+          `<td>${fmtCurrency(row.actual)}</td>` +
+          `<td>${fmtCurrency(row.uw)}</td>` +
+          `<td>${fmtCurrency(row.pm)}</td>` +
+          `<td${flagClass(row.flag_uw)}>${fmtCurrency(row.variance_uw)}</td>` +
+          `<td${flagClass(row.flag_pm)}>${fmtCurrency(row.variance_pm)}</td>` +
+          "</tr>"
+        )).join("")
       : `<tr><td colspan="${headers.length}">No data available.</td></tr>`;
     table.innerHTML = thead + "<tbody>" + bodyRows + "</tbody>";
   }

@@ -1263,7 +1263,7 @@ class ReportGenerator:
         return "\n".join(report)
 
 
-def generate_advanced_insights(df_filtered, accounts):
+def generate_advanced_insights(df_filtered, accounts, targets=None):
     def get_category_metrics(code_prefixes, name):
         relevant_codes = [code for code in accounts.keys() if any(str(code).startswith(prefix) for prefix in code_prefixes)]
         if not relevant_codes or df_filtered.empty:
@@ -1323,6 +1323,35 @@ def generate_advanced_insights(df_filtered, accounts):
         green_flags.append(f"Strong NOI Margin: {noi_margin:.1%}")
     elif noi_margin < 0.40:
         red_flags.append(f"Low NOI Margin: {noi_margin:.1%}")
+
+    # Aggregate (sum expenses / sum income) rather than averaging the monthly
+    # ExpenseRatio column directly — matches the NOI Margin calc above, and
+    # avoids a single near-zero-income lease-up month from dominating the
+    # average the way a mean-of-ratios would (confirmed against real OXPT
+    # data: a mean-of-ratios gave 348% off one such month vs. a real 65%).
+    expenses_sum = df_filtered["Expenses"].sum() if "Expenses" in df_filtered else 0
+    expense_ratio_avg = (expenses_sum / income_sum) if income_sum else None
+    if expense_ratio_avg is not None and expense_ratio_avg > 0.65:
+        red_flags.append(f"High Expense Ratio: {expense_ratio_avg:.1%}")
+    elif expense_ratio_avg is not None and expense_ratio_avg < 0.50:
+        green_flags.append(f"Low Expense Ratio: {expense_ratio_avg:.1%}")
+
+    # NOI vs UW/PM Budget, rolled up over the selected months (same +/-10%
+    # red / +/-3% green thresholds used for the per-month Comparison table
+    # flags — see noi_variance_flag() — applied here to the period total).
+    months_count = len(df_filtered) if not df_filtered.empty else 0
+    actual_noi_total = float(df_filtered["NOI"].sum()) if "NOI" in df_filtered and months_count else 0.0
+    for label, target_dict in (("UW Budget", (targets or {}).get("UW") or {}), ("PM Budget", (targets or {}).get("PM") or {})):
+        noi_target_monthly = float(target_dict.get("NOI") or 0.0)
+        if not noi_target_monthly or not months_count:
+            continue
+        noi_target_total = noi_target_monthly * months_count
+        flag = noi_variance_flag(actual_noi_total - noi_target_total, noi_target_total)
+        variance_pct = (actual_noi_total - noi_target_total) / abs(noi_target_total)
+        if flag == "red":
+            red_flags.append(f"NOI vs {label} off by {variance_pct:+.1%}")
+        elif flag == "green":
+            green_flags.append(f"NOI on track vs {label} ({variance_pct:+.1%})")
 
     for cat in analyzed_cats:
         if "Utilities" in cat["name"] and cat["pct_change"] > 0.10:
@@ -1506,7 +1535,7 @@ def process_scorecard(token, pnl_path, pnl_name, scorecard_path=None, scorecard_
     files["xlsx"] = xlsx_path.name
 
     pdf_path = _upload_dir() / f"{token}_scorecard_report.pdf"
-    create_pdf_report(pdf_path, pnl_data, kpis, targets, generate_advanced_insights(full_df, pnl_data["accounts"]), full_df)
+    create_pdf_report(pdf_path, pnl_data, kpis, targets, generate_advanced_insights(full_df, pnl_data["accounts"], targets), full_df)
     files["pdf"] = pdf_path.name
 
     download_names = {
@@ -1554,8 +1583,9 @@ def build_payload(record, selected_months=None):
 
     df_full = build_kpi_dataframe(kpis)
     df_filtered = df_full[df_full["Month"].isin(selected)]
-    insights = generate_advanced_insights(df_filtered, pnl_data["accounts"])
-    comparison_rows = build_comparison_rows(kpis, record.get("targets") or {"UW": {}, "PM": {}}, selected)
+    targets = record.get("targets") or {"UW": {}, "PM": {}}
+    insights = generate_advanced_insights(df_filtered, pnl_data["accounts"], targets)
+    comparison_rows = build_comparison_rows(kpis, targets, selected)
 
     payload = {
         "property": pnl_data.get("property", "Property"),
@@ -1569,7 +1599,7 @@ def build_payload(record, selected_months=None):
         "kpi_rows": _records_for_json(df_filtered),
         "accounts": build_account_payload(pnl_data["accounts"], selected),
         "comparison": comparison_rows,
-        "targets": record.get("targets") or {"UW": {}, "PM": {}},
+        "targets": targets,
         "target_diagnostics": record.get("target_diagnostics"),
         "update_diagnostics": record.get("update_diagnostics"),
         "insights": insights,
@@ -1668,6 +1698,18 @@ def build_account_payload(accounts, selected_months):
     return rows
 
 
+def noi_variance_flag(variance, target):
+    """Red beyond +/-10% of budget, green within +/-3%, otherwise unflagged."""
+    if not target:
+        return None
+    pct = variance / abs(target)
+    if abs(pct) > 0.10:
+        return "red"
+    if abs(pct) <= 0.03:
+        return "green"
+    return None
+
+
 def build_comparison_rows(kpis, targets, selected_months):
     rows = []
     for month in selected_months:
@@ -1676,17 +1718,24 @@ def build_comparison_rows(kpis, targets, selected_months):
             actual = float(kpis[key].get(month, 0.0) or 0.0)
             uw = float((targets.get("UW") or {}).get(target_key, 0.0) or 0.0)
             pm = float((targets.get("PM") or {}).get(target_key, 0.0) or 0.0)
-            rows.append(
-                {
-                    "month": month,
-                    "metric": metric,
-                    "actual": actual,
-                    "uw": uw,
-                    "pm": pm,
-                    "variance_uw": actual - uw,
-                    "variance_pm": actual - pm,
-                }
-            )
+            variance_uw = actual - uw
+            variance_pm = actual - pm
+            row = {
+                "month": month,
+                "metric": metric,
+                "actual": actual,
+                "uw": uw,
+                "pm": pm,
+                "variance_uw": variance_uw,
+                "variance_pm": variance_pm,
+            }
+            # Flags are scoped to NOI (the metric Michelle asked to have
+            # flagged against budget) — Revenue/Expenses variance is shown
+            # but intentionally left unflagged here.
+            if metric == "NOI":
+                row["flag_uw"] = noi_variance_flag(variance_uw, uw)
+                row["flag_pm"] = noi_variance_flag(variance_pm, pm)
+            rows.append(row)
     return rows
 
 

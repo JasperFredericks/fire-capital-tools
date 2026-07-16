@@ -803,6 +803,22 @@ hr.divider {
   gap: 16px;
 }
 
+.flag-cell-red,
+.flag-cell-green {
+  border-radius: 6px;
+  font-weight: 750;
+}
+
+.flag-cell-red {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.flag-cell-green {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
 .scorecard-report-preview {
   width: 100%;
   min-height: 360px;
