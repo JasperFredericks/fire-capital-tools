@@ -30,3 +30,7 @@ class Config:
     # ── Admin credentials (loaded from .env) ──────────────────────────────
     ADMIN_USERNAME: str = os.environ.get("ADMIN_USERNAME", "michelle")
     ADMIN_PASSWORD_HASH: str = os.environ.get("ADMIN_PASSWORD_HASH", "")
+    USER_STORE_PATH: str = os.environ.get(
+        "USER_STORE_PATH",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json"),
+    )

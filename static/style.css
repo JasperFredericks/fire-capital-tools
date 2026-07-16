@@ -907,6 +907,22 @@ hr.divider {
   margin-bottom: 18px;
 }
 
+.login-switch {
+  color: #6b7280;
+  font-size: 13px;
+  margin-top: 20px;
+  text-align: center;
+}
+
+.login-switch a {
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.login-switch a:hover {
+  color: #1d4ed8;
+}
+
 /* ── Form elements ───────────────────────────────────────────────────────── */
 .form-group { margin-bottom: 18px; }
 

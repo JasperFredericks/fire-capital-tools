@@ -1,12 +1,13 @@
 import os
+import re
 
-import bcrypt
 from flask import Blueprint, current_app, render_template, redirect, url_for, request, flash, session
 from flask_login import login_user, logout_user, login_required, current_user
 
 from models import User
 
 auth_bp = Blueprint("auth", __name__)
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.@-]+$")
 
 
 @auth_bp.route("/login", methods=["GET", "POST"])
@@ -37,6 +38,47 @@ def login():
     return render_template("login.html", error=error)
 
 
+@auth_bp.route("/signup", methods=["GET", "POST"])
+def signup():
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard"))
+
+    error: str | None = None
+
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        confirm_pw = request.form.get("confirm_password", "")
+
+        if len(username) < 3:
+            error = "Username must be at least 3 characters."
+        elif len(username) > 64:
+            error = "Username must be 64 characters or fewer."
+        elif not USERNAME_PATTERN.fullmatch(username):
+            error = "Use only letters, numbers, dots, underscores, hyphens, or @."
+        elif len(password) < 8:
+            error = "Password must be at least 8 characters."
+        elif password != confirm_pw:
+            error = "Passwords do not match."
+        elif User.get_by_id(username, current_app.config):
+            error = "That username is already in use."
+        else:
+            try:
+                user = User.create(username, password, current_app.config)
+            except OSError:
+                error = "Could not create the account. Please try again."
+            except ValueError as exc:
+                error = str(exc)
+            else:
+                login_user(user)
+                session.permanent = True
+                session["_last_active"] = _now()
+                flash("Account created. You are logged in.", "success")
+                return redirect(url_for("dashboard"))
+
+    return render_template("signup.html", error=error)
+
+
 @auth_bp.route("/logout")
 @login_required
 def logout():
@@ -65,13 +107,20 @@ def change_password():
             error = "New password must be at least 6 characters."
         elif new_pw != confirm_pw:
             error = "New passwords do not match."
+        elif User.is_stored_user(current_user.id, current_app.config):
+            try:
+                success = User.update_password(current_user.id, new_pw, current_app.config)
+            except OSError:
+                error = "Could not update the password. Please try again."
+            if not success and error is None:
+                error = "Could not update the password. Please try again."
         elif _is_managed_runtime():
             error = (
                 "Password changes must be made in the production environment "
                 "variables so they survive deploys and restarts."
             )
         else:
-            new_hash = bcrypt.hashpw(new_pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+            new_hash = User.hash_password(new_pw)
             _write_env_hash(new_hash)
             # Update running config so the new password works immediately
             current_app.config["ADMIN_PASSWORD_HASH"] = new_hash
@@ -82,8 +131,6 @@ def change_password():
 
 def _write_env_hash(new_hash: str) -> None:
     """Rewrite ADMIN_PASSWORD_HASH line in the .env file."""
-    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-    # Look relative to this file's parent (repo root)
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     try:
         with open(env_path, "r", encoding="utf-8") as f:

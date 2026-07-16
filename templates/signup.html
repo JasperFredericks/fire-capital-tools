@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Log in — FIRE Capital Tools</title>
+  <title>Sign up - FIRE Capital Tools</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -15,44 +15,42 @@
       <div class="login-brand-tag">Tools Platform</div>
     </div>
 
-    <h1 class="login-title">Welcome back</h1>
-    <p class="login-sub">Sign in to access your property tools.</p>
-
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        {% for category, message in messages %}
-          <div class="alert alert-{{ category }}">{{ message }}</div>
-        {% endfor %}
-      {% endif %}
-    {% endwith %}
+    <h1 class="login-title">Create an account</h1>
+    <p class="login-sub">Add a username and password for tool access.</p>
 
     {% if error %}
       <div class="login-error">{{ error }}</div>
     {% endif %}
 
-    <form method="POST" action="{{ url_for('auth.login') }}">
+    <form method="POST" action="{{ url_for('auth.signup') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       <div class="form-group">
         <label class="form-label" for="username">Username</label>
         <input class="form-input" type="text" id="username" name="username"
-               autocomplete="username" autofocus required>
+               autocomplete="username" autofocus required minlength="3" maxlength="64">
       </div>
 
       <div class="form-group">
         <label class="form-label" for="password">Password</label>
         <input class="form-input" type="password" id="password" name="password"
-               autocomplete="current-password" required>
+               autocomplete="new-password" required minlength="8">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="confirm_password">Confirm Password</label>
+        <input class="form-input" type="password" id="confirm_password" name="confirm_password"
+               autocomplete="new-password" required minlength="8">
       </div>
 
       <button type="submit" class="btn btn-primary" style="width:100%; margin-top:8px;">
-        Log in
+        Sign up
       </button>
     </form>
 
     <p class="login-switch">
-      Need an account?
-      <a href="{{ url_for('auth.signup') }}">Sign up</a>
+      Already have an account?
+      <a href="{{ url_for('auth.login') }}">Log in</a>
     </p>
 
   </div>

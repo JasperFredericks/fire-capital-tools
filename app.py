@@ -59,9 +59,7 @@ def create_app(config_class: type = Config) -> Flask:
     # ── User loader ────────────────────────────────────────────────────────
     @login_manager.user_loader
     def load_user(user_id: str) -> User | None:
-        if User.matches_configured_user(user_id, app.config):
-            return User(User.admin_username(app.config))
-        return None
+        return User.get_by_id(user_id, app.config)
 
     # ── Blueprints ─────────────────────────────────────────────────────────
     from auth import auth_bp
