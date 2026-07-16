@@ -781,8 +781,16 @@ _OXPT_ROW_GROUPS = {
     # against real OXPT data as revenue (all three post positive values nested
     # under 4300 Other Income), so they land in the existing catch-all fee
     # row alongside the ten name-matched lines below, rather than getting a
-    # new row each.
-    "miscellaneous fees": ["4341", "4470", "4500"],
+    # new row each. 4295 (Miscellaneous Credit) and 4580 (High Risk Fee, a
+    # sibling income line outside the 4000/4300 tree) join the same bucket.
+    "miscellaneous fees": ["4341", "4470", "4500", "4295", "4580"],
+    # Rents family (4000/4100/4200 children) — the rollups themselves
+    # (4000, 4100, 4200) are excluded below since these children fully
+    # capture their values.
+    "loss/gain to market": ["4120"],           # "(Loss) / Gain to Old Lease" — best-fit match despite wording
+    "delinquency": ["4210"],                   # Bad Debt / Write-Off Uncollectable Rent
+    "vacancy": ["4220"],                        # Vacancy Loss
+    "concessions": ["4250", "4258", "4260"],    # Rent Concessions + Utility Credit + Rent Discount
 }
 
 # Other Income detail lines with no assigned P&L code known ahead of time —
@@ -827,6 +835,12 @@ _OXPT_EXCLUDED_CODES = {
              # export seen so far. If one does, it will surface here as unmatched rather than being
              # silently miscounted — a genuine "Misc Expense" row should be added against real data
              # at that point, not built speculatively now.
+    "4000", "4100", "4200",  # Rents rollups (Net Rental Income / Gross Possible Rent / Deductions),
+                             # fully distributed via their 4110/4120/4210/4220/4250/4258/4260 children.
+    # 7110 Replacement Reserve Escrow is deliberately NOT excluded or mapped here — no existing T12
+    # row fits it (it's a peer to Insurance/Taxes/Management Fees, not nested under any of them), and
+    # per the precedent already set for Eagle Rock/Canyon, genuinely homeless items are left flagged
+    # as unmatched rather than getting a new row invented for them.
 }
 
 
