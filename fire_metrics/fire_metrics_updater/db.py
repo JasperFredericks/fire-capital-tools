@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS cities (
     normalized_city TEXT NOT NULL,
     normalized_display_name TEXT NOT NULL,
     search_key TEXT NOT NULL,
+    latitude REAL,
+    longitude REAL,
     include_flag INTEGER NOT NULL DEFAULT 1,
     threshold_reason TEXT,
 
@@ -107,6 +109,13 @@ CREATE TABLE IF NOT EXISTS refresh_metadata (
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # Backward-compatible migration for existing local DBs created before
+    # latitude/longitude columns were introduced.
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(cities)").fetchall()}
+    if "latitude" not in existing:
+        conn.execute("ALTER TABLE cities ADD COLUMN latitude REAL")
+    if "longitude" not in existing:
+        conn.execute("ALTER TABLE cities ADD COLUMN longitude REAL")
     conn.commit()
 
 
@@ -137,13 +146,21 @@ def upsert_city_identity(conn: sqlite3.Connection, rows: Iterable[dict[str, Any]
     for row in rows:
         conn.execute(
             """
-            INSERT INTO cities (city, state, display_name, normalized_city, normalized_display_name, search_key)
-            VALUES (:city, :state, :display_name, :normalized_city, :normalized_display_name, :search_key)
+            INSERT INTO cities (
+                city, state, display_name, normalized_city, normalized_display_name, search_key,
+                latitude, longitude
+            )
+            VALUES (
+                :city, :state, :display_name, :normalized_city, :normalized_display_name, :search_key,
+                :latitude, :longitude
+            )
             ON CONFLICT(city, state) DO UPDATE SET
                 display_name=excluded.display_name,
                 normalized_city=excluded.normalized_city,
                 normalized_display_name=excluded.normalized_display_name,
-                search_key=excluded.search_key
+                search_key=excluded.search_key,
+                latitude=COALESCE(excluded.latitude, cities.latitude),
+                longitude=COALESCE(excluded.longitude, cities.longitude)
             """,
             row,
         )

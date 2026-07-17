@@ -168,6 +168,12 @@ def run_full_refresh(
         else:
             steps.append({"step": "crime_fetch", "status": "skipped"})
 
+        # Ensure coordinates are populated for all currently indexed cities,
+        # including rows carried over from older DBs built before lat/lon existed.
+        ingest_results["coordinates"] = _step(
+            steps, "coordinates_backfill", index_builder.backfill_city_coordinates, conn
+        )
+
         total_cities = conn.execute("SELECT COUNT(*) FROM cities").fetchone()[0]
         db_module.set_metadata(
             conn,

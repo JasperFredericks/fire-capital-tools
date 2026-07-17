@@ -12,9 +12,12 @@ no guessing needed. See db.py for the schema this writes into.
 
 from __future__ import annotations
 
+import csv
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import urllib.request
+import zipfile
 
 import openpyxl
 
@@ -22,6 +25,27 @@ from . import db as db_module
 from .city_search import build_city_aliases, make_search_key, normalize_city_tokens, normalize_query
 
 POPULATION_THRESHOLD = 100_000
+GAZETTEER_DIR = Path(__file__).resolve().parent.parent / "data" / "cache" / "census_gazetteer"
+GAZETTEER_URLS = [
+    "https://www2.census.gov/geo/docs/maps-data/data/gazetteer/Gaz_places_national.zip",
+    "https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2024_Gaz_place_national.zip",
+    "https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2023_Gaz_place_national.zip",
+]
+_COORD_CITY_ALIASES = {
+    "nyc": "new york",
+    "new york city": "new york",
+    "la": "los angeles",
+    "l a": "los angeles",
+    "los angeles city": "los angeles",
+    "st louis": "st louis",
+    "saint louis": "st louis",
+    "st. louis": "st louis",
+    "st. louis city": "st louis",
+    "phoenix city": "phoenix",
+    "las vegas city": "las vegas",
+    "atlanta city": "atlanta",
+}
+_CITY_SUFFIX_EXCEPTIONS = {"oklahoma city", "kansas city", "salt lake city", "carson city"}
 
 # Some pipeline outputs (e.g. add_climate_risk.py, which correctly drops its
 # own internally-recomputed state_abbr column as internal working state --
@@ -164,7 +188,129 @@ def _identity_row(city: str, state_abbr: str) -> dict[str, Any]:
         "normalized_display_name": normalize_query(display_name),
         "search_key": make_search_key(clean_city, state_abbr),
         "search_keys": sorted(search_keys),
+        "latitude": None,
+        "longitude": None,
     }
+
+
+def _coord_city_token(value: str) -> str:
+    normalized = normalize_city_tokens(value)
+    if normalized.startswith("city of "):
+        normalized = normalized[len("city of "):].strip()
+    if normalized.endswith(" city") and normalized not in _CITY_SUFFIX_EXCEPTIONS:
+        normalized = normalized[: -len(" city")].strip()
+    return _COORD_CITY_ALIASES.get(normalized, normalized)
+
+
+def _ensure_gazetteer_places_file() -> Path:
+    GAZETTEER_DIR.mkdir(parents=True, exist_ok=True)
+
+    existing = sorted(GAZETTEER_DIR.glob("*Gaz_place*_national.txt"))
+    if not existing:
+        existing = sorted(GAZETTEER_DIR.glob("Gaz_places_national.txt"))
+    if existing:
+        return existing[0]
+
+    for url in GAZETTEER_URLS:
+        zip_name = url.split("/")[-1]
+        zip_path = GAZETTEER_DIR / zip_name
+        try:
+            urllib.request.urlretrieve(url, zip_path)
+            with zipfile.ZipFile(zip_path, "r") as archive:
+                archive.extractall(GAZETTEER_DIR)
+            extracted = sorted(GAZETTEER_DIR.glob("*Gaz_place*_national.txt"))
+            if not extracted:
+                extracted = sorted(GAZETTEER_DIR.glob("Gaz_places_national.txt"))
+            if extracted:
+                return extracted[0]
+        except Exception:
+            continue
+
+    raise RuntimeError(
+        f"Could not download Census Gazetteer place file into {GAZETTEER_DIR}."
+    )
+
+
+def _load_gazetteer_coordinate_lookup() -> dict[tuple[str, str], tuple[float, float]]:
+    path = _ensure_gazetteer_places_file()
+    lookup: dict[tuple[str, str], tuple[float, float]] = {}
+
+    with path.open("r", encoding="latin-1", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for raw_row in reader:
+            row = {str(k).strip().upper(): v for k, v in raw_row.items() if k is not None}
+            state = _resolve_state_abbr(row.get("USPS"))
+            name = str(row.get("NAME") or "").strip()
+            if not state or not name:
+                continue
+
+            lat_raw = row.get("INTPTLAT")
+            lon_raw = row.get("INTPTLONG")
+            if lat_raw in (None, "") or lon_raw in (None, ""):
+                continue
+            try:
+                latitude = float(lat_raw)
+                longitude = float(lon_raw)
+            except (TypeError, ValueError):
+                continue
+
+            raw_token = _coord_city_token(name)
+            clean_token = _coord_city_token(_clean_display_city(name))
+            lookup[(state, raw_token)] = (latitude, longitude)
+            lookup[(state, clean_token)] = (latitude, longitude)
+
+    return lookup
+
+
+def _coordinates_for_city(city: str, state_abbr: str, lookup: dict[tuple[str, str], tuple[float, float]]) -> tuple[float | None, float | None]:
+    state = _resolve_state_abbr(state_abbr)
+    if not state:
+        return (None, None)
+
+    candidates = [
+        _coord_city_token(city),
+        _coord_city_token(_clean_display_city(city)),
+        _coord_city_token(normalize_city_tokens(city)),
+    ]
+    for token in candidates:
+        match = lookup.get((state, token))
+        if match:
+            return match
+    return (None, None)
+
+
+def backfill_city_coordinates(conn) -> dict[str, Any]:
+    rows = conn.execute(
+        """
+        SELECT city, state
+        FROM cities
+        WHERE include_flag = 1
+          AND (latitude IS NULL OR longitude IS NULL)
+        """
+    ).fetchall()
+    if not rows:
+        return {"rows_checked": 0, "rows_updated": 0}
+
+    lookup = _load_gazetteer_coordinate_lookup()
+    updates = []
+    for row in rows:
+        latitude, longitude = _coordinates_for_city(row["city"], row["state"], lookup)
+        if latitude is None or longitude is None:
+            continue
+        updates.append((latitude, longitude, row["city"], row["state"]))
+
+    if updates:
+        conn.executemany(
+            """
+            UPDATE cities
+            SET latitude = ?, longitude = ?
+            WHERE city = ? AND state = ?
+            """,
+            updates,
+        )
+        conn.commit()
+
+    return {"rows_checked": len(rows), "rows_updated": len(updates)}
 
 
 def ingest_population_and_landlord(workbook_path: Path, conn) -> dict[str, Any]:
@@ -205,6 +351,7 @@ def ingest_population_and_landlord(workbook_path: Path, conn) -> dict[str, Any]:
                 if city and state:
                     landlord_scores[(str(city).strip(), str(state).strip())] = score
 
+    coord_lookup = _load_gazetteer_coordinate_lookup()
     identity_rows = []
     metric_rows = []
     excluded_rows = []
@@ -218,7 +365,11 @@ def ingest_population_and_landlord(workbook_path: Path, conn) -> dict[str, Any]:
         city = str(city).strip()
         state_abbr = str(state_abbr).strip().upper()
 
-        identity_rows.append(_identity_row(city, state_abbr))
+        identity = _identity_row(city, state_abbr)
+        latitude, longitude = _coordinates_for_city(city, state_abbr, coord_lookup)
+        identity["latitude"] = latitude
+        identity["longitude"] = longitude
+        identity_rows.append(identity)
 
         pop_current = ws.cell(r, pop_col).value if pop_col else None
         landlord_score = landlord_scores.get((city, str(state_name).strip() if state_name else ""))

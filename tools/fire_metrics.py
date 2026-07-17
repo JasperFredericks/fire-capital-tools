@@ -264,6 +264,7 @@ def _reingest_from_disk() -> dict:
             results["climate"] = index_builder.ingest_climate_risk(orch.CLIMATE_RISK_FILE, conn)
         if orch.CRIME_FINAL_FILE.exists():
             results["crime"] = index_builder.ingest_crime(orch.CRIME_FINAL_FILE, conn)
+        results["coordinates"] = index_builder.backfill_city_coordinates(conn)
     return results
 
 
