@@ -106,18 +106,24 @@
         <div class="dashboard-section-title" style="font-size:14px;">US City Map</div>
         <div id="fire-map-note" class="result-note">Current and compared city dots</div>
       </div>
-      <div class="fire-map-svg-wrap">
-        <div class="fire-map-canvas">
-          <img
-            id="fire-us-base-map"
-            src="{{ url_for('static', filename='us-map.svg') }}"
-            alt="Map of the contiguous United States"
-          >
-          <svg id="fire-us-map-overlay" viewBox="0 0 960 600" role="img" aria-label="Current and compared city locations on the contiguous United States map">
+      <div class="fire-map-frame">
+        <img
+          id="fire-us-base-map"
+          class="fire-map-base"
+          src="{{ url_for('static', filename='us-map.svg') }}"
+          alt="Map of the contiguous United States"
+        >
+        <svg
+          id="fire-us-map-overlay"
+          class="fire-map-overlay"
+          viewBox="0 0 960 600"
+          preserveAspectRatio="xMidYMid meet"
+          role="img"
+          aria-label="Current and compared city locations on the contiguous United States map"
+        >
           <g id="fire-map-compared-points"></g>
           <g id="fire-map-current-point"></g>
-          </svg>
-        </div>
+        </svg>
       </div>
       <div class="fire-map-legend">
         <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-current"></span>Current city</span>
@@ -290,10 +296,10 @@
     height: 600,
   };
   const mapProjectionInset = {
-    left: 110,
-    right: 55,
-    top: 70,
-    bottom: 520,
+    left: 128,
+    right: 40,
+    top: 26,
+    bottom: 458,
   };
   const stateAbbreviations = {
     ALABAMA: "AL",
@@ -351,9 +357,12 @@
   const cityTokenAliases = {
     "nyc": "new york",
     "new york city": "new york",
+    "new york city ny": "new york",
     "new york ny": "new york",
     "la": "los angeles",
     "l a": "los angeles",
+    "los angeles california": "los angeles",
+    "los angeles city california": "los angeles",
     "los angeles la": "los angeles",
     "st louis": "st louis",
     "st louis city": "st louis",
@@ -363,6 +372,7 @@
     "saint louis missouri": "st louis",
     "st. louis": "st louis",
     "st. louis city": "st louis",
+    "st. louis missouri": "st louis",
     "st louis city mo": "st louis",
     "st louis mo": "st louis",
     "fort worth city": "fort worth",
@@ -377,6 +387,7 @@
   };
   const fallbackCoordinates = {
     "new york|NY": { lat: 40.7128, lon: -74.0060 },
+    "new york city|NY": { lat: 40.7128, lon: -74.0060 },
     "new york|NJ": { lat: 40.7291, lon: -74.0776 },
     "los angeles|CA": { lat: 34.0522, lon: -118.2437 },
     "chicago|IL": { lat: 41.8781, lon: -87.6298 },
@@ -385,6 +396,7 @@
     "atlanta|GA": { lat: 33.7490, lon: -84.3880 },
     "st louis|MO": { lat: 38.6270, lon: -90.1994 },
     "washington|DC": { lat: 38.9072, lon: -77.0369 },
+    "washington dc|DC": { lat: 38.9072, lon: -77.0369 },
     "dallas|TX": { lat: 32.7767, lon: -96.7970 },
     "fort worth|TX": { lat: 32.7555, lon: -97.3308 },
     "san antonio|TX": { lat: 29.4241, lon: -98.4936 },
@@ -512,6 +524,24 @@
     return cleaned.split(",")[0].trim();
   }
 
+  function getCityField(city) {
+    return String(city.city || city.city_name || city.name || "").trim();
+  }
+
+  function getStateField(city) {
+    return String(city.state || city.state_abbr || city.state_code || "").trim();
+  }
+
+  function getDisplayField(city) {
+    const state = getStateField(city);
+    const fallbackDisplay = `${getCityField(city)}${state ? `, ${state}` : ""}`;
+    return String(city.display_name || city.display || fallbackDisplay || "").trim();
+  }
+
+  function getPopulationField(city) {
+    return city.population_current ?? city.population ?? city.population_estimate ?? null;
+  }
+
   function normalizedCityToken(value) {
     return cityCoreName(value)
       .toLowerCase()
@@ -521,7 +551,12 @@
 
   function canonicalCityToken(token) {
     const normalized = String(token || "").trim().toLowerCase();
-    return cityTokenAliases[normalized] || normalized;
+    const preserved = new Set(["oklahoma city", "kansas city", "salt lake city", "carson city"]);
+    const deSuffixed = normalized.endsWith(" city") && !preserved.has(normalized)
+      ? normalized.slice(0, -5).trim()
+      : normalized;
+    const cleaned = deSuffixed.replace(/^city of /, "").trim();
+    return cityTokenAliases[cleaned] || cleaned;
   }
 
   function normalizeStateToken(state) {
@@ -533,25 +568,24 @@
   }
 
   function cleanDisplayFromCityObject(city) {
-    const fallbackDisplay = `${city.city || ""}${city.state ? `, ${city.state}` : ""}`;
-    const base = city.display_name || fallbackDisplay;
+    const base = getDisplayField(city);
     return cleanCityDisplayName(base);
   }
 
   function cityKey(city) {
-    const cityToken = normalizedCityToken(city.city || city.display_name || "");
-    const stateToken = String(city.state || "").trim().toUpperCase();
+    const cityToken = normalizedCityToken(getCityField(city) || getDisplayField(city));
+    const stateToken = normalizeStateToken(getStateField(city));
     return `${cityToken}|${stateToken}`;
   }
 
   function fallbackCoordKey(city) {
-    const canonicalToken = canonicalCityToken(normalizedCityToken(city.city || city.display_name || ""));
-    return `${canonicalToken}|${normalizeStateToken(city.state)}`;
+    const canonicalToken = canonicalCityToken(normalizedCityToken(getCityField(city) || getDisplayField(city)));
+    return `${canonicalToken}|${normalizeStateToken(getStateField(city))}`;
   }
 
   function resolveFallbackCoordinates(city) {
-    const canonicalToken = canonicalCityToken(normalizedCityToken(city.city || city.display_name || ""));
-    const state = normalizeStateToken(city.state);
+    const canonicalToken = canonicalCityToken(normalizedCityToken(getCityField(city) || getDisplayField(city)));
+    const state = normalizeStateToken(getStateField(city));
     const keyed = fallbackCoordinates[`${canonicalToken}|${state}`];
     if (keyed) return keyed;
 
@@ -653,7 +687,7 @@
         missing += 1;
         return;
       }
-      const population = asNumber(city.population_current);
+      const population = asNumber(getPopulationField(city));
       const populationLabel = population === null ? "Population unavailable" : `Population ${Math.round(population).toLocaleString()}`;
       const radius = populationRadius(population);
       appendMapPoint(
@@ -674,7 +708,7 @@
         if (!point) {
           missing += 1;
         } else {
-          const population = asNumber(currentCity.population_current);
+          const population = asNumber(getPopulationField(currentCity));
           const populationLabel = population === null ? "Population unavailable" : `Population ${Math.round(population).toLocaleString()}`;
           const radius = populationRadius(population);
           appendMapPoint(
@@ -723,12 +757,13 @@
 
   function sanitizeCity(city) {
     const cleanedDisplay = cleanDisplayFromCityObject(city);
-    const cleanedCity = cityCoreName(city.city || city.display_name || "");
+    const cleanedCity = cityCoreName(getCityField(city) || getDisplayField(city));
+    const stateValue = getStateField(city);
     return {
-      city: cleanedCity || city.city || "",
-      state: city.state || "",
+      city: cleanedCity || getCityField(city) || "",
+      state: stateValue,
       display_name: cleanedDisplay,
-      population_current: city.population_current ?? null,
+      population_current: getPopulationField(city),
       population_growth_recent: city.population_growth_recent ?? null,
       median_income_current: city.median_income_current ?? null,
       median_income_growth_recent: city.median_income_growth_recent ?? null,
@@ -763,7 +798,7 @@
       const cleanedCityName = cityCoreName(cleanDisplayFromCityObject(city));
       const rowValues = [
         cleanedCityName || "—",
-        city.state || "—",
+        getStateField(city) || "—",
         cmpFmtNum(city.population_current),
         cmpFmtPct(city.population_growth_recent),
         cmpFmtMoney(city.median_income_current),
