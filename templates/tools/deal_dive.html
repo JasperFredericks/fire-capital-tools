@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Deal Dive - FIRE Capital Tools{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <h1 class="page-title">Deal Dive</h1>
+  <p class="page-subtitle">A deep-dive report on one property at a time &mdash; financials, comps, and condition &mdash; to support an acquisition decision or a closer look at one already in the portfolio.</p>
+</div>
+
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+    <div class="status-chip-row">
+      <a href="{{ url_for('deal_dive.index') }}" class="btn {{ 'btn-primary' if not status_filter else 'btn-ghost' }}">All</a>
+      {% for s in statuses %}
+        <a href="{{ url_for('deal_dive.index', status=s) }}" class="btn {{ 'btn-primary' if status_filter == s else 'btn-ghost' }}">{{ s.replace('_', ' ')|title }}</a>
+      {% endfor %}
+    </div>
+    <a href="{{ url_for('deal_dive.new_deal') }}" class="btn btn-primary">+ New Deal</a>
+  </div>
+
+  <div class="table-wrap">
+    <table class="deal-dive-table">
+      <thead>
+        <tr>
+          <th>Address</th>
+          <th>City / State</th>
+          <th>Units</th>
+          <th>Status</th>
+          <th>Asking Price</th>
+          <th>Cap Rate</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if deals %}
+          {% for deal in deals %}
+            <tr>
+              <td><a href="{{ url_for('deal_dive.detail', deal_id=deal.id) }}">{{ deal.address }}</a></td>
+              <td>{{ deal.city }}, {{ deal.state }}</td>
+              <td>{{ deal.unit_count or '—' }}</td>
+              <td><span class="source-badge deal-status-{{ deal.status }}">{{ deal.status.replace('_', ' ')|title }}</span></td>
+              <td>{{ '${:,.0f}'.format(deal.asking_price) if deal.asking_price is not none else '—' }}</td>
+              <td>{{ '%.2f%%'|format(deal.cap_rate) if deal.cap_rate is not none else '—' }}</td>
+              <td>{{ deal.updated_at[:10] }}</td>
+            </tr>
+          {% endfor %}
+        {% else %}
+          <tr><td colspan="7">No deals yet{% if status_filter %} with this status{% endif %}. <a href="{{ url_for('deal_dive.new_deal') }}">Create one</a>.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

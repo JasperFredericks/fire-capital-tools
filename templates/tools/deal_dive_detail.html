@@ -1,0 +1,369 @@
+{% extends "base.html" %}
+{% block title %}{{ deal.address }} - Deal Dive{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('deal_dive.index') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Deal Dive
+  </a>
+  <h1 class="page-title">{{ deal.address }}</h1>
+  <p class="page-subtitle">{{ deal.city }}, {{ deal.state }} {{ deal.zip or '' }} &middot; {{ deal.property_type }}{% if deal.unit_count %} &middot; {{ deal.unit_count }} units{% endif %}</p>
+</div>
+
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+    <span class="source-badge deal-status-{{ deal.status }}" style="font-size:13px; padding:6px 12px;">{{ deal.status.replace('_', ' ')|title }}</span>
+    <form method="POST" action="{{ url_for('deal_dive.update_status', deal_id=deal.id) }}" style="display:flex; gap:8px; align-items:center;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <select class="form-input" name="status" style="width:auto;">
+        {% for s in statuses %}
+          <option value="{{ s }}" {% if s == deal.status %}selected{% endif %}>{{ s.replace('_', ' ')|title }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-ghost">Update Status</button>
+    </form>
+  </div>
+</div>
+
+<!-- ── Financials ─────────────────────────────────────────────────── -->
+<div class="card" id="financials">
+  <div class="scorecard-section-title">Financials</div>
+
+  <div class="stats-grid" style="margin:14px 0 20px;">
+    <div class="stat-box">
+      <div class="stat-box-label">Asking Price</div>
+      <div class="stat-box-value">{{ '${:,.0f}'.format(deal.asking_price) if deal.asking_price is not none else 'N/A' }}</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Purchase Price</div>
+      <div class="stat-box-value">{{ '${:,.0f}'.format(deal.purchase_price) if deal.purchase_price is not none else 'N/A' }}</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Current NOI</div>
+      <div class="stat-box-value">{{ '${:,.0f}'.format(deal.current_noi) if deal.current_noi is not none else 'N/A' }}</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Projected NOI</div>
+      <div class="stat-box-value">{{ '${:,.0f}'.format(deal.projected_noi) if deal.projected_noi is not none else 'N/A' }}</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Cap Rate</div>
+      <div class="stat-box-value">{{ '%.2f%%'|format(deal.cap_rate) if deal.cap_rate is not none else 'N/A' }}</div>
+    </div>
+    {% if deal.unit_count and deal.asking_price %}
+    <div class="stat-box">
+      <div class="stat-box-label">Price / Unit</div>
+      <div class="stat-box-value">{{ '${:,.0f}'.format(deal.asking_price / deal.unit_count) }}</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <p class="page-subtitle" style="margin-bottom:10px;">Summary-level figures for a go/no-go read &mdash; not a full pro forma. A detailed underwriting model belongs in the Underwriting tool.</p>
+
+  <form method="POST" action="{{ url_for('deal_dive.update_financials', deal_id=deal.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
+      <div class="form-group">
+        <label class="form-label" for="asking_price">Asking Price ($)</label>
+        <input class="form-input" type="text" id="asking_price" name="asking_price" value="{{ deal.asking_price if deal.asking_price is not none else '' }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="purchase_price">Purchase Price ($)</label>
+        <input class="form-input" type="text" id="purchase_price" name="purchase_price" value="{{ deal.purchase_price if deal.purchase_price is not none else '' }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="cap_rate">Cap Rate (%)</label>
+        <input class="form-input" type="text" id="cap_rate" name="cap_rate" value="{{ deal.cap_rate if deal.cap_rate is not none else '' }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="current_noi">Current NOI ($)</label>
+        <input class="form-input" type="text" id="current_noi" name="current_noi" value="{{ deal.current_noi if deal.current_noi is not none else '' }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="projected_noi">Projected NOI ($)</label>
+        <input class="form-input" type="text" id="projected_noi" name="projected_noi" value="{{ deal.projected_noi if deal.projected_noi is not none else '' }}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="financial_notes">Notes</label>
+      <textarea class="form-input" id="financial_notes" name="financial_notes" rows="3">{{ deal.financial_notes or '' }}</textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Save Financials</button>
+  </form>
+
+  <hr class="divider" style="margin:22px 0;">
+
+  <div class="scorecard-mini-title" style="margin-bottom:10px;">Supporting Documents</div>
+  <p class="page-subtitle" style="margin-bottom:10px;">T12, rent roll, offering memorandum, etc. Stored as-is &mdash; not parsed.</p>
+  {% if financial_files %}
+    <ul class="scorecard-note-list" style="margin-bottom:14px;">
+      {% for f in financial_files %}
+        <li><a href="{{ url_for('deal_dive.download_file', deal_id=deal.id, file_id=f.id) }}">{{ f.original_name }}</a> <span class="page-subtitle" style="display:inline;">&mdash; uploaded {{ f.uploaded_at[:10] }}</span></li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+  <form method="POST" action="{{ url_for('deal_dive.upload_file', deal_id=deal.id) }}" enctype="multipart/form-data" class="admin-upload-row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="category" value="financial">
+    <input type="file" name="file" required>
+    <button type="submit" class="btn btn-ghost">Upload Document</button>
+  </form>
+</div>
+
+<!-- ── Comps ──────────────────────────────────────────────────────── -->
+<div class="card" id="comps">
+  <div class="scorecard-section-title">Comps</div>
+
+  <div style="margin:14px 0 20px;">
+    <div class="scorecard-mini-title" style="margin-bottom:8px;">Market Context (FIRE Metric)</div>
+    {% if market.available %}
+      {% set c = market.city %}
+      <p class="page-subtitle" style="margin-bottom:10px;">For {{ c.display_name }} &mdash; market-level context, not comp-level data.</p>
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div class="stat-box-label">Population</div>
+          <div class="stat-box-value">{{ '{:,.0f}'.format(c.population_current) if c.population_current is not none else 'N/A' }}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-label">Median Income</div>
+          <div class="stat-box-value">{{ '${:,.0f}'.format(c.median_income_current) if c.median_income_current is not none else 'N/A' }}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-label">Median Home Value</div>
+          <div class="stat-box-value">{{ '${:,.0f}'.format(c.median_home_value_current) if c.median_home_value_current is not none else 'N/A' }}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-label">Crime Rating</div>
+          <div class="stat-box-value">{{ c.crime_rating or 'N/A' }}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-label">Climate Risk</div>
+          <div class="stat-box-value">{{ c.climate_risk_rating or 'N/A' }}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-label">Landlord Friendliness</div>
+          <div class="stat-box-value">{{ c.landlord_friendliness_label or 'N/A' }}</div>
+        </div>
+      </div>
+    {% else %}
+      <div class="result-note">{{ market.message }}</div>
+    {% endif %}
+  </div>
+
+  <hr class="divider" style="margin:20px 0;">
+
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+    <div class="scorecard-mini-title">Auto-Pulled Market Data (RentCast / Google Places)</div>
+    <form method="POST" action="{{ url_for('deal_dive.pull_market_data', deal_id=deal.id) }}" style="display:flex; gap:8px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% if auto_market_data %}
+        <input type="hidden" name="force_refresh" value="1">
+        <button type="submit" class="btn btn-ghost">Refresh</button>
+      {% else %}
+        <button type="submit" class="btn btn-ghost">Auto-Pull Market Data</button>
+      {% endif %}
+    </form>
+  </div>
+  <p class="page-subtitle" style="margin-bottom:12px;">Real rent estimates, rental comparables, and ratings pulled from RentCast and Google Places &mdash; separate from the comps you enter below until you explicitly add one.</p>
+
+  {% if auto_market_data %}
+    <p class="result-note" style="margin-bottom:12px;">Last pulled {{ auto_market_data.fetched_at[:16].replace('T', ' ') }} UTC.</p>
+    {% set rc = auto_market_data.rentcast %}
+    {% set gp = auto_market_data.google_places %}
+
+    <div class="scorecard-mini-title" style="margin-bottom:8px; font-size:12px;">RentCast</div>
+    {% if rc and rc.available %}
+      <div class="stats-grid" style="margin-bottom:14px;">
+        <div class="stat-box">
+          <div class="stat-box-label">Rent Estimate</div>
+          <div class="stat-box-value">{{ '${:,.0f}'.format(rc.rent_estimate) if rc.rent_estimate is not none else 'N/A' }}</div>
+          {% if rc.rent_range_low is not none and rc.rent_range_high is not none %}
+            <div class="stat-box-sub">Range: {{ '${:,.0f}'.format(rc.rent_range_low) }} &ndash; {{ '${:,.0f}'.format(rc.rent_range_high) }}</div>
+          {% endif %}
+        </div>
+        {% if rc.property %}
+          <div class="stat-box">
+            <div class="stat-box-label">Property</div>
+            <div class="stat-box-value" style="font-size:14px;">{{ rc.property.property_type or 'N/A' }}</div>
+            <div class="stat-box-sub">{{ rc.property.bedrooms or '—' }}bd / {{ rc.property.bathrooms or '—' }}ba, {{ rc.property.square_footage or '—' }} sqft{% if rc.property.year_built %}, built {{ rc.property.year_built }}{% endif %}</div>
+          </div>
+        {% endif %}
+      </div>
+
+      {% if rc.comparables %}
+        <div class="table-wrap" style="margin-bottom:16px;">
+          <table class="deal-dive-table">
+            <thead>
+              <tr><th>Address</th><th>Rent</th><th>Bd/Ba</th><th>Sqft</th><th>Distance</th><th></th></tr>
+            </thead>
+            <tbody>
+              {% for comp in rc.comparables %}
+                <tr>
+                  <td>{{ comp.address or '—' }}</td>
+                  <td>{{ '${:,.0f}'.format(comp.price) if comp.price is not none else '—' }}</td>
+                  <td>{{ comp.bedrooms or '—' }}/{{ comp.bathrooms or '—' }}</td>
+                  <td>{{ comp.square_footage or '—' }}</td>
+                  <td>{{ '%.1f mi'|format(comp.distance_miles) if comp.distance_miles is not none else '—' }}</td>
+                  <td>
+                    <form method="POST" action="{{ url_for('deal_dive.promote_market_comp', deal_id=deal.id) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="address" value="{{ comp.address or '' }}">
+                      <input type="hidden" name="price" value="{{ comp.price if comp.price is not none else '' }}">
+                      <input type="hidden" name="bedrooms" value="{{ comp.bedrooms if comp.bedrooms is not none else '' }}">
+                      <input type="hidden" name="bathrooms" value="{{ comp.bathrooms if comp.bathrooms is not none else '' }}">
+                      <input type="hidden" name="square_footage" value="{{ comp.square_footage if comp.square_footage is not none else '' }}">
+                      <input type="hidden" name="distance_miles" value="{{ comp.distance_miles if comp.distance_miles is not none else '' }}">
+                      <button type="submit" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Add as Comp</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    {% else %}
+      <div class="result-note" style="margin-bottom:14px;">{{ rc.message if rc else 'Not available.' }}</div>
+    {% endif %}
+
+    <div class="scorecard-mini-title" style="margin-bottom:8px; font-size:12px;">Google Places</div>
+    {% if gp and gp.available %}
+      <div class="stats-grid" style="margin-bottom:8px;">
+        <div class="stat-box">
+          <div class="stat-box-label">Rating</div>
+          <div class="stat-box-value">{{ gp.rating or 'N/A' }}{% if gp.review_count %} <span class="stat-box-sub">({{ gp.review_count }} reviews)</span>{% endif %}</div>
+        </div>
+      </div>
+      {% if gp.reviews %}
+        <ul class="scorecard-note-list">
+          {% for review in gp.reviews %}
+            <li>&ldquo;{{ review.text }}&rdquo; &mdash; {{ review.author or 'Anonymous' }} ({{ review.rating or '—' }}&#9733;)</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% else %}
+      <div class="result-note">{{ gp.message if gp else 'Not available.' }}</div>
+    {% endif %}
+  {% else %}
+    <div class="result-note">No auto-pulled data yet for this address &mdash; click "Auto-Pull Market Data" above.</div>
+  {% endif %}
+
+  <hr class="divider" style="margin:20px 0;">
+
+  <div class="scorecard-mini-title" style="margin-bottom:10px;">Manually-Entered Comps</div>
+  <div class="table-wrap" style="margin-bottom:16px;">
+    <table class="deal-dive-table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Address</th>
+          <th>Price / Rent</th>
+          <th>Units</th>
+          <th>Date</th>
+          <th>Notes</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if comps %}
+          {% for comp in comps %}
+            <tr>
+              <td>{{ comp.comp_type|title }}</td>
+              <td>{{ comp.address or '—' }}</td>
+              <td>{{ '${:,.0f}'.format(comp.price) if comp.price is not none else '—' }}</td>
+              <td>{{ comp.unit_count or '—' }}</td>
+              <td>{{ comp.comp_date or '—' }}</td>
+              <td>{{ comp.source_notes or '—' }}</td>
+              <td>
+                <form method="POST" action="{{ url_for('deal_dive.delete_comp', deal_id=deal.id, comp_id=comp.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        {% else %}
+          <tr><td colspan="7">No comps added yet.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  <form method="POST" action="{{ url_for('deal_dive.add_comp', deal_id=deal.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid; grid-template-columns: repeat(6, 1fr); gap:10px; align-items:end;">
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="comp_type">Type</label>
+        <select class="form-input" id="comp_type" name="comp_type">
+          <option value="sale">Sale</option>
+          <option value="rental">Rental</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0; grid-column: span 2;">
+        <label class="form-label" for="comp_address">Address</label>
+        <input class="form-input" type="text" id="comp_address" name="address">
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="comp_price">Price / Rent ($)</label>
+        <input class="form-input" type="text" id="comp_price" name="price">
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="comp_units">Units</label>
+        <input class="form-input" type="number" id="comp_units" name="unit_count" min="0">
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="comp_date">Sale / As-of Date</label>
+        <input class="form-input" type="date" id="comp_date" name="comp_date">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="comp_notes">Source Notes</label>
+      <input class="form-input" type="text" id="comp_notes" name="source_notes" placeholder="e.g. CoStar listing, broker call, county records">
+    </div>
+    <button type="submit" class="btn btn-primary">Add Comp</button>
+  </form>
+</div>
+
+<!-- ── Condition ──────────────────────────────────────────────────── -->
+<div class="card" id="condition">
+  <div class="scorecard-section-title">Condition</div>
+
+  <form method="POST" action="{{ url_for('deal_dive.update_condition', deal_id=deal.id) }}" style="margin-top:14px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-group" style="max-width:280px;">
+      <label class="form-label" for="condition_rating">Overall Rating</label>
+      <select class="form-input" id="condition_rating" name="condition_rating">
+        <option value="">Not rated</option>
+        {% for rating in ["Excellent", "Good", "Fair", "Poor", "Needs Major Work"] %}
+          <option value="{{ rating }}" {% if deal.condition_rating == rating %}selected{% endif %}>{{ rating }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="condition_notes">Notes</label>
+      <textarea class="form-input" id="condition_notes" name="condition_notes" rows="5">{{ deal.condition_notes or '' }}</textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Save Condition</button>
+  </form>
+
+  <hr class="divider" style="margin:22px 0;">
+
+  <div class="scorecard-mini-title" style="margin-bottom:10px;">Inspection Reports & Photos</div>
+  {% if condition_files %}
+    <ul class="scorecard-note-list" style="margin-bottom:14px;">
+      {% for f in condition_files %}
+        <li><a href="{{ url_for('deal_dive.download_file', deal_id=deal.id, file_id=f.id) }}">{{ f.original_name }}</a> <span class="page-subtitle" style="display:inline;">&mdash; uploaded {{ f.uploaded_at[:10] }}</span></li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+  <form method="POST" action="{{ url_for('deal_dive.upload_file', deal_id=deal.id) }}" enctype="multipart/form-data" class="admin-upload-row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="category" value="condition">
+    <input type="file" name="file" required>
+    <button type="submit" class="btn btn-ghost">Upload File</button>
+  </form>
+</div>
+{% endblock %}

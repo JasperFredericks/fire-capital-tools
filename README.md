@@ -73,9 +73,16 @@ Tested against:
 	- `ADMIN_USERNAME`
 	- `ADMIN_PASSWORD_HASH`
 	- `SCORECARD_PRO_DB_PATH` (optional; defaults to `scorecard_pro_history.db`)
+	- `DEAL_DIVE_DB_PATH` (optional; defaults to `deal_dive.db`)
+	- `RENTCAST_API_KEY`
+	- `GOOGLE_PLACES_API_KEY`
+	- `MARKET_DATA_DB_PATH` (optional; defaults to `market_data_cache.db`)
 	- `CENSUS_API_KEY`
 - Required for the FIRE Metric updater to pull ACS/Census data: `CENSUS_API_KEY`
 - Required for Scorecard Pro's upload history/trend to persist across Railway deploys: `SCORECARD_PRO_DB_PATH`
+- Required for Deal Dive's deals/comps/condition data to persist across Railway deploys: `DEAL_DIVE_DB_PATH`
+- Required for Deal Dive's "Auto-Pull Market Data" (RentCast rent estimates/comps + Google Places ratings): `RENTCAST_API_KEY`, `GOOGLE_PLACES_API_KEY`
+- Required for the RentCast/Google Places lookup cache to persist across Railway deploys: `MARKET_DATA_DB_PATH`
 
 ### Local development
 

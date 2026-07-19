@@ -1270,3 +1270,31 @@ hr.divider {
     text-align: left;
   }
 }
+
+/* ── Deal Dive ────────────────────────────────────────────────────────────── */
+.deal-dive-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.deal-dive-table th,
+.deal-dive-table td {
+  border-bottom: 1px solid #f3f4f6;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.deal-dive-table th {
+  color: #6b7280;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: #f9fafb;
+}
+
+.deal-status-active_review { background: #dbeafe; border-color: #93c5fd; color: #1e40af; }
+.deal-status-under_contract { background: #fef3c7; border-color: #fcd34d; color: #92400e; }
+.deal-status-closed { background: #dcfce7; border-color: #86efac; color: #166534; }
+.deal-status-passed { background: #fee2e2; border-color: #fca5a5; color: #991b1b; }
+.deal-status-archived { background: #f3f4f6; border-color: #e5e7eb; color: #374151; }
