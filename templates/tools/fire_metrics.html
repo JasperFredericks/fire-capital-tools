@@ -30,10 +30,11 @@
       type="text"
       name="q"
       value="{{ search_query }}"
-      placeholder="Search a city, e.g. St. Louis, Phoenix, New York"
+      placeholder="Search one or more cities, e.g. NYC, Chicago, Seattle"
     >
     <button class="btn btn-primary" type="submit">Search</button>
   </form>
+  <p class="result-note" style="margin-top:8px;">Separate multiple cities with commas to add them to comparison.</p>
 
   <div id="fire-search-message" class="alert alert-info" style="display:none; margin-top:14px;"></div>
   <div id="fire-suggestions" class="fire-suggestion-grid" style="display:none;"></div>
@@ -116,7 +117,7 @@
         <svg
           id="fire-us-map-overlay"
           class="fire-map-overlay"
-          viewBox="0 0 960 600"
+          viewBox="0 0 959 593"
           preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="Current and compared city locations on the contiguous United States map"
@@ -292,14 +293,21 @@
     maxLon: -66,
     minLat: 24,
     maxLat: 50,
-    width: 960,
-    height: 600,
+    width: 959,
+    height: 593,
   };
   const mapProjectionInset = {
-    left: 128,
-    right: 40,
+    left: 126,
+    right: 36,
     top: 26,
-    bottom: 458,
+    bottom: 454,
+  };
+  const mapProjectionTuning = {
+    // west coast tends to appear too far east on this static SVG with a plain
+    // linear lon projection; apply a west-weighted, latitude-sensitive
+    // correction so coastal anchors (SF/LA/Seattle) align with the asset.
+    westCoastXShiftStrength: 86,
+    westCoastExponent: 1.35,
   };
   const stateAbbreviations = {
     ALABAMA: "AL",
@@ -635,9 +643,63 @@
     }
     const usableWidth = mapBounds.width - mapProjectionInset.left - mapProjectionInset.right;
     const usableHeight = mapProjectionInset.bottom - mapProjectionInset.top;
-    const x = mapProjectionInset.left + ((lon - mapBounds.minLon) / (mapBounds.maxLon - mapBounds.minLon)) * usableWidth;
-    const y = mapProjectionInset.top + ((mapBounds.maxLat - lat) / (mapBounds.maxLat - mapBounds.minLat)) * usableHeight;
+    const lonRatio = (lon - mapBounds.minLon) / (mapBounds.maxLon - mapBounds.minLon);
+    const latRatio = (mapBounds.maxLat - lat) / (mapBounds.maxLat - mapBounds.minLat);
+    const westWeight = Math.pow(1 - lonRatio, mapProjectionTuning.westCoastExponent);
+    const coastalCorrection = -mapProjectionTuning.westCoastXShiftStrength * westWeight * latRatio;
+    const x = mapProjectionInset.left + lonRatio * usableWidth + coastalCorrection;
+    const y = mapProjectionInset.top + latRatio * usableHeight;
     return { x, y };
+  }
+
+  function looksLikeStateToken(value) {
+    const token = String(value || "").trim();
+    if (!token) return false;
+    const upper = token.toUpperCase().replace(/\./g, "");
+    return upper.length === 2 || Object.prototype.hasOwnProperty.call(stateAbbreviations, upper);
+  }
+
+  function splitSearchQueries(rawInput) {
+    const source = String(rawInput || "").trim();
+    if (!source) return [];
+
+    const primarySegments = source
+      .split(/[;\n]+/)
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    const queries = [];
+    primarySegments.forEach((segment) => {
+      if (!segment.includes(",")) {
+        queries.push(segment);
+        return;
+      }
+
+      const pieces = segment
+        .split(",")
+        .map((piece) => piece.trim())
+        .filter(Boolean);
+
+      if (pieces.length === 2 && looksLikeStateToken(pieces[1])) {
+        queries.push(segment);
+        return;
+      }
+
+      queries.push(...pieces);
+    });
+
+    return queries;
+  }
+
+  function summarizeCities(cities, limit = 6) {
+    if (!cities.length) return "";
+    if (cities.length <= limit) return cities.join(", ");
+    return `${cities.slice(0, limit).join(", ")}, +${cities.length - limit} more`;
+  }
+
+  async function fetchSearchPayload(query) {
+    const res = await fetch(`${searchUrl}?q=${encodeURIComponent(query)}`);
+    return res.json();
   }
 
   function populationRadius(population) {
@@ -950,7 +1012,7 @@
     renderMapPoints();
   }
 
-  async function performSearch(query) {
+  async function performSingleSearch(query) {
     if (!query || !query.trim()) {
       showMessage("Enter a city name to search FIRE Metric data.", "warning");
       dashboardEl.style.display = "none";
@@ -959,8 +1021,7 @@
     }
 
     try {
-      const res = await fetch(`${searchUrl}?q=${encodeURIComponent(query)}`);
-      const payload = await res.json();
+      const payload = await fetchSearchPayload(query);
       const status = payload.status || "error";
 
       if (status === "found") {
@@ -998,6 +1059,102 @@
       showMessage(`Search failed: ${err}`, "error");
       renderMapPoints();
     }
+  }
+
+  async function performMultiSearch(queries) {
+    const added = [];
+    const notFound = [];
+    const needsSelection = [];
+    const excludedMessages = [];
+    const failed = [];
+    let firstFoundPayload = null;
+
+    for (const query of queries) {
+      try {
+        const payload = await fetchSearchPayload(query);
+        const status = payload.status || "error";
+
+        if (status === "found" && payload.city) {
+          if (!firstFoundPayload) {
+            firstFoundPayload = payload;
+          }
+
+          const city = sanitizeCity(payload.city);
+          const key = cityKey(city);
+          if (!comparisonCities.some((item) => cityKey(item) === key)) {
+            comparisonCities.push(city);
+            added.push(cleanDisplayFromCityObject(city));
+          }
+          continue;
+        }
+
+        if (status === "suggestions") {
+          needsSelection.push(query);
+        } else if (status === "excluded") {
+          excludedMessages.push(payload.user_message || `${query} is excluded.`);
+        } else if (status === "not_found") {
+          notFound.push(query);
+        } else {
+          failed.push(query);
+        }
+      } catch (error) {
+        failed.push(query);
+      }
+    }
+
+    saveComparison();
+    renderComparisonTable();
+
+    hideSuggestions();
+    if (firstFoundPayload && firstFoundPayload.city) {
+      renderCity(firstFoundPayload.city);
+    } else {
+      currentCity = null;
+      resetComparisonAddButton();
+      dashboardEl.style.display = "none";
+      renderMapPoints();
+    }
+
+    const messages = [];
+    if (added.length) {
+      messages.push(`Added ${added.length} ${added.length === 1 ? "city" : "cities"} to comparison: ${summarizeCities(added)}.`);
+    }
+    if (notFound.length) {
+      messages.push(`Could not find: ${notFound.join(", ")}.`);
+    }
+    if (needsSelection.length) {
+      messages.push(`Needs selection: ${needsSelection.join(", ")}.`);
+    }
+    if (excludedMessages.length) {
+      messages.push(excludedMessages.join(" "));
+    }
+    if (failed.length) {
+      messages.push(`Search failed for: ${failed.join(", ")}.`);
+    }
+
+    if (!messages.length) {
+      showMessage("No cities were added to comparison.", "warning");
+      return;
+    }
+
+    if (added.length && !notFound.length && !needsSelection.length && !excludedMessages.length && !failed.length) {
+      showMessage(messages.join(" "), "success");
+      return;
+    }
+    showMessage(messages.join(" "), "info");
+  }
+
+  async function performSearch(rawQuery) {
+    const queries = splitSearchQueries(rawQuery);
+    if (!queries.length) {
+      await performSingleSearch("");
+      return;
+    }
+    if (queries.length === 1) {
+      await performSingleSearch(queries[0]);
+      return;
+    }
+    await performMultiSearch(queries);
   }
 
   form.addEventListener("submit", (event) => {
