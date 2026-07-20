@@ -234,7 +234,7 @@
       <div class="stats-grid" style="margin-bottom:8px;">
         <div class="stat-box">
           <div class="stat-box-label">Rating</div>
-          <div class="stat-box-value">{{ gp.rating or 'N/A' }}{% if gp.review_count %} <span class="stat-box-sub">({{ gp.review_count }} reviews)</span>{% endif %}</div>
+          <div class="stat-box-value">{{ gp.rating or 'N/A' }}{% if gp.review_count %} <span class="stat-box-sub">({{ '{:,}'.format(gp.review_count) }} reviews)</span>{% endif %}</div>
         </div>
       </div>
       {% if gp.reviews %}

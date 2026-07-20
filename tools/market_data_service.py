@@ -212,14 +212,47 @@ def get_rentcast_data(address: str, city: str, state: str, zip_code: str | None 
 
 # ── Google Places ────────────────────────────────────────────────────────
 
+def _google_places_usage_gate() -> dict[str, Any] | None:
+    """Same hard-stop pattern as RentCast's gate: refuse to make another
+    real Google Places request at all once this month's count is at or
+    above the safety threshold. Returns a ready {"available": False, ...}
+    dict if the lookup should be blocked, or None if it's fine to proceed."""
+    with cache.get_connection() as conn:
+        usage = cache.get_google_places_usage(conn)
+    if usage >= cache.GOOGLE_PLACES_MONTHLY_SAFETY_THRESHOLD:
+        return {
+            "available": False,
+            "message": (
+                f"Monthly Google Places lookup limit reached ({usage} used this month, "
+                f"safety threshold {cache.GOOGLE_PLACES_MONTHLY_SAFETY_THRESHOLD}) — "
+                f"resets {_next_month_label()}."
+            ),
+        }
+    return None
+
+
+def _record_google_places_call() -> None:
+    with cache.get_connection() as conn:
+        cache.increment_google_places_usage(conn)
+
+
 def get_google_place_rating(address: str, city: str, state: str) -> dict[str, Any]:
     """Rating, review count, and a few review snippets for the place at this
     address. Returns {"available": False, "message": ...} rather than
-    raising if the key is missing, the place can't be found, or either call
-    fails."""
+    raising if the key is missing, the monthly safety cap is hit, the place
+    can't be found, or either call fails.
+
+    Hard usage cap: see market_data_cache.GOOGLE_PLACES_MONTHLY_SAFETY_THRESHOLD
+    for the reasoning -- checked *before* any request goes out, same as
+    RentCast's cap. Cache hits (in get_market_data) never reach this
+    function at all, so they never count against it."""
     api_key = _google_places_api_key()
     if not api_key:
         return {"available": False, "message": "Google Places API key not configured."}
+
+    blocked = _google_places_usage_gate()
+    if blocked:
+        return blocked
 
     full_address = ", ".join(part for part in [address, city, state] if part)
 
@@ -236,6 +269,7 @@ def get_google_place_rating(address: str, city: str, state: str) -> dict[str, An
         )
     except requests.RequestException as exc:
         return {"available": False, "message": f"Google Places lookup failed: {exc}"}
+    _record_google_places_call()  # a request reached Google's servers either way -- counts against quota
 
     if not find_resp.ok:
         return {"available": False, "message": f"Google Places lookup failed (HTTP {find_resp.status_code})."}
@@ -254,6 +288,10 @@ def get_google_place_rating(address: str, city: str, state: str) -> dict[str, An
     candidate = find_payload["candidates"][0]
     place_id = candidate.get("place_id")
 
+    blocked = _google_places_usage_gate()  # re-check -- the find-place call above may have just hit the cap
+    if blocked:
+        return blocked
+
     try:
         details_resp = requests.get(
             f"{GOOGLE_PLACES_BASE_URL}/details/json",
@@ -266,6 +304,7 @@ def get_google_place_rating(address: str, city: str, state: str) -> dict[str, An
         )
     except requests.RequestException as exc:
         return {"available": False, "message": f"Google Places details lookup failed: {exc}"}
+    _record_google_places_call()
 
     if not details_resp.ok or details_resp.json().get("status") != "OK":
         return {"available": False, "message": "Google Places details lookup failed."}

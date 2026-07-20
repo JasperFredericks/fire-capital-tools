@@ -41,6 +41,25 @@ DEFAULT_STALENESS_DAYS = 30
 RENTCAST_MONTHLY_FREE_LIMIT = 50
 RENTCAST_MONTHLY_SAFETY_THRESHOLD = 45
 
+# Google Places' free allowance doesn't work like RentCast's -- there's no
+# single fixed number to undercut. Google retired the old pooled $200/month
+# credit in March 2025; the current model is a separate free-events-per-
+# month allowance *per SKU tier* (roughly 10k/month for the cheapest
+# "Essentials" tier down to roughly 1k/month for "Enterprise"). The Place
+# Details call this service makes requests rating, user_ratings_total, and
+# reviews -- all three are officially in Google's "Atmosphere" field
+# category, which Google's own Legacy API docs confirm is billed on top of
+# the base request, and third-party pricing trackers place at the
+# Enterprise tier (~1,000 free events/month, the smallest allowance of the
+# three tiers) since Google's own pages don't publish the exact number in
+# one place. Given that real uncertainty -- and given the point of this
+# cap is to never repeat the surprise-charge experience that already
+# happened once -- the threshold below is set to roughly 10% of that
+# researched (not confirmed) ~1,000/month figure, a much larger safety
+# margin proportionally than RentCast's 45/50, specifically because the
+# underlying number itself is an estimate rather than a documented fact.
+GOOGLE_PLACES_MONTHLY_SAFETY_THRESHOLD = 100
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS market_data_cache (
     address_key TEXT PRIMARY KEY,
@@ -54,6 +73,11 @@ CREATE TABLE IF NOT EXISTS market_data_cache (
 );
 
 CREATE TABLE IF NOT EXISTS rentcast_usage (
+    year_month TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS google_places_usage (
     year_month TEXT PRIMARY KEY,
     count INTEGER NOT NULL DEFAULT 0
 );
@@ -186,3 +210,28 @@ def increment_rentcast_usage(conn: sqlite3.Connection, year_month: str | None = 
     )
     conn.commit()
     return get_rentcast_usage(conn, year_month)
+
+
+# ── Google Places monthly usage (hard cap, no overage) ────────────────────
+
+def get_google_places_usage(conn: sqlite3.Connection, year_month: str | None = None) -> int:
+    """Real Google Places API calls made this month -- cache hits never
+    increment this, only an actual outbound request to Google does."""
+    year_month = year_month or current_year_month()
+    row = conn.execute(
+        "SELECT count FROM google_places_usage WHERE year_month = ?", (year_month,)
+    ).fetchone()
+    return row["count"] if row else 0
+
+
+def increment_google_places_usage(conn: sqlite3.Connection, year_month: str | None = None) -> int:
+    year_month = year_month or current_year_month()
+    conn.execute(
+        """
+        INSERT INTO google_places_usage (year_month, count) VALUES (?, 1)
+        ON CONFLICT(year_month) DO UPDATE SET count = count + 1
+        """,
+        (year_month,),
+    )
+    conn.commit()
+    return get_google_places_usage(conn, year_month)
