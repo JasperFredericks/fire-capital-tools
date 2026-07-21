@@ -639,6 +639,42 @@ hr.divider {
   top: 8px;
 }
 
+.scorecard-note-details {
+  display: inline-block;
+  margin-top: 3px;
+}
+
+.scorecard-note-details summary {
+  cursor: pointer;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.scorecard-note-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.scorecard-note-details summary::before {
+  content: "▸ ";
+}
+
+.scorecard-note-details[open] summary::before {
+  content: "▾ ";
+}
+
+.scorecard-note-details-body {
+  margin-top: 5px;
+  padding: 8px 10px;
+  background: #f9fafb;
+  border: 1px solid #f3f4f6;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #6b7280;
+  word-break: break-word;
+}
+
 .month-filter-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));

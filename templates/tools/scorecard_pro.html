@@ -401,13 +401,20 @@
     const missing = (analysis.summary && analysis.summary.missing_gpr_months) || [];
     const zero = (analysis.summary && analysis.summary.zero_occupancy_months) || [];
     const fallbackCodes = (analysis.summary && analysis.summary.expense_fallback_codes) || [];
-    const notes = warnings.slice();
-    if (missing.length) notes.push("No GPR data for: " + missing.join(", "));
-    if (zero.length) notes.push("True 0% occupancy for: " + zero.join(", "));
-    if (fallbackCodes.length) notes.push("Expenses estimated from individual account codes (no Total Expenses rollup found): " + fallbackCodes.join(", "));
     list.innerHTML = "";
-    notes.forEach(note => addListItem(list, note));
-    card.style.display = notes.length ? "block" : "none";
+    warnings.forEach(note => addListItem(list, note));
+    if (missing.length) addListItem(list, "No GPR data for: " + missing.join(", "));
+    if (zero.length) addListItem(list, "True 0% occupancy for: " + zero.join(", "));
+    if (fallbackCodes.length) {
+      addExpandableNote(
+        list,
+        `Expenses estimated by summing ${fallbackCodes.length} individual line items (no Total Expenses summary found in this file).`,
+        "Show account codes",
+        fallbackCodes.join(", "),
+      );
+    }
+    const hasNotes = warnings.length || missing.length || zero.length || fallbackCodes.length;
+    card.style.display = hasNotes ? "block" : "none";
   }
 
   function renderSummary(analysis) {
@@ -677,6 +684,26 @@
   function addListItem(list, text) {
     const li = document.createElement("li");
     li.textContent = text;
+    list.appendChild(li);
+  }
+
+  // A plain-language note with the full technical detail (raw account
+  // codes, row lists, etc.) tucked behind a native <details> disclosure --
+  // keeps the note readable at a glance while still letting anyone who
+  // needs to audit it see exactly what was included.
+  function addExpandableNote(list, summaryText, detailLabel, detailText) {
+    const li = document.createElement("li");
+    li.textContent = summaryText + " ";
+    const details = document.createElement("details");
+    details.className = "scorecard-note-details";
+    const summary = document.createElement("summary");
+    summary.textContent = detailLabel;
+    details.appendChild(summary);
+    const detailDiv = document.createElement("div");
+    detailDiv.className = "scorecard-note-details-body";
+    detailDiv.textContent = detailText;
+    details.appendChild(detailDiv);
+    li.appendChild(details);
     list.appendChild(li);
   }
 

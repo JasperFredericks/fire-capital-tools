@@ -1130,20 +1130,22 @@ class ScorecardUpdater:
         matched_accounts = sum(1 for code in reportable_codes if code in account_row_map)
         if total_accounts and matched_accounts < total_accounts:
             unresolved = sorted(code for code in reportable_codes if code not in account_row_map)
-            preview = ", ".join(unresolved[:15])
-            more = f" (+{len(unresolved) - 15} more)" if len(unresolved) > 15 else ""
+            # Plain-language summary for the Parsing Notes UI -- the raw
+            # code list isn't dropped, just moved out of the sentence
+            # itself; it's still available in full via the Accounts tab
+            # and the exported KPI CSV/XLSX (both list every account code).
             self.diagnostics["warnings"].append(
-                f"Scorecard updater: matched {matched_accounts} of {total_accounts} parsed "
-                f"P&L accounts to rows in the T12 sheet; {len(unresolved)} could not be "
-                "confidently matched — likely different account naming/grouping between "
-                f"the P&L export and this Scorecard's own T12 tab — and were not written: "
-                f"{preview}{more}."
+                f"Scorecard update: matched {matched_accounts} of {total_accounts} P&L accounts "
+                f"to rows in the scorecard; {len(unresolved)} line item(s) could not be confidently "
+                "matched (likely different account naming between the P&L export and this "
+                "scorecard's own layout) and were not updated. See the Accounts tab or exported "
+                "KPI data for the full account list."
             )
         if ambiguous_names:
-            desc = "; ".join(f"{code} ({name!r} matched rows {rows})" for code, name, rows in ambiguous_names[:10])
             self.diagnostics["warnings"].append(
-                "Scorecard updater: could not confidently place these accounts because "
-                f"their name matched more than one row in the T12 sheet: {desc}."
+                f"Scorecard update: {len(ambiguous_names)} account(s) could not be confidently "
+                "placed because their name matched more than one row in the scorecard. See the "
+                "Accounts tab or exported KPI data for details."
             )
 
         self.diagnostics["updated_cells"] = updates_count
