@@ -879,17 +879,21 @@ _EAGLE_ROCK_EXCLUDED_CODES = {
 # other row referencing 6800/6810/Grounds/Landscape) exists anywhere in this
 # Scorecard, so unlike the rest of this list, that one dollar amount
 # ($17,561.50/yr) isn't captured anywhere and is left flagged as unmatched.
+# 4341/6320/6370/6605/6785/7544/7595 were added later -- newer, more
+# granular leaf accounts a subsequent T12 P&L export broke out under the
+# same already-matched parent rollups (4300/6300/6600/6700/7500) as
+# everything else in this set; not a new gap.
 _CANYON_EXCLUDED_CODES = {
-    "4305", "4428", "4470",  # 4300 (Other Income) children
+    "4305", "4428", "4470", "4341",  # 4300 (Other Income) children
     "6106", "6178", "6184", "6187",  # 6100 (Administration Costs) children
-    "6330", "6335", "6343",  # 6300 (Marketing & Leasing) children
+    "6330", "6335", "6343", "6320", "6370",  # 6300 (Marketing & Leasing) children
     "6415",  # 6400 (Salaries & Payroll Related) child
     "6530", "6545",  # 6500 (Contract Services) children
-    "6606", "6612", "6636", "6642", "6654",  # 6600 (Maintenance Related) children
-    "6740", "6780",  # 6700 (Turnover Costs) children
+    "6606", "6612", "6636", "6642", "6654", "6605",  # 6600 (Maintenance Related) children
+    "6740", "6780", "6785",  # 6700 (Turnover Costs) children
     "6905",  # 6900 (Utilities) child
     "7240",  # 7200 (Management Company Charges) child
-    "7502", "7518", "7534", "7536", "7537", "7541", "7564", "7570", "7573",  # 7500 (Repairs) children
+    "7502", "7518", "7534", "7536", "7537", "7541", "7564", "7570", "7573", "7544", "7595",  # 7500 (Repairs) children
 }
 
 
