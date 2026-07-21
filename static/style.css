@@ -615,6 +615,9 @@ hr.divider {
   margin-bottom: 8px;
 }
 
+.scorecard-mini-title-green { color: #059669; }
+.scorecard-mini-title-red { color: #dc2626; }
+
 .scorecard-note-list {
   list-style: none;
   display: grid;
