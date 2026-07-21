@@ -209,6 +209,8 @@
             </thead>
             <tbody>
               {% for comp in rc.comparables %}
+                {% set addr_key = (comp.address or '')|trim|lower %}
+                {% set already_added = addr_key and addr_key in promoted_market_addresses %}
                 <tr>
                   <td>{{ comp.address or '—' }}</td>
                   <td>{{ '${:,.0f}'.format(comp.price) if comp.price is not none else '—' }}</td>
@@ -216,16 +218,20 @@
                   <td>{{ comp.square_footage or '—' }}</td>
                   <td>{{ '%.1f mi'|format(comp.distance_miles) if comp.distance_miles is not none else '—' }}</td>
                   <td>
-                    <form method="POST" action="{{ url_for('deal_dive.promote_market_comp', deal_id=deal.id) }}">
-                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                      <input type="hidden" name="address" value="{{ comp.address or '' }}">
-                      <input type="hidden" name="price" value="{{ comp.price if comp.price is not none else '' }}">
-                      <input type="hidden" name="bedrooms" value="{{ comp.bedrooms if comp.bedrooms is not none else '' }}">
-                      <input type="hidden" name="bathrooms" value="{{ comp.bathrooms if comp.bathrooms is not none else '' }}">
-                      <input type="hidden" name="square_footage" value="{{ comp.square_footage if comp.square_footage is not none else '' }}">
-                      <input type="hidden" name="distance_miles" value="{{ comp.distance_miles if comp.distance_miles is not none else '' }}">
-                      <button type="submit" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Add as Comp</button>
-                    </form>
+                    {% if already_added %}
+                      <span class="btn btn-ghost" style="padding:4px 10px; font-size:12px; opacity:0.65; cursor:default;">Added &#10003;</span>
+                    {% else %}
+                      <form method="POST" action="{{ url_for('deal_dive.promote_market_comp', deal_id=deal.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="hidden" name="address" value="{{ comp.address or '' }}">
+                        <input type="hidden" name="price" value="{{ comp.price if comp.price is not none else '' }}">
+                        <input type="hidden" name="bedrooms" value="{{ comp.bedrooms if comp.bedrooms is not none else '' }}">
+                        <input type="hidden" name="bathrooms" value="{{ comp.bathrooms if comp.bathrooms is not none else '' }}">
+                        <input type="hidden" name="square_footage" value="{{ comp.square_footage if comp.square_footage is not none else '' }}">
+                        <input type="hidden" name="distance_miles" value="{{ comp.distance_miles if comp.distance_miles is not none else '' }}">
+                        <button type="submit" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Add as Comp</button>
+                      </form>
+                    {% endif %}
                   </td>
                 </tr>
               {% endfor %}

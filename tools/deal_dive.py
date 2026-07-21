@@ -68,6 +68,22 @@ def _to_int(value):
         return None
 
 
+_MARKET_COMP_SOURCE_PREFIX = "Auto-pulled from RentCast"
+
+
+def _promoted_market_addresses(comps) -> set[str]:
+    """Normalized addresses already promoted from auto-pulled market data
+    into this deal's own comps table -- identifies a promoted RentCast
+    comparable by the same source_notes prefix promote_market_comp() writes,
+    since that's the only marker distinguishing an auto-pulled comp from a
+    manually-entered one once it's in deal_comps."""
+    return {
+        (c.get("address") or "").strip().lower()
+        for c in comps
+        if (c.get("source_notes") or "").startswith(_MARKET_COMP_SOURCE_PREFIX) and c.get("address")
+    }
+
+
 def get_market_context(city, state):
     """Read-only lookup against FIRE Metrics' own city index, reusing its
     existing fuzzy city_search matching rather than a fragile exact-string
@@ -171,6 +187,7 @@ def detail(deal_id):
         market=market,
         statuses=db.STATUSES,
         auto_market_data=auto_market_data,
+        promoted_market_addresses=_promoted_market_addresses(comps),
     )
 
 
@@ -348,9 +365,15 @@ def promote_market_comp(deal_id):
     """Copy one auto-pulled RentCast comparable into the deal's own manual
     deal_comps table. Auto-pulled data supplements manual entry -- it never
     gets silently merged in on its own, only via this explicit action."""
+    address = (request.form.get("address") or "").strip()
     with db.get_connection() as conn:
         if not db.get_deal(conn, deal_id):
             abort(404)
+
+        if address and address.lower() in _promoted_market_addresses(db.list_comps(conn, deal_id)):
+            flash("That comp has already been added.", "info")
+            return redirect(url_for("deal_dive.detail", deal_id=deal_id) + "#comps")
+
         note_parts = []
         for label, key in (("bd", "bedrooms"), ("ba", "bathrooms"), ("sqft", "square_footage")):
             value = request.form.get(key)
@@ -359,14 +382,14 @@ def promote_market_comp(deal_id):
         distance = request.form.get("distance_miles")
         if distance:
             note_parts.append(f"{distance} mi away")
-        source_notes = "Auto-pulled from RentCast" + (f" ({', '.join(note_parts)})" if note_parts else "")
+        source_notes = _MARKET_COMP_SOURCE_PREFIX + (f" ({', '.join(note_parts)})" if note_parts else "")
 
         db.add_comp(
             conn,
             deal_id,
             {
                 "comp_type": "rental",
-                "address": request.form.get("address"),
+                "address": address or None,
                 "price": _to_float(request.form.get("price")),
                 "unit_count": None,
                 "comp_date": None,
