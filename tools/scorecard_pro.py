@@ -2004,10 +2004,23 @@ def chart_waterfall(df):
 def chart_occupancy(df):
     fig, ax = plt.subplots(figsize=(6.4, 3.8))
     values = [None if pd.isna(value) else value * 100 for value in df["Occupancy"]]
-    colors = ["#9ca3af" if value is None else ("#dc2626" if value < 80 else "#f59e0b" if value < 90 else "#059669") for value in values]
-    display_values = [0 if value is None else value for value in values]
+    is_missing = [value is None for value in values]
+    colors = ["#d1d5db" if missing else ("#dc2626" if value < 80 else "#f59e0b" if value < 90 else "#059669") for missing, value in zip(is_missing, values)]
+    # A month with no GPR data at all gets a small fixed-height hatched
+    # placeholder bar rather than the real value's height (there is no
+    # real value) -- a plain 0-height bar renders no visible area
+    # regardless of its fill color, which made "no data available" look
+    # identical to "no bar drawn here" instead of standing out as its own
+    # distinct case from a genuine 0% (fully vacant) month.
+    placeholder_height = 5
+    display_values = [placeholder_height if missing else value for missing, value in zip(is_missing, values)]
     bars = ax.bar(df["Month"], display_values, color=colors, alpha=0.78)
-    labels = ["N/A" if value is None else f"{value:.1f}%" for value in values]
+    for bar, missing in zip(bars, is_missing):
+        if missing:
+            bar.set_hatch("///")
+            bar.set_edgecolor("#6b7280")
+            bar.set_linewidth(0.8)
+    labels = ["No Data" if missing else f"{value:.1f}%" for missing, value in zip(is_missing, values)]
     ax.bar_label(bars, labels=labels, padding=3, fontsize=7)
     ax.axhline(90, color="#1f2937", linestyle="--", linewidth=1)
     ax.set_ylim(0, 112)
