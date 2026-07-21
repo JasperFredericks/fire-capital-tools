@@ -847,6 +847,11 @@ _EVICTION_SECTIONS = {"under eviction"}
 # least one unit is currently held, confirmed against real Available Units
 # exports (Canyon, High Caliber).
 _HOLDING_SECTIONS  = {"holding units", "holding"}
+# Ready Units counts ready-status units from Vacant/Notice-to-Vacate AND
+# Holding (a held unit can already be make-ready while awaiting move-in) --
+# but not Eviction, which stays excluded from Ready even if a row is
+# individually marked Ready.
+_READY_ELIGIBLE_SECTIONS = _ALL_AU_SECTIONS | _HOLDING_SECTIONS
 _AU_NON_SECTION_HEADERS = {
     "available units",
     "unit",
@@ -928,12 +933,12 @@ def parse_available_units(ws):
                     "status":  str(sval or "").strip(),
                 })
 
-    # Ready: normalized status == "ready", but only from operating sections.
-    # Eviction-related sections are intentionally excluded even when the row
-    # status says Ready.
+    # Ready: normalized status == "ready", from Vacant/Notice-to-Vacate and
+    # Holding sections. Eviction-related sections are intentionally excluded
+    # even when the row status says Ready.
     ready_units = [
         u for u in all_units
-        if is_ready_status(u["status"]) and norm(u["section"]) in _ALL_AU_SECTIONS
+        if is_ready_status(u["status"]) and norm(u["section"]) in _READY_ELIGIBLE_SECTIONS
     ]
     prelease_count = sum(1 for u in all_units if norm(u["section"]) in _PRELEASE_SECTIONS)
     holding_count = sum(1 for u in all_units if norm(u["section"]) in _HOLDING_SECTIONS)
