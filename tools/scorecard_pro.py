@@ -1940,8 +1940,16 @@ def chart_trend(df):
     # Wider than the other three dashboard charts on purpose: this is the
     # only one carrying three series (Income/Expenses bars plus an NOI
     # line) with a label on every point across a full 12-month history --
-    # the other charts' fixed size would pack labels too tightly.
-    fig, ax = plt.subplots(figsize=(11.5, 4.2))
+    # the other charts' fixed size would pack labels too tightly. Height
+    # is set to match the Waterfall chart's own aspect ratio (3.8/5.4)
+    # at this width, since the two sit side by side in the same dashboard
+    # grid row and a shorter aspect here left a blank gap under this
+    # chart's card once the row stretched to match Waterfall's height.
+    # Font/line/marker sizes below are scaled up from the previous
+    # (11.5, 4.2) figure by the same ~1.9x factor as the height increase,
+    # so the whole figure grows proportionally rather than just gaining
+    # empty vertical space around unchanged-size elements.
+    fig, ax = plt.subplots(figsize=(11.5, 8.1))
     x = list(range(len(df)))
     bar_width = 0.38
     # Grouped (side-by-side) bars rather than overlapping ones sharing the
@@ -1953,8 +1961,9 @@ def chart_trend(df):
     # the Waterfall chart uses, so the rendered pixels match it exactly.
     income_bars = ax.bar([xi - bar_width / 2 for xi in x], df["Income"], width=bar_width, label="Income", color="#1e40af", alpha=0.70)
     expense_bars = ax.bar([xi + bar_width / 2 for xi in x], df["Expenses"], width=bar_width, label="Expenses", color="#f97316", alpha=0.85)
-    noi_line = ax.plot(x, df["NOI"], label="NOI", color="#4cbb17", linewidth=2.6, marker="o")[0]
+    noi_line = ax.plot(x, df["NOI"], label="NOI", color="#4cbb17", linewidth=5.0, marker="o", markersize=10)[0]
     ax.set_xticks(x, df["Month"], rotation=35, ha="right")
+    ax.tick_params(labelsize=11)
     ax.yaxis.set_major_formatter(lambda val, _: money_axis(val))
     ax.grid(axis="y", alpha=0.18)
 
@@ -1965,22 +1974,27 @@ def chart_trend(df):
     # $0, not just small) are skipped entirely -- three stacked "$0"
     # labels add no information and were the one case dense enough to
     # actually overlap illegibly.
+    # Label font stays close to the original size (only bumped slightly,
+    # 7.5 -> 9) rather than scaling with the height increase -- width is
+    # unchanged, and scaling text to match the height factor made
+    # adjacent months' labels wide enough to collide horizontally (e.g.
+    # Mar/Apr 2026's tall Income bars sit close together on the x-axis).
     has_data = df["OccupancyStatus"] != "missing_gpr"
-    ax.bar_label(income_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Income"])], padding=2, fontsize=7.5)
-    ax.bar_label(expense_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Expenses"])], padding=2, fontsize=7.5)
+    ax.bar_label(income_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Income"])], padding=3, fontsize=9)
+    ax.bar_label(expense_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Expenses"])], padding=3, fontsize=9)
     for xi, yi, keep in zip(x, df["NOI"], has_data):
         if not keep:
             continue
         ax.annotate(
-            money_label(yi), (xi, yi), textcoords="offset points", xytext=(0, 8),
-            ha="center", fontsize=7.5, fontweight="bold", color="#2f6b0e",
-            bbox=dict(facecolor="white", edgecolor="none", alpha=0.65, pad=1),
+            money_label(yi), (xi, yi), textcoords="offset points", xytext=(0, 10),
+            ha="center", fontsize=9, fontweight="bold", color="#2f6b0e",
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.65, pad=1.2),
         )
 
     # Below the chart rather than overlapping the plotted bars/line -- a
     # tall Income month previously sat right under the upper-left legend.
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.28), ncols=3, frameon=False)
-    ax.set_title("Financial Performance Trend", loc="left", fontweight="bold")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncols=3, frameon=False, fontsize=12)
+    ax.set_title("Financial Performance Trend", loc="left", fontweight="bold", fontsize=14)
     fig.tight_layout()
     return fig_to_data_uri(fig)
 
