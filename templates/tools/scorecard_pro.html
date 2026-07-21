@@ -90,7 +90,6 @@
       <div class="stat-box">
         <div class="stat-box-label">Avg Occupancy</div>
         <div class="stat-box-value" id="sum-occupancy">-</div>
-        <div class="stat-box-sub" id="sum-occupancy-sub"></div>
       </div>
     </div>
 
@@ -393,9 +392,11 @@
     const warnings = analysis.warnings || [];
     const missing = (analysis.summary && analysis.summary.missing_gpr_months) || [];
     const zero = (analysis.summary && analysis.summary.zero_occupancy_months) || [];
+    const fallbackCodes = (analysis.summary && analysis.summary.expense_fallback_codes) || [];
     const notes = warnings.slice();
     if (missing.length) notes.push("No GPR data for: " + missing.join(", "));
     if (zero.length) notes.push("True 0% occupancy for: " + zero.join(", "));
+    if (fallbackCodes.length) notes.push("Expenses estimated from individual account codes (no Total Expenses rollup found): " + fallbackCodes.join(", "));
     list.innerHTML = "";
     notes.forEach(note => addListItem(list, note));
     card.style.display = notes.length ? "block" : "none";
@@ -407,10 +408,6 @@
     document.getElementById("sum-expenses").textContent = fmtCurrency(s.total_expenses);
     document.getElementById("sum-noi").textContent = fmtCurrency(s.total_noi);
     document.getElementById("sum-occupancy").textContent = fmtPercent(s.avg_occupancy);
-    const fallback = s.expense_fallback_codes && s.expense_fallback_codes.length
-      ? "Expense fallback: " + s.expense_fallback_codes.join(", ")
-      : "";
-    document.getElementById("sum-occupancy-sub").textContent = fallback;
   }
 
   function renderQuarter(analysis) {

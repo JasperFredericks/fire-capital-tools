@@ -1939,13 +1939,15 @@ def build_charts(df):
 def chart_trend(df):
     fig, ax = plt.subplots(figsize=(8.5, 3.8))
     x = range(len(df))
-    ax.bar(x, df["Income"], label="Income", color="#5b8def", alpha=0.70)
-    ax.bar(x, df["Expenses"], label="Expenses", color="#f59e0b", alpha=0.62)
-    ax.plot(x, df["NOI"], label="NOI", color="#059669", linewidth=2.6, marker="o")
+    ax.bar(x, df["Income"], label="Income", color="#1e40af", alpha=0.70)
+    ax.bar(x, df["Expenses"], label="Expenses", color="#f97316", alpha=0.62)
+    ax.plot(x, df["NOI"], label="NOI", color="#4cbb17", linewidth=2.6, marker="o")
     ax.set_xticks(list(x), df["Month"], rotation=35, ha="right")
     ax.yaxis.set_major_formatter(lambda val, _: money_axis(val))
     ax.grid(axis="y", alpha=0.18)
-    ax.legend(loc="upper left", ncols=3, frameon=False)
+    # Below the chart rather than overlapping the plotted bars/line -- a
+    # tall Income month previously sat right under the upper-left legend.
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.32), ncols=3, frameon=False)
     ax.set_title("Financial Performance Trend", loc="left", fontweight="bold")
     fig.tight_layout()
     return fig_to_data_uri(fig)
