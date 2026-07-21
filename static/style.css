@@ -599,6 +599,10 @@ hr.divider {
   justify-content: flex-end;
 }
 
+.scorecard-downloads-left {
+  justify-content: flex-start;
+}
+
 .scorecard-section-title {
   font-size: 13px;
   font-weight: 800;
