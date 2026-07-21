@@ -1937,38 +1937,49 @@ def build_charts(df):
 
 
 def chart_trend(df):
-    fig, ax = plt.subplots(figsize=(8.5, 3.8))
-    x = range(len(df))
-    income_bars = ax.bar(x, df["Income"], label="Income", color="#1e40af", alpha=0.70)
-    expense_bars = ax.bar(x, df["Expenses"], label="Expenses", color="#f97316", alpha=0.62)
+    # Wider than the other three dashboard charts on purpose: this is the
+    # only one carrying three series (Income/Expenses bars plus an NOI
+    # line) with a label on every point across a full 12-month history --
+    # the other charts' fixed size would pack labels too tightly.
+    fig, ax = plt.subplots(figsize=(11.5, 4.2))
+    x = list(range(len(df)))
+    bar_width = 0.38
+    # Grouped (side-by-side) bars rather than overlapping ones sharing the
+    # same x position -- overlapping bars meant the Expenses bar was drawn
+    # on top of the (also semi-transparent) Income bar, blending blue into
+    # the orange and rendering it muddy/brownish instead of matching the
+    # Waterfall chart's clean orange. Side by side, Expenses sits on its
+    # own patch of white background with the exact same color and alpha
+    # the Waterfall chart uses, so the rendered pixels match it exactly.
+    income_bars = ax.bar([xi - bar_width / 2 for xi in x], df["Income"], width=bar_width, label="Income", color="#1e40af", alpha=0.70)
+    expense_bars = ax.bar([xi + bar_width / 2 for xi in x], df["Expenses"], width=bar_width, label="Expenses", color="#f97316", alpha=0.85)
     noi_line = ax.plot(x, df["NOI"], label="NOI", color="#4cbb17", linewidth=2.6, marker="o")[0]
-    ax.set_xticks(list(x), df["Month"], rotation=35, ha="right")
+    ax.set_xticks(x, df["Month"], rotation=35, ha="right")
     ax.yaxis.set_major_formatter(lambda val, _: money_axis(val))
     ax.grid(axis="y", alpha=0.18)
 
-    # Data labels: dollar figure on each bar and each NOI point. Font kept
-    # small (7pt) since a full 12-month history means three labels per
-    # month competing for the same width; the NOI label gets a translucent
-    # white backing since the line crosses in front of both bar series.
+    # Data labels: dollar figure on each bar and each NOI point. Now that
+    # Income/Expenses sit side by side rather than stacked at the same x,
+    # their labels no longer compete for the same horizontal space either.
     # Months with no GPR data at all (Income/Expenses/NOI all genuinely
     # $0, not just small) are skipped entirely -- three stacked "$0"
-    # labels add no information and are the one case dense enough to
+    # labels add no information and were the one case dense enough to
     # actually overlap illegibly.
     has_data = df["OccupancyStatus"] != "missing_gpr"
-    ax.bar_label(income_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Income"])], padding=2, fontsize=7)
-    ax.bar_label(expense_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Expenses"])], padding=2, fontsize=7)
+    ax.bar_label(income_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Income"])], padding=2, fontsize=7.5)
+    ax.bar_label(expense_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Expenses"])], padding=2, fontsize=7.5)
     for xi, yi, keep in zip(x, df["NOI"], has_data):
         if not keep:
             continue
         ax.annotate(
             money_label(yi), (xi, yi), textcoords="offset points", xytext=(0, 8),
-            ha="center", fontsize=7, fontweight="bold", color="#2f6b0e",
+            ha="center", fontsize=7.5, fontweight="bold", color="#2f6b0e",
             bbox=dict(facecolor="white", edgecolor="none", alpha=0.65, pad=1),
         )
 
     # Below the chart rather than overlapping the plotted bars/line -- a
     # tall Income month previously sat right under the upper-left legend.
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.32), ncols=3, frameon=False)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.28), ncols=3, frameon=False)
     ax.set_title("Financial Performance Trend", loc="left", fontweight="bold")
     fig.tight_layout()
     return fig_to_data_uri(fig)
