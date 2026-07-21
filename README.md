@@ -76,6 +76,8 @@ Tested against:
 	- `DEAL_DIVE_DB_PATH` (optional; defaults to `deal_dive.db`)
 	- `RENTCAST_API_KEY`
 	- `GOOGLE_PLACES_API_KEY`
+	- `GOOGLE_MAPS_API_KEY` (required for FIRE Metric map rendering)
+	- `GOOGLE_MAPS_MAP_ID` (required for FIRE Metric map styling)
 	- `MARKET_DATA_DB_PATH` (optional; defaults to `market_data_cache.db`)
 	- `CENSUS_API_KEY`
 - Required for the FIRE Metric updater to pull ACS/Census data: `CENSUS_API_KEY`
@@ -83,6 +85,14 @@ Tested against:
 - Required for Deal Dive's deals/comps/condition data to persist across Railway deploys: `DEAL_DIVE_DB_PATH`
 - Required for Deal Dive's "Auto-Pull Market Data" (RentCast rent estimates/comps + Google Places ratings): `RENTCAST_API_KEY`, `GOOGLE_PLACES_API_KEY`
 - Required for the RentCast/Google Places lookup cache to persist across Railway deploys: `MARKET_DATA_DB_PATH`
+- Required for FIRE Metric Google Maps display: `GOOGLE_MAPS_API_KEY`, `GOOGLE_MAPS_MAP_ID`
+
+### Google Maps API key restrictions
+
+- The browser key must be restricted to the Google Maps JavaScript API.
+- Restrict key usage by HTTP referrer to the production Railway domain.
+- Optionally allow approved local origins (for example, localhost ports used in development).
+- Never commit real API keys to Git; provide values through environment variables only.
 
 ### Local development
 

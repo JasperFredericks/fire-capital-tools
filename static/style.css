@@ -1193,15 +1193,15 @@ hr.divider {
   width: 100%;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  background: #ffffff;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
   overflow: hidden;
-  aspect-ratio: 959 / 593;
+  aspect-ratio: 16 / 9;
   min-height: 240px;
   position: relative;
 }
 
-.fire-map-base,
-.fire-map-overlay {
+.fire-google-map,
+.fire-map-fallback {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -1209,29 +1209,44 @@ hr.divider {
   display: block;
 }
 
-.fire-map-base {
-  object-fit: contain;
-  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
-  filter: grayscale(1) saturate(0.15) brightness(1.08) contrast(0.94);
+.fire-google-map {
+  z-index: 1;
 }
 
-.fire-map-overlay {
-  pointer-events: none;
+.fire-map-fallback {
+  z-index: 2;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+  color: #4b5563;
+  font-size: 13px;
+  background: #f9fafb;
 }
 
-.fire-map-point {
-  stroke: #ffffff;
-  stroke-width: 1.5;
+.fire-advanced-marker {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.28);
+}
+
+.fire-advanced-marker-current {
+  width: 14px;
+  height: 14px;
+  background: #dc2626;
+}
+
+.fire-advanced-marker-compared {
+  background: #2563eb;
   opacity: 0.9;
 }
 
-.fire-map-point-current {
-  fill: #dc2626;
-  opacity: 1;
-}
-
-.fire-map-point-compared {
-  fill: #2563eb;
+.fire-map-infowindow {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #111827;
 }
 
 .fire-map-legend {

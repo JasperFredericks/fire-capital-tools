@@ -328,6 +328,8 @@ def index():
             "search_query": "",
             "search_payload": None,
             "city_preview": [],
+            "google_maps_api_key": current_app.config.get("GOOGLE_MAPS_API_KEY") or "",
+            "google_maps_map_id": current_app.config.get("GOOGLE_MAPS_MAP_ID") or "",
         }
 
         with db_module.get_connection() as conn:

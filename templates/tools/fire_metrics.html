@@ -108,23 +108,8 @@
         <div id="fire-map-note" class="result-note">Current and compared city dots</div>
       </div>
       <div class="fire-map-frame">
-        <img
-          id="fire-us-base-map"
-          class="fire-map-base"
-          src="{{ url_for('static', filename='us-map.svg') }}"
-          alt="Map of the contiguous United States"
-        >
-        <svg
-          id="fire-us-map-overlay"
-          class="fire-map-overlay"
-          viewBox="0 0 959 593"
-          preserveAspectRatio="xMidYMid meet"
-          role="img"
-          aria-label="Current and compared city locations on the contiguous United States map"
-        >
-          <g id="fire-map-compared-points"></g>
-          <g id="fire-map-current-point"></g>
-        </svg>
+        <div id="fire-google-map" class="fire-google-map" aria-label="Current and compared city locations on a United States map"></div>
+        <div id="fire-map-fallback" class="fire-map-fallback" style="display:none;">Map unavailable. Google Maps configuration is missing.</div>
       </div>
       <div class="fire-map-legend">
         <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-current"></span>Current city</span>
@@ -281,34 +266,22 @@
   const comparisonEmptyMessage = document.getElementById("comparison-empty-message");
   const comparisonWrap = document.getElementById("comparison-table-wrap");
   const comparisonBody = document.getElementById("comparison-table-body");
-  const mapComparedGroup = document.getElementById("fire-map-compared-points");
-  const mapCurrentGroup = document.getElementById("fire-map-current-point");
+  const mapContainer = document.getElementById("fire-google-map");
+  const mapFallback = document.getElementById("fire-map-fallback");
   const mapNote = document.getElementById("fire-map-note");
 
   const payloadFromServer = {{ search_payload|tojson }};
   const initiallyRunning = {{ 'true' if status.running else 'false' }};
   const comparisonStorageKey = "fire_metrics_city_comparison_master_v1";
-  const mapBounds = {
-    minLon: -125,
-    maxLon: -66,
-    minLat: 24,
-    maxLat: 50,
-    width: 959,
-    height: 593,
+  const googleMapsApiKey = {{ google_maps_api_key|tojson }};
+  const googleMapsMapId = {{ google_maps_map_id|tojson }};
+  const contiguousUsBounds = {
+    north: 49.8,
+    south: 24.4,
+    west: -125.0,
+    east: -66.7,
   };
-  const mapProjectionInset = {
-    left: 126,
-    right: 36,
-    top: 26,
-    bottom: 454,
-  };
-  const mapProjectionTuning = {
-    // west coast tends to appear too far east on this static SVG with a plain
-    // linear lon projection; apply a west-weighted, latitude-sensitive
-    // correction so coastal anchors (SF/LA/Seattle) align with the asset.
-    westCoastXShiftStrength: 86,
-    westCoastExponent: 1.35,
-  };
+  const mapConfigAvailable = Boolean(googleMapsApiKey && googleMapsMapId);
   const stateAbbreviations = {
     ALABAMA: "AL",
     ALASKA: "AK",
@@ -362,87 +335,15 @@
     WISCONSIN: "WI",
     WYOMING: "WY",
   };
-  const cityTokenAliases = {
-    "nyc": "new york",
-    "new york city": "new york",
-    "new york city ny": "new york",
-    "new york ny": "new york",
-    "la": "los angeles",
-    "l a": "los angeles",
-    "los angeles california": "los angeles",
-    "los angeles city california": "los angeles",
-    "los angeles la": "los angeles",
-    "st louis": "st louis",
-    "st louis city": "st louis",
-    "st louis missouri": "st louis",
-    "saint louis": "st louis",
-    "saint louis city": "st louis",
-    "saint louis missouri": "st louis",
-    "st. louis": "st louis",
-    "st. louis city": "st louis",
-    "st. louis missouri": "st louis",
-    "st louis city mo": "st louis",
-    "st louis mo": "st louis",
-    "fort worth city": "fort worth",
-    "oklahoma city city": "oklahoma city",
-    "kansas city city": "kansas city",
-    "salt lake city city": "salt lake city",
-    "carson city city": "carson city",
-    "las vegas city": "las vegas",
-    "phoenix city": "phoenix",
-    "atlanta city": "atlanta",
-    "los angeles city": "los angeles",
-  };
-  const fallbackCoordinates = {
-    "new york|NY": { lat: 40.7128, lon: -74.0060 },
-    "new york city|NY": { lat: 40.7128, lon: -74.0060 },
-    "new york|NJ": { lat: 40.7291, lon: -74.0776 },
-    "los angeles|CA": { lat: 34.0522, lon: -118.2437 },
-    "chicago|IL": { lat: 41.8781, lon: -87.6298 },
-    "houston|TX": { lat: 29.7604, lon: -95.3698 },
-    "phoenix|AZ": { lat: 33.4484, lon: -112.0740 },
-    "atlanta|GA": { lat: 33.7490, lon: -84.3880 },
-    "st louis|MO": { lat: 38.6270, lon: -90.1994 },
-    "washington|DC": { lat: 38.9072, lon: -77.0369 },
-    "washington dc|DC": { lat: 38.9072, lon: -77.0369 },
-    "dallas|TX": { lat: 32.7767, lon: -96.7970 },
-    "fort worth|TX": { lat: 32.7555, lon: -97.3308 },
-    "san antonio|TX": { lat: 29.4241, lon: -98.4936 },
-    "austin|TX": { lat: 30.2672, lon: -97.7431 },
-    "oklahoma city|OK": { lat: 35.4676, lon: -97.5164 },
-    "kansas city|MO": { lat: 39.0997, lon: -94.5786 },
-    "kansas city|KS": { lat: 39.1141, lon: -94.6275 },
-    "salt lake city|UT": { lat: 40.7608, lon: -111.8910 },
-    "carson city|NV": { lat: 39.1638, lon: -119.7674 },
-    "las vegas|NV": { lat: 36.1699, lon: -115.1398 },
-    "tucson|AZ": { lat: 32.2226, lon: -110.9747 },
-    "mesa|AZ": { lat: 33.4152, lon: -111.8315 },
-    "san diego|CA": { lat: 32.7157, lon: -117.1611 },
-    "san jose|CA": { lat: 37.3382, lon: -121.8863 },
-    "san francisco|CA": { lat: 37.7749, lon: -122.4194 },
-    "sacramento|CA": { lat: 38.5816, lon: -121.4944 },
-    "fresno|CA": { lat: 36.7378, lon: -119.7871 },
-    "seattle|WA": { lat: 47.6062, lon: -122.3321 },
-    "portland|OR": { lat: 45.5152, lon: -122.6784 },
-    "miami|FL": { lat: 25.7617, lon: -80.1918 },
-    "tampa|FL": { lat: 27.9506, lon: -82.4572 },
-    "orlando|FL": { lat: 28.5383, lon: -81.3792 },
-    "jacksonville|FL": { lat: 30.3322, lon: -81.6557 },
-    "boston|MA": { lat: 42.3601, lon: -71.0589 },
-    "philadelphia|PA": { lat: 39.9526, lon: -75.1652 },
-    "charlotte|NC": { lat: 35.2271, lon: -80.8431 },
-    "raleigh|NC": { lat: 35.7796, lon: -78.6382 },
-    "nashville|TN": { lat: 36.1627, lon: -86.7816 },
-    "minneapolis|MN": { lat: 44.9778, lon: -93.2650 },
-    "detroit|MI": { lat: 42.3314, lon: -83.0458 },
-    "cleveland|OH": { lat: 41.4993, lon: -81.6944 },
-    "columbus|OH": { lat: 39.9612, lon: -82.9988 },
-    "indianapolis|IN": { lat: 39.7684, lon: -86.1581 },
-    "milwaukee|WI": { lat: 43.0389, lon: -87.9065 },
-    "new orleans|LA": { lat: 29.9511, lon: -90.0715 },
-    "baton rouge|LA": { lat: 30.4515, lon: -91.1871 },
-    "denver|CO": { lat: 39.7392, lon: -104.9903 },
-  };
+  const selectedMarkerRegistryKey = "__selected__";
+  const comparisonMarkerPrefix = "compare::";
+  let googleMap = null;
+  let googleInfoWindow = null;
+  let markerLibrary = null;
+  let markersReady = false;
+  let markersNeedRender = false;
+  let markerRegistry = new Map();
+  let lastViewportSignature = "";
   let currentCity = null;
   let comparisonCities = [];
 
@@ -557,16 +458,6 @@
       .trim();
   }
 
-  function canonicalCityToken(token) {
-    const normalized = String(token || "").trim().toLowerCase();
-    const preserved = new Set(["oklahoma city", "kansas city", "salt lake city", "carson city"]);
-    const deSuffixed = normalized.endsWith(" city") && !preserved.has(normalized)
-      ? normalized.slice(0, -5).trim()
-      : normalized;
-    const cleaned = deSuffixed.replace(/^city of /, "").trim();
-    return cityTokenAliases[cleaned] || cleaned;
-  }
-
   function normalizeStateToken(state) {
     const raw = String(state || "").trim();
     if (!raw) return "";
@@ -586,70 +477,16 @@
     return `${cityToken}|${stateToken}`;
   }
 
-  function fallbackCoordKey(city) {
-    const canonicalToken = canonicalCityToken(normalizedCityToken(getCityField(city) || getDisplayField(city)));
-    return `${canonicalToken}|${normalizeStateToken(getStateField(city))}`;
-  }
-
-  function resolveFallbackCoordinates(city) {
-    const canonicalToken = canonicalCityToken(normalizedCityToken(getCityField(city) || getDisplayField(city)));
-    const state = normalizeStateToken(getStateField(city));
-    const keyed = fallbackCoordinates[`${canonicalToken}|${state}`];
-    if (keyed) return keyed;
-
-    const stateless = fallbackCoordinates[`${canonicalToken}|`];
-    if (stateless) return stateless;
-
-    if (state === "") {
-      const byPrefix = Object.keys(fallbackCoordinates)
-        .find((key) => key.startsWith(`${canonicalToken}|`));
-      if (byPrefix) return fallbackCoordinates[byPrefix];
-    }
-
-    return null;
-  }
-
   function asNumber(value) {
     const num = Number(value);
     return Number.isFinite(num) ? num : null;
   }
 
   function extractCoordinates(city) {
-    const latCandidates = [city.lat, city.latitude, city.centroid_lat, city.intptlat];
-    const lonCandidates = [city.lon, city.lng, city.longitude, city.centroid_lon, city.intptlon];
-
-    let lat = null;
-    let lon = null;
-    for (const candidate of latCandidates) {
-      lat = asNumber(candidate);
-      if (lat !== null) break;
-    }
-    for (const candidate of lonCandidates) {
-      lon = asNumber(candidate);
-      if (lon !== null) break;
-    }
-
-    if (lat !== null && lon !== null) {
-      return { lat, lon };
-    }
-
-    const fallback = resolveFallbackCoordinates(city);
-    return fallback || null;
-  }
-
-  function projectPoint(lat, lon) {
-    if (lat < mapBounds.minLat || lat > mapBounds.maxLat || lon < mapBounds.minLon || lon > mapBounds.maxLon) {
-      return null;
-    }
-    const usableWidth = mapBounds.width - mapProjectionInset.left - mapProjectionInset.right;
-    const usableHeight = mapProjectionInset.bottom - mapProjectionInset.top;
-    const lonRatio = (lon - mapBounds.minLon) / (mapBounds.maxLon - mapBounds.minLon);
-    const latRatio = (mapBounds.maxLat - lat) / (mapBounds.maxLat - mapBounds.minLat);
-    const westWeight = Math.pow(1 - lonRatio, mapProjectionTuning.westCoastExponent);
-    const coastalCorrection = -mapProjectionTuning.westCoastXShiftStrength * westWeight * latRatio;
-    const x = mapProjectionInset.left + lonRatio * usableWidth + coastalCorrection;
-    const y = mapProjectionInset.top + latRatio * usableHeight;
-    return { x, y };
+    const lat = asNumber(city.latitude ?? city.lat);
+    const lng = asNumber(city.longitude ?? city.lng ?? city.lon);
+    if (lat === null || lng === null) return null;
+    return { lat, lng };
   }
 
   function looksLikeStateToken(value) {
@@ -702,92 +539,269 @@
     return res.json();
   }
 
-  function populationRadius(population) {
-    const numeric = asNumber(population);
-    if (numeric === null || numeric <= 0) return 5;
-
-    const minRadius = 4;
-    const maxRadius = 14;
-    const minPopulation = 50000;
-    const maxPopulation = 9000000;
-    const clampedPopulation = Math.min(Math.max(numeric, minPopulation), maxPopulation);
-    const ratio = (Math.log(clampedPopulation) - Math.log(minPopulation)) / (Math.log(maxPopulation) - Math.log(minPopulation));
-    return Number((minRadius + ratio * (maxRadius - minRadius)).toFixed(1));
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
-  function appendMapPoint(group, point, label, className, radius) {
-    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    circle.setAttribute("cx", String(point.x));
-    circle.setAttribute("cy", String(point.y));
-    circle.setAttribute("r", String(radius));
-    circle.setAttribute("class", className);
-    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-    title.textContent = label;
-    circle.appendChild(title);
-    group.appendChild(circle);
+  function fireMetricScoreForCity(city) {
+    return asNumber(city.fire_metric_score ?? city.fire_score ?? city.composite_score);
   }
 
-  function clearMapPoints() {
-    mapComparedGroup.innerHTML = "";
-    mapCurrentGroup.innerHTML = "";
+  function markerTitleForCity(city) {
+    const name = cityCoreName(cleanDisplayFromCityObject(city)) || cleanDisplayFromCityObject(city);
+    const state = normalizeStateToken(getStateField(city));
+    return state ? `${name}, ${state}` : name;
+  }
+
+  function markerContentFor(kind) {
+    const node = document.createElement("div");
+    node.className = `fire-advanced-marker fire-advanced-marker-${kind}`;
+    return node;
+  }
+
+  function markerInfoContent(city) {
+    const title = markerTitleForCity(city);
+    const score = fireMetricScoreForCity(city);
+    const scoreText = score === null ? "Unavailable" : score.toLocaleString(undefined, { maximumFractionDigits: 1 });
+    return `<div class="fire-map-infowindow"><strong>${escapeHtml(title)}</strong><div>FIRE Metric score: ${escapeHtml(scoreText)}</div></div>`;
+  }
+
+  function showMapFallback(message) {
+    mapContainer.style.display = "none";
+    mapFallback.style.display = "flex";
+    mapFallback.textContent = message;
+  }
+
+  function hideMapFallback() {
+    mapFallback.style.display = "none";
+    mapContainer.style.display = "block";
+  }
+
+  function upsertMarker(registryKey, city, kind) {
+    const coords = extractCoordinates(city);
+    if (!coords || !markersReady || !googleMap || !markerLibrary) return false;
+
+    const markerTitle = markerTitleForCity(city);
+    const existing = markerRegistry.get(registryKey);
+    if (existing) {
+      existing.marker.position = coords;
+      existing.marker.title = markerTitle;
+      existing.city = city;
+      existing.kind = kind;
+      return true;
+    }
+
+    const marker = new markerLibrary.AdvancedMarkerElement({
+      map: googleMap,
+      position: coords,
+      title: markerTitle,
+      content: markerContentFor(kind),
+    });
+    marker.addListener("click", () => {
+      if (!googleInfoWindow) return;
+      const liveEntry = markerRegistry.get(registryKey);
+      const liveCity = liveEntry?.city || city;
+      googleInfoWindow.setContent(markerInfoContent(liveCity));
+      googleInfoWindow.open({ map: googleMap, anchor: marker });
+    });
+
+    markerRegistry.set(registryKey, { marker, city, kind });
+    return true;
+  }
+
+  function removeMarkersNotIn(validKeys) {
+    Array.from(markerRegistry.keys()).forEach((key) => {
+      if (validKeys.has(key)) return;
+      const entry = markerRegistry.get(key);
+      if (entry && entry.marker) {
+        entry.marker.map = null;
+      }
+      markerRegistry.delete(key);
+    });
+  }
+
+  function markerPositions() {
+    const positions = [];
+    markerRegistry.forEach((entry) => {
+      const pos = entry?.marker?.position;
+      if (!pos) return;
+      positions.push(pos);
+    });
+    return positions;
+  }
+
+  function applyViewportStrategy(signature) {
+    if (!googleMap || !window.google || !window.google.maps) return;
+    if (signature === lastViewportSignature) return;
+    lastViewportSignature = signature;
+
+    const positions = markerPositions();
+    const comparisonCount = comparisonCities.filter((city) => {
+      if (!currentCity) return true;
+      return cityKey(city) !== cityKey(currentCity);
+    }).length;
+
+    if (!positions.length) {
+      const usBounds = new google.maps.LatLngBounds(contiguousUsBounds);
+      googleMap.fitBounds(usBounds, 24);
+      google.maps.event.addListenerOnce(googleMap, "idle", () => {
+        if ((googleMap.getZoom() || 0) > 5) googleMap.setZoom(5);
+      });
+      return;
+    }
+
+    if (positions.length === 1 && currentCity && comparisonCount === 0) {
+      googleMap.panTo(positions[0]);
+      const zoom = googleMap.getZoom() || 4;
+      if (zoom < 5) googleMap.setZoom(5);
+      if (zoom > 7) googleMap.setZoom(7);
+      return;
+    }
+
+    const bounds = new google.maps.LatLngBounds();
+    positions.forEach((pos) => bounds.extend(pos));
+    googleMap.fitBounds(bounds, 72);
+    google.maps.event.addListenerOnce(googleMap, "idle", () => {
+      const zoom = googleMap.getZoom() || 4;
+      if (zoom > 7) googleMap.setZoom(7);
+      if (zoom < 4) googleMap.setZoom(4);
+    });
   }
 
   function renderMapPoints() {
-    clearMapPoints();
-    const currentKey = currentCity ? cityKey(currentCity) : null;
+    if (!mapConfigAvailable) {
+      showMapFallback("Map unavailable. Google Maps configuration is missing.");
+      return;
+    }
+    if (!markersReady || !googleMap) {
+      markersNeedRender = true;
+      return;
+    }
+
+    hideMapFallback();
+    const targetKeys = new Set();
     let missing = 0;
 
-    comparisonCities.forEach((city) => {
-      if (currentKey && cityKey(city) === currentKey) return;
-      const coords = extractCoordinates(city);
-      if (!coords) {
-        missing += 1;
-        return;
-      }
-      const point = projectPoint(coords.lat, coords.lon);
-      if (!point) {
-        missing += 1;
-        return;
-      }
-      const population = asNumber(getPopulationField(city));
-      const populationLabel = population === null ? "Population unavailable" : `Population ${Math.round(population).toLocaleString()}`;
-      const radius = populationRadius(population);
-      appendMapPoint(
-        mapComparedGroup,
-        point,
-        `${cleanDisplayFromCityObject(city)} — ${populationLabel} (Compared)`,
-        "fire-map-point fire-map-point-compared",
-        radius,
-      );
-    });
-
     if (currentCity) {
-      const coords = extractCoordinates(currentCity);
-      if (!coords) {
-        missing += 1;
+      const selectedOk = upsertMarker(selectedMarkerRegistryKey, currentCity, "current");
+      if (selectedOk) {
+        targetKeys.add(selectedMarkerRegistryKey);
       } else {
-        const point = projectPoint(coords.lat, coords.lon);
-        if (!point) {
-          missing += 1;
-        } else {
-          const population = asNumber(getPopulationField(currentCity));
-          const populationLabel = population === null ? "Population unavailable" : `Population ${Math.round(population).toLocaleString()}`;
-          const radius = populationRadius(population);
-          appendMapPoint(
-            mapCurrentGroup,
-            point,
-            `${cleanDisplayFromCityObject(currentCity)} — ${populationLabel} (Current)`,
-            "fire-map-point fire-map-point-current",
-            radius,
-          );
-        }
+        missing += 1;
       }
     }
+
+    const selectedCityKey = currentCity ? cityKey(currentCity) : null;
+    comparisonCities.forEach((city) => {
+      if (selectedCityKey && cityKey(city) === selectedCityKey) return;
+      const markerKey = `${comparisonMarkerPrefix}${cityKey(city)}`;
+      const comparedOk = upsertMarker(markerKey, city, "compared");
+      if (comparedOk) {
+        targetKeys.add(markerKey);
+      } else {
+        missing += 1;
+      }
+    });
+
+    removeMarkersNotIn(targetKeys);
 
     if (missing > 0) {
       mapNote.textContent = `Map location unavailable for ${missing} ${missing === 1 ? "city" : "cities"}.`;
     } else {
       mapNote.textContent = "Current and compared city dots";
+    }
+
+    const orderedComparisonKeys = comparisonCities
+      .map((city) => cityKey(city))
+      .filter((key, index, arr) => arr.indexOf(key) === index)
+      .sort()
+      .join(",");
+    const viewportSignature = `${currentCity ? cityKey(currentCity) : "none"}|${orderedComparisonKeys}`;
+    applyViewportStrategy(viewportSignature);
+  }
+
+  function loadGoogleMapsApi() {
+    if (window.google && window.google.maps && window.google.maps.importLibrary) {
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve, reject) => {
+      const existingScript = document.querySelector('script[data-fire-google-maps="1"]');
+      if (existingScript) {
+        existingScript.addEventListener("load", () => resolve(), { once: true });
+        existingScript.addEventListener("error", () => reject(new Error("Failed to load Google Maps API.")), { once: true });
+        return;
+      }
+
+      const callbackName = "__fireMetricsGoogleMapsInit";
+      window[callbackName] = () => {
+        delete window[callbackName];
+        resolve();
+      };
+
+      const params = new URLSearchParams({
+        key: googleMapsApiKey,
+        v: "weekly",
+        loading: "async",
+        callback: callbackName,
+        map_ids: googleMapsMapId,
+      });
+
+      const script = document.createElement("script");
+      script.src = `https://maps.googleapis.com/maps/api/js?${params.toString()}`;
+      script.async = true;
+      script.defer = true;
+      script.dataset.fireGoogleMaps = "1";
+      script.onerror = () => {
+        delete window[callbackName];
+        reject(new Error("Failed to load Google Maps API."));
+      };
+      document.head.appendChild(script);
+    });
+  }
+
+  async function initializeGoogleMap() {
+    if (!mapConfigAvailable) {
+      showMapFallback("Map unavailable. Google Maps configuration is missing.");
+      return;
+    }
+
+    try {
+      await loadGoogleMapsApi();
+      const { Map, InfoWindow } = await google.maps.importLibrary("maps");
+      const markerLib = await google.maps.importLibrary("marker");
+      markerLibrary = markerLib;
+      googleInfoWindow = new InfoWindow();
+      googleMap = new Map(mapContainer, {
+        center: { lat: 39.5, lng: -98.35 },
+        zoom: 4,
+        minZoom: 3,
+        maxZoom: 9,
+        mapId: googleMapsMapId,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: false,
+        clickableIcons: false,
+        restriction: {
+          latLngBounds: contiguousUsBounds,
+          strictBounds: false,
+        },
+      });
+      hideMapFallback();
+      markersReady = true;
+
+      if (markersNeedRender) {
+        markersNeedRender = false;
+      }
+      renderMapPoints();
+    } catch (error) {
+      showMapFallback("Map unavailable. Google Maps failed to load.");
+      markersReady = false;
     }
   }
 
@@ -839,8 +853,10 @@
       crime_rating: city.crime_rating || "",
       landlord_friendliness_score: city.landlord_friendliness_score ?? null,
       landlord_friendliness_label: city.landlord_friendliness_label || "",
-      lat: city.lat ?? city.latitude ?? city.centroid_lat ?? city.intptlat ?? null,
-      lon: city.lon ?? city.lng ?? city.longitude ?? city.centroid_lon ?? city.intptlon ?? null,
+      latitude: city.latitude ?? city.lat ?? null,
+      longitude: city.longitude ?? city.lng ?? city.lon ?? null,
+      lat: city.lat ?? city.latitude ?? null,
+      lon: city.lon ?? city.longitude ?? city.lng ?? null,
     };
   }
 
@@ -1189,6 +1205,7 @@
   renderComparisonTable();
   resetComparisonAddButton();
   cleanIndexedCitySamples();
+  initializeGoogleMap();
   renderMapPoints();
 
   if (payloadFromServer) {

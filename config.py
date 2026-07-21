@@ -20,6 +20,8 @@ class Config:
     # ── Runtime ────────────────────────────────────────────────────────────
     DEBUG: bool = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
     TEMPLATES_AUTO_RELOAD: bool = True
+    GOOGLE_MAPS_API_KEY: str = os.environ.get("GOOGLE_MAPS_API_KEY", "")
+    GOOGLE_MAPS_MAP_ID: str = os.environ.get("GOOGLE_MAPS_MAP_ID", "")
 
     # ── File uploads ───────────────────────────────────────────────────────
     UPLOAD_FOLDER: str = os.path.join(
