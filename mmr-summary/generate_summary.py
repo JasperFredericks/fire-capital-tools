@@ -2116,12 +2116,16 @@ def build_summary(wb, data):
     section_band(ws, 6, "OCCUPANCY", 2, 7)
     occupancy_value = fmt_pct(bs.get("pct_occ")) if bs.get("pct_occ") is not None else "N/A"
     write_pair_row(ws, 7, "% Occupancy", occupancy_value, "Occupied", na_if_none(bs.get("occupied")))
-    # On-Notice (resident gave notice, unit still occupied, no future tenant
-    # lined up yet) is folded into Vacant rather than kept as its own
-    # category — it isn't preleased, so Vacant is the only one of the two
-    # remaining categories it can accurately belong to.
-    vacant_val = bs.get("vacant")
-    vacant_total = None if vacant_val is None else vacant_val + (bs.get("on_notice") or 0)
+    # Vacant is Box Score's own total_units - occupied -- units on notice
+    # (resident gave notice, but hasn't moved out yet) are still physically
+    # occupied and already counted in "Occupied", so they must not also be
+    # added here. Doing so previously double-counted them, inflating
+    # Vacant by exactly the on-notice count (confirmed against Eagle
+    # Rock's 07.20.26 file: Total 92 - Occupied 86 = 6 real vacant units,
+    # cross-checked against the raw Available Units report's Vacant (5)
+    # + Vacant Preleased (1) sections; the prior code showed 15, exactly
+    # 6 + the file's 9 on-notice units).
+    vacant_total = bs.get("vacant")
     write_pair_row(ws, 8, "Vacant", na_if_none(vacant_total), "Total Units", na_if_none(bs.get("total_units")))
     # Prefer Box Score "Vacant Pre-Leased" column value; fall back to Available Units count.
     # This already includes Notice-to-Vacate-Preleased units (see _PRELEASE_SECTIONS).
