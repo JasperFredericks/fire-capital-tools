@@ -1953,9 +1953,15 @@ def chart_waterfall(df):
     total_noi = float(df["NOI"].sum())
     fig, ax = plt.subplots(figsize=(5.4, 3.8))
     labels = ["Income", "Expenses", "NOI"]
-    values = [total_inc, -total_exp, total_noi]
-    colors = ["#5b8def", "#f59e0b", "#059669" if total_noi >= 0 else "#dc2626"]
-    ax.bar(labels, values, color=colors, alpha=0.82)
+    # Floating bars: Income stands at full height, Expenses is drawn as a
+    # positive-magnitude segment bridging down from Income to NOI (the
+    # portion of Income it consumes), and NOI stands at its own full
+    # height as the remaining value -- not a negative expense bar summed
+    # against some other total.
+    bottoms = [0, total_noi, 0]
+    heights = [total_inc, total_exp, total_noi]
+    colors = ["#1e40af", "#f97316", "#4cbb17" if total_noi >= 0 else "#dc2626"]
+    ax.bar(labels, heights, bottom=bottoms, color=colors, alpha=0.85)
     ax.axhline(0, color="#1f2937", linewidth=0.8)
     ax.yaxis.set_major_formatter(lambda val, _: money_axis(val))
     ax.grid(axis="y", alpha=0.18)
