@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ deal.address }} - Deal Dive{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('deal_dive.detail', deal_id=deal.id) }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Deal
+  </a>
+  <h1 class="page-title">Edit Deal</h1>
+  <p class="page-subtitle">Basic identifiers only &mdash; financials, comps, and condition are edited on the deal's own page.</p>
+</div>
+
+<div class="card" style="max-width:640px;">
+  <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <div class="form-group">
+      <label class="form-label" for="address">Address</label>
+      <input class="form-input" type="text" id="address" name="address" value="{{ form.get('address', '') }}" required>
+    </div>
+
+    <div style="display:grid; grid-template-columns: 2fr 1fr 1fr; gap:14px;">
+      <div class="form-group">
+        <label class="form-label" for="city">City</label>
+        <input class="form-input" type="text" id="city" name="city" value="{{ form.get('city', '') }}" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="state">State</label>
+        <input class="form-input" type="text" id="state" name="state" maxlength="2" placeholder="TX" value="{{ form.get('state', '') }}" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="zip">ZIP</label>
+        <input class="form-input" type="text" id="zip" name="zip" value="{{ form.get('zip', '') }}">
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns: 2fr 1fr; gap:14px;">
+      <div class="form-group">
+        <label class="form-label" for="property_type">Property Type</label>
+        <input class="form-input" type="text" id="property_type" name="property_type" value="{{ form.get('property_type', 'Multifamily') }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="unit_count">Unit Count</label>
+        <input class="form-input" type="number" id="unit_count" name="unit_count" min="0" value="{{ form.get('unit_count', '') }}">
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Save Changes</button>
+  </form>
+</div>
+{% endblock %}

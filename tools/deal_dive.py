@@ -12,6 +12,7 @@ and the section comments below for what's explicitly out of scope here
 from __future__ import annotations
 
 import secrets
+import shutil
 from pathlib import Path
 
 from flask import (
@@ -171,6 +172,55 @@ def detail(deal_id):
         statuses=db.STATUSES,
         auto_market_data=auto_market_data,
     )
+
+
+@deal_dive_bp.route("/deal/<int:deal_id>/edit", methods=["GET", "POST"])
+@login_required
+def edit_deal(deal_id):
+    with db.get_connection() as conn:
+        deal = db.get_deal(conn, deal_id)
+        if not deal:
+            abort(404)
+
+        if request.method == "POST":
+            address = (request.form.get("address") or "").strip()
+            city = (request.form.get("city") or "").strip()
+            state = (request.form.get("state") or "").strip().upper()
+            if not address or not city or not state:
+                flash("Address, city, and state are required.", "danger")
+                return render_template("tools/deal_dive_edit.html", deal=deal, form=request.form)
+
+            db.update_deal(
+                conn,
+                deal_id,
+                {
+                    "address": address,
+                    "city": city,
+                    "state": state,
+                    "zip": (request.form.get("zip") or "").strip() or None,
+                    "property_type": (request.form.get("property_type") or "").strip() or "Multifamily",
+                    "unit_count": _to_int(request.form.get("unit_count")),
+                },
+            )
+            flash("Deal updated.", "success")
+            return redirect(url_for("deal_dive.detail", deal_id=deal_id))
+
+    return render_template("tools/deal_dive_edit.html", deal=deal, form=deal)
+
+
+@deal_dive_bp.route("/deal/<int:deal_id>/delete", methods=["POST"])
+@login_required
+def delete_deal(deal_id):
+    with db.get_connection() as conn:
+        if not db.get_deal(conn, deal_id):
+            abort(404)
+        db.delete_deal(conn, deal_id)
+
+    upload_dir = _upload_dir(deal_id)
+    shutil.rmtree(upload_dir, ignore_errors=True)
+
+    flash("Deal deleted.", "success")
+    return redirect(url_for("deal_dive.index"))
 
 
 @deal_dive_bp.route("/deal/<int:deal_id>/status", methods=["POST"])

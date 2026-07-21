@@ -163,6 +163,40 @@ def update_deal_status(conn: sqlite3.Connection, deal_id: int, status: str) -> N
     conn.commit()
 
 
+def update_deal(conn: sqlite3.Connection, deal_id: int, fields: dict[str, Any]) -> None:
+    conn.execute(
+        """
+        UPDATE deals SET
+            address = :address,
+            city = :city,
+            state = :state,
+            zip = :zip,
+            property_type = :property_type,
+            unit_count = :unit_count,
+            updated_at = :updated_at
+        WHERE id = :deal_id
+        """,
+        {
+            "address": fields["address"],
+            "city": fields["city"],
+            "state": fields["state"],
+            "zip": fields.get("zip"),
+            "property_type": fields.get("property_type") or "Multifamily",
+            "unit_count": fields.get("unit_count"),
+            "updated_at": _now(),
+            "deal_id": deal_id,
+        },
+    )
+    conn.commit()
+
+
+def delete_deal(conn: sqlite3.Connection, deal_id: int) -> None:
+    conn.execute("DELETE FROM deal_comps WHERE deal_id = ?", (deal_id,))
+    conn.execute("DELETE FROM deal_files WHERE deal_id = ?", (deal_id,))
+    conn.execute("DELETE FROM deals WHERE id = ?", (deal_id,))
+    conn.commit()
+
+
 def update_financials(conn: sqlite3.Connection, deal_id: int, fields: dict[str, Any]) -> None:
     conn.execute(
         """

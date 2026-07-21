@@ -24,17 +24,23 @@
     <a href="{{ url_for('deal_dive.new_deal') }}" class="btn btn-primary">+ New Deal</a>
   </div>
 
+  {% if deals %}
+  <div class="form-group" style="max-width:320px; margin-bottom:14px;">
+    <input class="form-input" type="text" id="dealSearch" placeholder="Search by address, city, or state...">
+  </div>
+  {% endif %}
+
   <div class="table-wrap">
-    <table class="deal-dive-table">
+    <table class="deal-dive-table" id="dealDiveTable">
       <thead>
         <tr>
-          <th>Address</th>
-          <th>City / State</th>
-          <th>Units</th>
-          <th>Status</th>
-          <th>Asking Price</th>
-          <th>Cap Rate</th>
-          <th>Updated</th>
+          <th data-sort="text" style="cursor:pointer;">Address</th>
+          <th data-sort="text" style="cursor:pointer;">City / State</th>
+          <th data-sort="num" style="cursor:pointer;">Units</th>
+          <th data-sort="text" style="cursor:pointer;">Status</th>
+          <th data-sort="num" style="cursor:pointer;">Asking Price</th>
+          <th data-sort="num" style="cursor:pointer;">Cap Rate</th>
+          <th data-sort="text" style="cursor:pointer;">Updated</th>
         </tr>
       </thead>
       <tbody>
@@ -43,10 +49,10 @@
             <tr>
               <td><a href="{{ url_for('deal_dive.detail', deal_id=deal.id) }}">{{ deal.address }}</a></td>
               <td>{{ deal.city }}, {{ deal.state }}</td>
-              <td>{{ deal.unit_count or '—' }}</td>
+              <td data-value="{{ deal.unit_count or 0 }}">{{ deal.unit_count or '—' }}</td>
               <td><span class="source-badge deal-status-{{ deal.status }}">{{ deal.status.replace('_', ' ')|title }}</span></td>
-              <td>{{ '${:,.0f}'.format(deal.asking_price) if deal.asking_price is not none else '—' }}</td>
-              <td>{{ '%.2f%%'|format(deal.cap_rate) if deal.cap_rate is not none else '—' }}</td>
+              <td data-value="{{ deal.asking_price or 0 }}">{{ '${:,.0f}'.format(deal.asking_price) if deal.asking_price is not none else '—' }}</td>
+              <td data-value="{{ deal.cap_rate or 0 }}">{{ '%.2f%%'|format(deal.cap_rate) if deal.cap_rate is not none else '—' }}</td>
               <td>{{ deal.updated_at[:10] }}</td>
             </tr>
           {% endfor %}
@@ -57,4 +63,47 @@
     </table>
   </div>
 </div>
+
+<script>
+(function () {
+  var table = document.getElementById("dealDiveTable");
+  if (!table) return;
+  var tbody = table.tBodies[0];
+  var searchInput = document.getElementById("dealSearch");
+
+  if (searchInput) {
+    searchInput.addEventListener("input", function () {
+      var q = searchInput.value.trim().toLowerCase();
+      Array.prototype.forEach.call(tbody.rows, function (row) {
+        if (!row.cells.length || !row.cells[0].querySelector) return;
+        var text = row.textContent.toLowerCase();
+        row.style.display = !q || text.indexOf(q) !== -1 ? "" : "none";
+      });
+    });
+  }
+
+  var headers = table.tHead.rows[0].cells;
+  Array.prototype.forEach.call(headers, function (th, colIndex) {
+    var sortType = th.getAttribute("data-sort");
+    if (!sortType) return;
+    var ascending = true;
+    th.addEventListener("click", function () {
+      var rows = Array.prototype.filter.call(tbody.rows, function (row) {
+        return row.cells.length > 1;
+      });
+      rows.sort(function (a, b) {
+        var cellA = a.cells[colIndex];
+        var cellB = b.cells[colIndex];
+        var valA = cellA.hasAttribute("data-value") ? parseFloat(cellA.getAttribute("data-value")) : cellA.textContent.trim().toLowerCase();
+        var valB = cellB.hasAttribute("data-value") ? parseFloat(cellB.getAttribute("data-value")) : cellB.textContent.trim().toLowerCase();
+        if (valA < valB) return ascending ? -1 : 1;
+        if (valA > valB) return ascending ? 1 : -1;
+        return 0;
+      });
+      rows.forEach(function (row) { tbody.appendChild(row); });
+      ascending = !ascending;
+    });
+  });
+})();
+</script>
 {% endblock %}
