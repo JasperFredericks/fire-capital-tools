@@ -1939,12 +1939,33 @@ def build_charts(df):
 def chart_trend(df):
     fig, ax = plt.subplots(figsize=(8.5, 3.8))
     x = range(len(df))
-    ax.bar(x, df["Income"], label="Income", color="#1e40af", alpha=0.70)
-    ax.bar(x, df["Expenses"], label="Expenses", color="#f97316", alpha=0.62)
-    ax.plot(x, df["NOI"], label="NOI", color="#4cbb17", linewidth=2.6, marker="o")
+    income_bars = ax.bar(x, df["Income"], label="Income", color="#1e40af", alpha=0.70)
+    expense_bars = ax.bar(x, df["Expenses"], label="Expenses", color="#f97316", alpha=0.62)
+    noi_line = ax.plot(x, df["NOI"], label="NOI", color="#4cbb17", linewidth=2.6, marker="o")[0]
     ax.set_xticks(list(x), df["Month"], rotation=35, ha="right")
     ax.yaxis.set_major_formatter(lambda val, _: money_axis(val))
     ax.grid(axis="y", alpha=0.18)
+
+    # Data labels: dollar figure on each bar and each NOI point. Font kept
+    # small (7pt) since a full 12-month history means three labels per
+    # month competing for the same width; the NOI label gets a translucent
+    # white backing since the line crosses in front of both bar series.
+    # Months with no GPR data at all (Income/Expenses/NOI all genuinely
+    # $0, not just small) are skipped entirely -- three stacked "$0"
+    # labels add no information and are the one case dense enough to
+    # actually overlap illegibly.
+    has_data = df["OccupancyStatus"] != "missing_gpr"
+    ax.bar_label(income_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Income"])], padding=2, fontsize=7)
+    ax.bar_label(expense_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Expenses"])], padding=2, fontsize=7)
+    for xi, yi, keep in zip(x, df["NOI"], has_data):
+        if not keep:
+            continue
+        ax.annotate(
+            money_label(yi), (xi, yi), textcoords="offset points", xytext=(0, 8),
+            ha="center", fontsize=7, fontweight="bold", color="#2f6b0e",
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.65, pad=1),
+        )
+
     # Below the chart rather than overlapping the plotted bars/line -- a
     # tall Income month previously sat right under the upper-left legend.
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.32), ncols=3, frameon=False)
@@ -1967,7 +1988,11 @@ def chart_waterfall(df):
     bottoms = [0, total_noi, 0]
     heights = [total_inc, total_exp, total_noi]
     colors = ["#1e40af", "#f97316", "#4cbb17" if total_noi >= 0 else "#dc2626"]
-    ax.bar(labels, heights, bottom=bottoms, color=colors, alpha=0.85)
+    bars = ax.bar(labels, heights, bottom=bottoms, color=colors, alpha=0.85)
+    ax.bar_label(
+        bars, labels=[money_label(v) for v in [total_inc, total_exp, total_noi]],
+        label_type="center", fontsize=10, fontweight="bold", color="white",
+    )
     ax.axhline(0, color="#1f2937", linewidth=0.8)
     ax.yaxis.set_major_formatter(lambda val, _: money_axis(val))
     ax.grid(axis="y", alpha=0.18)
@@ -1977,13 +2002,15 @@ def chart_waterfall(df):
 
 
 def chart_occupancy(df):
-    fig, ax = plt.subplots(figsize=(5.4, 3.8))
+    fig, ax = plt.subplots(figsize=(6.4, 3.8))
     values = [None if pd.isna(value) else value * 100 for value in df["Occupancy"]]
     colors = ["#9ca3af" if value is None else ("#dc2626" if value < 80 else "#f59e0b" if value < 90 else "#059669") for value in values]
     display_values = [0 if value is None else value for value in values]
-    ax.bar(df["Month"], display_values, color=colors, alpha=0.78)
+    bars = ax.bar(df["Month"], display_values, color=colors, alpha=0.78)
+    labels = ["N/A" if value is None else f"{value:.1f}%" for value in values]
+    ax.bar_label(bars, labels=labels, padding=3, fontsize=7)
     ax.axhline(90, color="#1f2937", linestyle="--", linewidth=1)
-    ax.set_ylim(0, 105)
+    ax.set_ylim(0, 112)
     ax.set_ylabel("Occupancy %")
     ax.tick_params(axis="x", rotation=35)
     ax.grid(axis="y", alpha=0.18)
@@ -1996,7 +2023,16 @@ def chart_expense_ratio(df):
     fig, ax = plt.subplots(figsize=(5.4, 3.8))
     ratios = [None if pd.isna(value) else value * 100 for value in df["ExpenseRatio"]]
     ax.plot(df["Month"], ratios, color="#7c3aed", linewidth=2.6, marker="o")
+    for xi, yi in zip(df["Month"], ratios):
+        if yi is None:
+            continue
+        ax.annotate(
+            f"{yi:.1f}%", (xi, yi), textcoords="offset points", xytext=(0, 8),
+            ha="center", fontsize=7, fontweight="bold", color="#5b21b6",
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.65, pad=1),
+        )
     ax.axhline(55, color="#f59e0b", linestyle="--", linewidth=1)
+    ax.margins(y=0.15)
     ax.set_ylabel("Expense Ratio %")
     ax.tick_params(axis="x", rotation=35)
     ax.grid(axis="y", alpha=0.18)
@@ -2193,6 +2229,16 @@ def money_axis(value):
     if value >= 1_000:
         return f"{sign}${value / 1_000:.0f}K"
     return f"{sign}${value:.0f}"
+
+
+def money_label(value):
+    """Full-precision, comma-formatted dollar figure for on-chart data
+    labels -- unlike money_axis's K/M abbreviation (meant for axis ticks),
+    this matches the exact formatting already used for dollar figures
+    elsewhere in the tool (report text, dashboard summary cards)."""
+    value = float(value)
+    sign = "-" if value < 0 else ""
+    return f"{sign}${abs(value):,.0f}"
 
 
 def slugify(value):
