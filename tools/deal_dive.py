@@ -71,6 +71,19 @@ def _to_int(value):
 _MARKET_COMP_SOURCE_PREFIX = "Auto-pulled from RentCast"
 
 
+def _deal_not_found():
+    """A deal can vanish out from under an open browser tab -- deleted in
+    another tab/session, or reached via a stale back-navigation -- and a
+    raw 404 error page for that is a confusing dead end for what was just
+    a normal form submission. Flash a plain explanation and send the user
+    back to the deal list instead. (Direct navigation to a deal URL that
+    never existed at all -- detail()/download_file() -- still 404s
+    normally, since that's an ordinary "page not found," not a deal that
+    existed a moment ago on the same page.)"""
+    flash("That deal could not be found — it may have been deleted.", "danger")
+    return redirect(url_for("deal_dive.index"))
+
+
 def _promoted_market_addresses(comps) -> set[str]:
     """Normalized addresses already promoted from auto-pulled market data
     into this deal's own comps table -- identifies a promoted RentCast
@@ -197,7 +210,7 @@ def edit_deal(deal_id):
     with db.get_connection() as conn:
         deal = db.get_deal(conn, deal_id)
         if not deal:
-            abort(404)
+            return _deal_not_found()
 
         if request.method == "POST":
             address = (request.form.get("address") or "").strip()
@@ -230,7 +243,7 @@ def edit_deal(deal_id):
 def delete_deal(deal_id):
     with db.get_connection() as conn:
         if not db.get_deal(conn, deal_id):
-            abort(404)
+            return _deal_not_found()
         db.delete_deal(conn, deal_id)
 
     upload_dir = _upload_dir(deal_id)
@@ -249,7 +262,7 @@ def update_status(deal_id):
         return redirect(url_for("deal_dive.detail", deal_id=deal_id))
     with db.get_connection() as conn:
         if not db.get_deal(conn, deal_id):
-            abort(404)
+            return _deal_not_found()
         db.update_deal_status(conn, deal_id, status)
     flash("Status updated.", "success")
     return redirect(request.referrer or url_for("deal_dive.detail", deal_id=deal_id))
@@ -260,7 +273,7 @@ def update_status(deal_id):
 def update_financials(deal_id):
     with db.get_connection() as conn:
         if not db.get_deal(conn, deal_id):
-            abort(404)
+            return _deal_not_found()
         db.update_financials(
             conn,
             deal_id,
@@ -282,7 +295,7 @@ def update_financials(deal_id):
 def update_condition(deal_id):
     with db.get_connection() as conn:
         if not db.get_deal(conn, deal_id):
-            abort(404)
+            return _deal_not_found()
         db.update_condition(
             conn,
             deal_id,
@@ -300,7 +313,7 @@ def update_condition(deal_id):
 def add_comp(deal_id):
     with db.get_connection() as conn:
         if not db.get_deal(conn, deal_id):
-            abort(404)
+            return _deal_not_found()
         address = (request.form.get("address") or "").strip()[:MAX_COMP_ADDRESS_LEN]
         db.add_comp(
             conn,
@@ -323,7 +336,7 @@ def add_comp(deal_id):
 def delete_comp(deal_id, comp_id):
     with db.get_connection() as conn:
         if not db.get_deal(conn, deal_id):
-            abort(404)
+            return _deal_not_found()
         db.delete_comp(conn, deal_id, comp_id)
     flash("Comp removed.", "success")
     return redirect(url_for("deal_dive.detail", deal_id=deal_id) + "#comps")
@@ -339,7 +352,7 @@ def pull_market_data(deal_id):
     with db.get_connection() as conn:
         deal = db.get_deal(conn, deal_id)
         if not deal:
-            abort(404)
+            return _deal_not_found()
 
     force_refresh = request.form.get("force_refresh") == "1"
     result = market_data_service.get_market_data(
@@ -368,7 +381,7 @@ def promote_market_comp(deal_id):
     address = (request.form.get("address") or "").strip()
     with db.get_connection() as conn:
         if not db.get_deal(conn, deal_id):
-            abort(404)
+            return _deal_not_found()
 
         if address and address.lower() in _promoted_market_addresses(db.list_comps(conn, deal_id)):
             flash("That comp has already been added.", "info")
@@ -421,7 +434,7 @@ def upload_file(deal_id):
 
     with db.get_connection() as conn:
         if not db.get_deal(conn, deal_id):
-            abort(404)
+            return _deal_not_found()
         stored_name = f"{secrets.token_urlsafe(8)}_{original_name}"
         upload.save(str(_upload_dir(deal_id) / stored_name))
         db.add_file(conn, deal_id, category, original_name, stored_name)
