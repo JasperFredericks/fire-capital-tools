@@ -718,6 +718,76 @@ hr.divider {
   display: block;
   width: 100%;
   height: auto;
+  cursor: zoom-in;
+}
+
+.scorecard-chart-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.78);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.scorecard-chart-modal.visible {
+  display: flex;
+}
+
+.scorecard-chart-modal-body {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+}
+
+.scorecard-chart-modal-body img {
+  display: block;
+  max-width: calc(100vw - 120px);
+  max-height: calc(100vh - 120px);
+  width: auto;
+  height: auto;
+  border-radius: 6px;
+}
+
+.scorecard-chart-modal-spinner {
+  display: none;
+  padding: 60px 100px;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.scorecard-chart-modal.loading .scorecard-chart-modal-spinner {
+  display: block;
+}
+
+.scorecard-chart-modal.loading .scorecard-chart-modal-body img {
+  display: none;
+}
+
+.scorecard-chart-modal-close {
+  position: absolute;
+  top: 24px;
+  right: 32px;
+  background: #fff;
+  border: none;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  font-size: 24px;
+  line-height: 1;
+  color: #1a2744;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+
+.scorecard-chart-modal-close:hover {
+  background: #f3f4f6;
 }
 
 .scorecard-control-row {

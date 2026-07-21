@@ -104,12 +104,20 @@
     </div>
 
     <div class="scorecard-chart-grid">
-      <div class="card scorecard-chart-card"><img id="chart-trend" alt="Financial trend chart"></div>
-      <div class="card scorecard-chart-card"><img id="chart-waterfall" alt="NOI waterfall chart"></div>
-      <div class="card scorecard-chart-card"><img id="chart-occupancy" alt="Occupancy chart"></div>
-      <div class="card scorecard-chart-card"><img id="chart-expense-ratio" alt="Expense ratio chart"></div>
+      <div class="card scorecard-chart-card"><img id="chart-trend" data-chart-key="trend" alt="Financial trend chart"></div>
+      <div class="card scorecard-chart-card"><img id="chart-waterfall" data-chart-key="waterfall" alt="NOI waterfall chart"></div>
+      <div class="card scorecard-chart-card"><img id="chart-occupancy" data-chart-key="occupancy" alt="Occupancy chart"></div>
+      <div class="card scorecard-chart-card"><img id="chart-expense-ratio" data-chart-key="expense_ratio" alt="Expense ratio chart"></div>
     </div>
   </section>
+
+  <div class="scorecard-chart-modal" id="scorecard-chart-modal">
+    <button type="button" class="scorecard-chart-modal-close" id="scorecard-chart-modal-close" aria-label="Close">&times;</button>
+    <div class="scorecard-chart-modal-body">
+      <div class="scorecard-chart-modal-spinner" id="scorecard-chart-modal-spinner">Loading larger chart&hellip;</div>
+      <img id="scorecard-chart-modal-img" alt="Enlarged chart">
+    </div>
+  </div>
 
   <section class="scorecard-tab-panel" id="tab-accounts">
     <div class="card">
@@ -438,6 +446,73 @@
     img.src = src || "";
     img.parentElement.style.display = src ? "block" : "none";
   }
+
+  // ── Click-to-enlarge modal ────────────────────────────────────────────
+  // Regenerates the chart server-side at a larger figure size for the
+  // modal (see /analysis/<token>/chart/<name>) rather than just CSS-
+  // scaling the small dashboard image, so labels stay crisp instead of
+  // blurring out.
+  const chartModal = document.getElementById("scorecard-chart-modal");
+  const chartModalImg = document.getElementById("scorecard-chart-modal-img");
+  const chartModalClose = document.getElementById("scorecard-chart-modal-close");
+
+  const chartModalSpinner = document.getElementById("scorecard-chart-modal-spinner");
+
+  function openChartModal(chartKey) {
+    if (!currentToken) return;
+    chartModalSpinner.textContent = "Loading larger chart…";
+    chartModal.classList.add("visible", "loading");
+    chartModalImg.src = "";
+
+    const months = (currentAnalysis && currentAnalysis.selected_months) || undefined;
+    fetch(`/tools/scorecard-pro/analysis/${currentToken}/chart/${chartKey}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": getCsrfToken(),
+      },
+      body: JSON.stringify({ months }),
+    })
+      .then(parseJsonResponse)
+      .then(data => {
+        if (data.chart) {
+          chartModalImg.src = data.chart;
+          chartModal.classList.remove("loading");
+        } else {
+          chartModalSpinner.textContent = "No chart data available for the selected months.";
+        }
+      })
+      .catch(() => {
+        chartModalSpinner.textContent = "Could not load the larger chart. Please try again.";
+      });
+  }
+
+  function closeChartModal() {
+    chartModal.classList.remove("visible", "loading");
+    chartModalImg.src = "";
+  }
+
+  document.querySelectorAll(".scorecard-chart-card img").forEach(img => {
+    img.addEventListener("click", function () {
+      const key = img.dataset.chartKey;
+      if (key) openChartModal(key);
+    });
+  });
+
+  chartModalClose.addEventListener("click", closeChartModal);
+
+  // Click-outside-to-close: the modal's own backdrop covers the full
+  // overlay, so a click that lands directly on it (not on the card/image
+  // inside) means the user clicked outside the enlarged chart.
+  chartModal.addEventListener("click", function (event) {
+    if (event.target === chartModal) closeChartModal();
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && chartModal.classList.contains("visible")) {
+      closeChartModal();
+    }
+  });
 
   function renderDownloads(analysis) {
     const wrap = document.getElementById("download-buttons");
