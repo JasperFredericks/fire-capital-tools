@@ -102,6 +102,12 @@
       <button id="add-to-comparison-btn" type="button" class="btn btn-primary">Add to Comparison</button>
     </div>
 
+    <div id="fire-ai-overview" class="fire-ai-overview" aria-live="polite">
+      <div class="fire-ai-overview-title">AI Market Overview</div>
+      <div id="fire-ai-overview-body" class="fire-ai-overview-body">Search a city to generate a screening overview.</div>
+      <div id="fire-ai-overview-meta" class="fire-ai-overview-meta">AI-generated screening overview based on current FIRE Metrics data.</div>
+    </div>
+
     <div id="fire-map-panel" class="fire-map-panel">
       <div class="fire-map-header">
         <div class="dashboard-section-title" style="font-size:14px;">US City Map</div>
@@ -253,8 +259,10 @@
 <script>
 (() => {
   const searchUrl = "{{ url_for('fire_metrics.search') }}";
+  const citySummaryUrl = "{{ url_for('fire_metrics.city_summary') }}";
   const statusUrl = "{{ url_for('fire_metrics.refresh_status') }}";
   const uploadCrimeUrl = "{{ url_for('fire_metrics.upload_crime_workbook') }}";
+  const csrfToken = "{{ csrf_token() }}";
   const form = document.getElementById("fire-search-form");
   const input = document.getElementById("fire-search-input");
   const messageEl = document.getElementById("fire-search-message");
@@ -266,6 +274,8 @@
   const comparisonEmptyMessage = document.getElementById("comparison-empty-message");
   const comparisonWrap = document.getElementById("comparison-table-wrap");
   const comparisonBody = document.getElementById("comparison-table-body");
+  const aiOverviewBody = document.getElementById("fire-ai-overview-body");
+  const aiOverviewMeta = document.getElementById("fire-ai-overview-meta");
   const mapContainer = document.getElementById("fire-google-map");
   const mapFallback = document.getElementById("fire-map-fallback");
   const mapNote = document.getElementById("fire-map-note");
@@ -344,6 +354,8 @@
   let markersNeedRender = false;
   let markerRegistry = new Map();
   let lastViewportSignature = "";
+  let summaryRequestController = null;
+  let summaryRequestSequence = 0;
   let currentCity = null;
   let comparisonCities = [];
 
@@ -568,7 +580,7 @@
     const title = markerTitleForCity(city);
     const score = fireMetricScoreForCity(city);
     const scoreText = score === null ? "Unavailable" : score.toLocaleString(undefined, { maximumFractionDigits: 1 });
-    return `<div class="fire-map-infowindow"><strong>${escapeHtml(title)}</strong><div>FIRE Metric score: ${escapeHtml(scoreText)}</div></div>`;
+    return `<div class="fire-map-infowindow"><strong>${escapeHtml(title)}</strong><div>Computed FIRE Metrics composite score: ${escapeHtml(scoreText)}</div></div>`;
   }
 
   function showMapFallback(message) {
@@ -977,6 +989,93 @@
     el.textContent = fmtFreshness(isoString);
   }
 
+  function setOverviewBody(text) {
+    if (!aiOverviewBody) return;
+    aiOverviewBody.textContent = text;
+  }
+
+  function setOverviewMeta(text) {
+    if (!aiOverviewMeta) return;
+    aiOverviewMeta.textContent = text;
+  }
+
+  function clearOverview() {
+    setOverviewBody("Search a city to generate a screening overview.");
+    setOverviewMeta("AI-generated screening overview based on current FIRE Metrics data.");
+  }
+
+  function setOverviewLoading() {
+    setOverviewBody("Generating market overview...");
+    setOverviewMeta("AI-generated screening overview based on current FIRE Metrics data.");
+  }
+
+  function timestampLabel(isoString) {
+    if (!isoString) return "";
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return "";
+    return `Generated ${date.toLocaleString()}`;
+  }
+
+  function renderOverviewPayload(payload) {
+    if (!payload || !payload.summary) {
+      setOverviewBody("Overview unavailable for this city right now.");
+      setOverviewMeta("AI-generated screening overview based on current FIRE Metrics data.");
+      return;
+    }
+    setOverviewBody(payload.summary);
+    const cacheLabel = payload.cached ? "Cached" : "Fresh";
+    const stamp = timestampLabel(payload.generated_at);
+    const parts = ["AI-generated screening overview based on current FIRE Metrics data.", cacheLabel];
+    if (stamp) parts.push(stamp);
+    setOverviewMeta(parts.join(" | "));
+  }
+
+  async function requestCityOverview(city) {
+    if (!city) {
+      clearOverview();
+      return;
+    }
+
+    if (summaryRequestController) {
+      summaryRequestController.abort();
+    }
+
+    summaryRequestController = new AbortController();
+    summaryRequestSequence += 1;
+    const mySequence = summaryRequestSequence;
+
+    setOverviewLoading();
+
+    try {
+      const res = await fetch(citySummaryUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body: JSON.stringify({
+          city: getCityField(city),
+          state: normalizeStateToken(getStateField(city)),
+        }),
+        signal: summaryRequestController.signal,
+      });
+
+      if (mySequence !== summaryRequestSequence) return;
+
+      const payload = await res.json();
+      if (mySequence !== summaryRequestSequence) return;
+      renderOverviewPayload(payload);
+    } catch (err) {
+      if (err && err.name === "AbortError") {
+        return;
+      }
+      if (mySequence !== summaryRequestSequence) return;
+      setOverviewBody("Overview unavailable for this city right now.");
+      setOverviewMeta("AI-generated screening overview based on current FIRE Metrics data.");
+    }
+  }
+
   function renderCity(city) {
     currentCity = sanitizeCity(city);
     dashboardEl.style.display = "grid";
@@ -1025,6 +1124,7 @@
     });
 
     syncComparisonAddButton();
+    requestCityOverview(currentCity);
     renderMapPoints();
   }
 
@@ -1033,6 +1133,7 @@
       showMessage("Enter a city name to search FIRE Metric data.", "warning");
       dashboardEl.style.display = "none";
       hideSuggestions();
+      clearOverview();
       return;
     }
 
@@ -1053,6 +1154,7 @@
         dashboardEl.style.display = "none";
         showMessage(payload.user_message || "No exact match found.", "info");
         renderSuggestions(payload.suggestions || []);
+        clearOverview();
         renderMapPoints();
         return;
       }
@@ -1066,6 +1168,7 @@
       } else {
         showMessage(payload.user_message || "Search failed.", "error");
       }
+      clearOverview();
       renderMapPoints();
     } catch (err) {
       currentCity = null;
@@ -1073,6 +1176,7 @@
       dashboardEl.style.display = "none";
       hideSuggestions();
       showMessage(`Search failed: ${err}`, "error");
+      clearOverview();
       renderMapPoints();
     }
   }
@@ -1128,6 +1232,7 @@
       currentCity = null;
       resetComparisonAddButton();
       dashboardEl.style.display = "none";
+      clearOverview();
       renderMapPoints();
     }
 
@@ -1204,6 +1309,7 @@
   comparisonCities = comparisonCities.map((city) => sanitizeCity(city));
   renderComparisonTable();
   resetComparisonAddButton();
+  clearOverview();
   cleanIndexedCitySamples();
   initializeGoogleMap();
   renderMapPoints();

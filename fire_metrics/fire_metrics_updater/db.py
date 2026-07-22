@@ -104,6 +104,25 @@ CREATE TABLE IF NOT EXISTS refresh_metadata (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS fire_metrics_city_summaries (
+    city TEXT NOT NULL,
+    state TEXT NOT NULL,
+    city_key TEXT NOT NULL,
+    data_fingerprint TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    summary_text TEXT NOT NULL,
+    strength_sentence TEXT NOT NULL,
+    weakness_sentence TEXT NOT NULL,
+    comparison_sentence TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (city, state, data_fingerprint, model_name, prompt_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fire_metrics_summaries_city_state
+    ON fire_metrics_city_summaries (city, state);
 """
 
 
@@ -285,6 +304,76 @@ def fetch_all_cities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         city_dict["search_keys"] = [a["search_key"] for a in aliases]
         result.append(city_dict)
     return result
+
+
+def fetch_all_included_cities(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT * FROM cities WHERE include_flag = 1").fetchall()
+    return [city_row_to_dict(row) for row in rows]
+
+
+def fetch_city_by_identity(conn: sqlite3.Connection, city: str, state: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM cities WHERE city = ? AND state = ? AND include_flag = 1",
+        (city, state),
+    ).fetchone()
+    if row is None:
+        return None
+    city_dict = city_row_to_dict(row)
+    aliases = conn.execute(
+        "SELECT search_key FROM search_aliases WHERE city = ? AND state = ?",
+        (city_dict["city"], city_dict["state"]),
+    ).fetchall()
+    city_dict["search_keys"] = [a["search_key"] for a in aliases]
+    return city_dict
+
+
+def fetch_cached_city_summary(
+    conn: sqlite3.Connection,
+    *,
+    city: str,
+    state: str,
+    data_fingerprint: str,
+    model_name: str,
+    prompt_version: str,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM fire_metrics_city_summaries
+        WHERE city = ? AND state = ?
+          AND data_fingerprint = ?
+          AND model_name = ?
+          AND prompt_version = ?
+        """,
+        (city, state, data_fingerprint, model_name, prompt_version),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_city_summary_cache(conn: sqlite3.Connection, row: dict[str, Any]) -> None:
+    conn.execute(
+        """
+        INSERT INTO fire_metrics_city_summaries (
+            city, state, city_key, data_fingerprint, model_name, prompt_version,
+            summary_text, strength_sentence, weakness_sentence, comparison_sentence,
+            generated_at
+        ) VALUES (
+            :city, :state, :city_key, :data_fingerprint, :model_name, :prompt_version,
+            :summary_text, :strength_sentence, :weakness_sentence, :comparison_sentence,
+            :generated_at
+        )
+        ON CONFLICT(city, state, data_fingerprint, model_name, prompt_version)
+        DO UPDATE SET
+            city_key = excluded.city_key,
+            summary_text = excluded.summary_text,
+            strength_sentence = excluded.strength_sentence,
+            weakness_sentence = excluded.weakness_sentence,
+            comparison_sentence = excluded.comparison_sentence,
+            generated_at = excluded.generated_at
+        """,
+        row,
+    )
+    conn.commit()
 
 
 def fetch_excluded_cities(conn: sqlite3.Connection) -> list[dict[str, Any]]:

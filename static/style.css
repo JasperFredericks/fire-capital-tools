@@ -1174,6 +1174,35 @@ hr.divider {
   justify-content: flex-end;
 }
 
+.fire-ai-overview {
+  margin-top: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f9fafb;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.fire-ai-overview-title {
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: #374151;
+  font-weight: 600;
+}
+
+.fire-ai-overview-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #111827;
+}
+
+.fire-ai-overview-meta {
+  font-size: 11px;
+  color: #6b7280;
+}
+
 .comparison-actions {
   display: flex;
   flex-wrap: wrap;

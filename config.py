@@ -22,6 +22,9 @@ class Config:
     TEMPLATES_AUTO_RELOAD: bool = True
     GOOGLE_MAPS_API_KEY: str = os.environ.get("GOOGLE_MAPS_API_KEY", "")
     GOOGLE_MAPS_MAP_ID: str = os.environ.get("GOOGLE_MAPS_MAP_ID", "")
+    OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
+    FIRE_METRICS_SUMMARY_MODEL: str = os.environ.get("FIRE_METRICS_SUMMARY_MODEL", "")
+    FIRE_METRICS_AI_SUMMARIES_ENABLED: bool = os.environ.get("FIRE_METRICS_AI_SUMMARIES_ENABLED", "false").lower() == "true"
 
     # ── File uploads ───────────────────────────────────────────────────────
     UPLOAD_FOLDER: str = os.path.join(

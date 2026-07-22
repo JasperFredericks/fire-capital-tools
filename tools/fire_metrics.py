@@ -45,12 +45,14 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from flask import Blueprint, current_app, jsonify, render_template, request
 from flask_login import login_required
 
 from fire_metrics.fire_metrics_updater import db as db_module
 from fire_metrics.fire_metrics_updater.city_search import find_city_match
+from tools import fire_metrics_ai_summary as ai_summary
 
 fire_metrics_bp = Blueprint("fire_metrics", __name__)
 
@@ -103,6 +105,65 @@ def _refresh_status() -> dict:
         "last_refresh_at": metadata.get("last_refresh_at"),
         "last_refresh_error": metadata.get("last_refresh_error"),
         "city_count": total_cities,
+    }
+
+
+def _summary_enabled() -> bool:
+    return bool(current_app.config.get("FIRE_METRICS_AI_SUMMARIES_ENABLED", False))
+
+
+def _summary_model_name() -> str:
+    return str(current_app.config.get("FIRE_METRICS_SUMMARY_MODEL") or "").strip()
+
+
+def _summary_api_key() -> str:
+    return str(current_app.config.get("OPENAI_API_KEY") or "").strip()
+
+
+def _summary_unavailable_response(
+    *,
+    selected_city: dict[str, Any] | None,
+    benchmark_data: dict[str, Any] | None,
+    reason: str,
+):
+    if selected_city and benchmark_data:
+        structured = ai_summary.fallback_summary(selected_city, benchmark_data)
+        combined = ai_summary.combined_summary(structured)
+        return {
+            "status": "ready",
+            "summary": combined,
+            "summary_structured": structured,
+            "generated_at": ai_summary.utc_now_iso(),
+            "cached": False,
+            "city_key": ai_summary.city_key(selected_city),
+            "score": benchmark_data.get("selected_overall_score"),
+            "computed_composite_score": benchmark_data.get("selected_overall_score"),
+            "tracked_city_average": benchmark_data.get("tracked_city_average"),
+            "tracked_city_composite_average": benchmark_data.get("tracked_city_average"),
+            "tracked_city_count": benchmark_data.get("tracked_city_count"),
+            "percentile": benchmark_data.get("selected_percentile"),
+            "source": "fallback",
+            "note": reason,
+        }
+    return {
+        "status": "unavailable",
+        "summary": "AI market overview is unavailable for this city.",
+        "summary_structured": {
+            "strength_sentence": "The strongest currently available signals are limited by missing values.",
+            "weakness_sentence": "The largest currently available risks are limited by missing values.",
+            "comparison_sentence": "The computed FIRE Metrics composite score assessment is limited because too many component values are missing.",
+        },
+        "generated_at": ai_summary.utc_now_iso(),
+        "cached": False,
+        "city_key": ai_summary.city_key(selected_city) if selected_city else None,
+        "score": None,
+        "computed_composite_score": None,
+        "tracked_city_average": None,
+        "tracked_city_composite_average": None,
+        "tracked_city_count": 0,
+        "percentile": None,
+        "source": "fallback",
+        "note": reason,
     }
 
 
@@ -436,6 +497,142 @@ def search():
         return jsonify(payload)
     except Exception as exc:
         return jsonify({"status": "error", "query": query, "user_message": f"Search failed: {exc}"}), 500
+
+
+@fire_metrics_bp.route("/api/city-summary", methods=["POST"])
+@login_required
+def city_summary():
+    payload = request.get_json(silent=True) or {}
+    city = str(payload.get("city") or "").strip()
+    state = str(payload.get("state") or "").strip().upper()
+
+    if not city or not state:
+        return jsonify({"status": "error", "user_message": "City identifier is required."}), 400
+
+    try:
+        with db_module.get_connection() as conn:
+            selected_city = db_module.fetch_city_by_identity(conn, city, state)
+            if not selected_city:
+                return jsonify({"status": "error", "user_message": "City not found in tracked FIRE Metrics data."}), 404
+
+            all_cities = db_module.fetch_all_included_cities(conn)
+            metadata = db_module.get_metadata(conn)
+
+            benchmarks = ai_summary.compute_benchmarks(selected_city, all_cities)
+
+            if not _summary_enabled():
+                return jsonify(_summary_unavailable_response(
+                    selected_city=selected_city,
+                    benchmark_data=benchmarks,
+                    reason="AI summaries are disabled.",
+                ))
+
+            model_name = _summary_model_name()
+            fingerprint_input = ai_summary.fingerprint_payload(
+                selected_city=selected_city,
+                benchmarks=benchmarks,
+                model_name=model_name,
+                refresh_last_at=metadata.get("last_refresh_at"),
+            )
+            data_fingerprint = ai_summary.build_fingerprint(fingerprint_input)
+
+            cache_row = db_module.fetch_cached_city_summary(
+                conn,
+                city=selected_city["city"],
+                state=selected_city["state"],
+                data_fingerprint=data_fingerprint,
+                model_name=model_name,
+                prompt_version=ai_summary.PROMPT_VERSION,
+            )
+            if cache_row:
+                return jsonify({
+                    "status": "ready",
+                    "summary": cache_row["summary_text"],
+                    "summary_structured": {
+                        "strength_sentence": cache_row["strength_sentence"],
+                        "weakness_sentence": cache_row["weakness_sentence"],
+                        "comparison_sentence": cache_row["comparison_sentence"],
+                    },
+                    "generated_at": cache_row["generated_at"],
+                    "cached": True,
+                    "city_key": cache_row["city_key"],
+                    "score": benchmarks.get("selected_overall_score"),
+                    "computed_composite_score": benchmarks.get("selected_overall_score"),
+                    "tracked_city_average": benchmarks.get("tracked_city_average"),
+                    "tracked_city_composite_average": benchmarks.get("tracked_city_average"),
+                    "tracked_city_count": benchmarks.get("tracked_city_count"),
+                    "percentile": benchmarks.get("selected_percentile"),
+                    "source": "cache",
+                })
+
+            generated_at = ai_summary.utc_now_iso()
+            api_key = _summary_api_key()
+            if not api_key:
+                return jsonify(_summary_unavailable_response(
+                    selected_city=selected_city,
+                    benchmark_data=benchmarks,
+                    reason="OPENAI_API_KEY is not configured.",
+                ))
+
+            if not model_name:
+                return jsonify(_summary_unavailable_response(
+                    selected_city=selected_city,
+                    benchmark_data=benchmarks,
+                    reason="FIRE_METRICS_SUMMARY_MODEL is not configured.",
+                ))
+
+            try:
+                structured = ai_summary.openai_summary(
+                    api_key=api_key,
+                    model_name=model_name,
+                    selected_city=selected_city,
+                    benchmarks=benchmarks,
+                )
+                structured = ai_summary.normalize_summary(structured, selected_city, benchmarks)
+            except Exception:
+                structured = ai_summary.fallback_summary(selected_city, benchmarks)
+
+            summary_text = ai_summary.combined_summary(structured)
+            cache_payload = {
+                "city": selected_city["city"],
+                "state": selected_city["state"],
+                "city_key": ai_summary.city_key(selected_city),
+                "data_fingerprint": data_fingerprint,
+                "model_name": model_name,
+                "prompt_version": ai_summary.PROMPT_VERSION,
+                "summary_text": summary_text,
+                "strength_sentence": structured["strength_sentence"],
+                "weakness_sentence": structured["weakness_sentence"],
+                "comparison_sentence": structured["comparison_sentence"],
+                "generated_at": generated_at,
+            }
+
+            try:
+                db_module.upsert_city_summary_cache(conn, cache_payload)
+            except Exception:
+                pass
+
+            return jsonify({
+                "status": "ready",
+                "summary": summary_text,
+                "summary_structured": structured,
+                "generated_at": generated_at,
+                "cached": False,
+                "city_key": cache_payload["city_key"],
+                "score": benchmarks.get("selected_overall_score"),
+                "computed_composite_score": benchmarks.get("selected_overall_score"),
+                "tracked_city_average": benchmarks.get("tracked_city_average"),
+                "tracked_city_composite_average": benchmarks.get("tracked_city_average"),
+                "tracked_city_count": benchmarks.get("tracked_city_count"),
+                "percentile": benchmarks.get("selected_percentile"),
+                "source": "generated",
+            })
+    except Exception:
+        return jsonify(_summary_unavailable_response(
+            selected_city=None,
+            benchmark_data=None,
+            reason="Summary generation is currently unavailable.",
+        ))
 
 
 @fire_metrics_bp.route("/refresh-status")
