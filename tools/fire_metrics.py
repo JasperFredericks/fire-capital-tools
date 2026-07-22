@@ -125,6 +125,7 @@ def _summary_unavailable_response(
     selected_city: dict[str, Any] | None,
     benchmark_data: dict[str, Any] | None,
     reason: str,
+    data_refreshed_at: str | None = None,
 ):
     if selected_city and benchmark_data:
         structured = ai_summary.fallback_summary(selected_city, benchmark_data)
@@ -134,8 +135,13 @@ def _summary_unavailable_response(
             "summary": combined,
             "summary_structured": structured,
             "generated_at": ai_summary.utc_now_iso(),
+            "data_refreshed_at": data_refreshed_at,
             "cached": False,
             "city_key": ai_summary.city_key(selected_city),
+            "relative_market_profile_score": benchmark_data.get("relative_market_profile_score"),
+            "relative_market_profile_percentile": benchmark_data.get("relative_market_profile_percentile"),
+            "tracked_city_relative_market_profile_average": benchmark_data.get("tracked_city_relative_market_profile_average"),
+            "recommendation_category": benchmark_data.get("recommendation_category"),
             "score": benchmark_data.get("selected_overall_score"),
             "computed_composite_score": benchmark_data.get("selected_overall_score"),
             "tracked_city_average": benchmark_data.get("tracked_city_average"),
@@ -154,8 +160,13 @@ def _summary_unavailable_response(
             "comparison_sentence": "The computed FIRE Metrics composite score assessment is limited because too many component values are missing.",
         },
         "generated_at": ai_summary.utc_now_iso(),
+        "data_refreshed_at": data_refreshed_at,
         "cached": False,
         "city_key": ai_summary.city_key(selected_city) if selected_city else None,
+        "relative_market_profile_score": None,
+        "relative_market_profile_percentile": None,
+        "tracked_city_relative_market_profile_average": None,
+        "recommendation_category": None,
         "score": None,
         "computed_composite_score": None,
         "tracked_city_average": None,
@@ -539,6 +550,7 @@ def city_summary():
                     selected_city=selected_city,
                     benchmark_data=benchmarks,
                     reason="AI summaries are disabled.",
+                    data_refreshed_at=metadata.get("last_refresh_at"),
                 ))
 
             model_name = _summary_model_name()
@@ -575,8 +587,13 @@ def city_summary():
                         "comparison_sentence": cache_row["comparison_sentence"],
                     },
                     "generated_at": cache_row["generated_at"],
+                    "data_refreshed_at": metadata.get("last_refresh_at"),
                     "cached": True,
                     "city_key": cache_row["city_key"],
+                    "relative_market_profile_score": benchmarks.get("relative_market_profile_score"),
+                    "relative_market_profile_percentile": benchmarks.get("relative_market_profile_percentile"),
+                    "tracked_city_relative_market_profile_average": benchmarks.get("tracked_city_relative_market_profile_average"),
+                    "recommendation_category": benchmarks.get("recommendation_category"),
                     "score": benchmarks.get("selected_overall_score"),
                     "computed_composite_score": benchmarks.get("selected_overall_score"),
                     "tracked_city_average": benchmarks.get("tracked_city_average"),
@@ -593,6 +610,7 @@ def city_summary():
                     selected_city=selected_city,
                     benchmark_data=benchmarks,
                     reason="OPENAI_API_KEY is not configured.",
+                    data_refreshed_at=metadata.get("last_refresh_at"),
                 ))
 
             if not model_name:
@@ -600,6 +618,7 @@ def city_summary():
                     selected_city=selected_city,
                     benchmark_data=benchmarks,
                     reason="FIRE_METRICS_SUMMARY_MODEL is not configured.",
+                    data_refreshed_at=metadata.get("last_refresh_at"),
                 ))
 
             try:
@@ -641,8 +660,13 @@ def city_summary():
                 "summary": summary_text,
                 "summary_structured": structured,
                 "generated_at": generated_at,
+                "data_refreshed_at": metadata.get("last_refresh_at"),
                 "cached": False,
                 "city_key": cache_payload["city_key"],
+                "relative_market_profile_score": benchmarks.get("relative_market_profile_score"),
+                "relative_market_profile_percentile": benchmarks.get("relative_market_profile_percentile"),
+                "tracked_city_relative_market_profile_average": benchmarks.get("tracked_city_relative_market_profile_average"),
+                "recommendation_category": benchmarks.get("recommendation_category"),
                 "score": benchmarks.get("selected_overall_score"),
                 "computed_composite_score": benchmarks.get("selected_overall_score"),
                 "tracked_city_average": benchmarks.get("tracked_city_average"),
@@ -657,6 +681,7 @@ def city_summary():
             selected_city=None,
             benchmark_data=None,
             reason="Summary generation is currently unavailable.",
+            data_refreshed_at=None,
         )
         response["error_code"] = "summary_endpoint_failed"
         return jsonify(response), 500

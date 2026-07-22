@@ -1174,6 +1174,65 @@ hr.divider {
   justify-content: flex-end;
 }
 
+.fire-searched-cities-switcher {
+  margin-top: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.fire-searched-cities-header {
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: #374151;
+  font-weight: 600;
+}
+
+.fire-searched-cities-tabs {
+  display: flex;
+  overflow-x: auto;
+  gap: 8px;
+  padding-bottom: 2px;
+}
+
+.fire-searched-city-tab {
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: #1f2937;
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fire-searched-city-tab[aria-selected="true"] {
+  background: #dbeafe;
+  border-color: #60a5fa;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.fire-searched-city-select-label {
+  display: none;
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.fire-searched-city-select {
+  display: none;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: #111827;
+  background: #ffffff;
+}
+
 .fire-ai-overview {
   margin-top: 12px;
   border: 1px solid #e5e7eb;
@@ -1383,6 +1442,15 @@ hr.divider {
 
   .fire-search-row {
     grid-template-columns: 1fr;
+  }
+
+  .fire-searched-cities-tabs {
+    display: none;
+  }
+
+  .fire-searched-city-select-label,
+  .fire-searched-city-select {
+    display: block;
   }
 
   .fire-city-dashboard {

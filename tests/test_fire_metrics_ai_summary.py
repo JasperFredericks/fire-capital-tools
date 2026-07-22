@@ -164,6 +164,16 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertEqual(bench["tracked_city_count"], 3)
         self.assertIsNotNone(bench["tracked_city_average"])
 
+    def test_compute_benchmarks_exposes_relative_market_profile_fields(self):
+        bench = summary.compute_benchmarks(self.cities[0], self.cities)
+        self.assertIn("relative_market_profile_score", bench)
+        self.assertIn("tracked_city_relative_market_profile_average", bench)
+        self.assertIn("relative_market_profile_percentile", bench)
+        self.assertIn("recommendation_category", bench)
+        self.assertIn("data_completeness", bench)
+        self.assertIsInstance(bench["strength_candidates"], list)
+        self.assertIsInstance(bench["weakness_candidates"], list)
+
     def test_percentile_calculation(self):
         pct = summary.percentile_for_value([10.0, 20.0, 30.0, 40.0], 30.0)
         self.assertAlmostEqual(pct, 62.5)
@@ -285,9 +295,13 @@ class FireMetricsAISummaryTests(unittest.TestCase):
             selected_city=self.cities[0],
             benchmark_data=bench,
             reason="OPENAI_API_KEY is not configured.",
+            data_refreshed_at="2026-07-22T00:00:00+00:00",
         )
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(summary.count_sentences(payload["summary"]), 3)
+        self.assertIn("relative_market_profile_score", payload)
+        self.assertIn("recommendation_category", payload)
+        self.assertEqual(payload["data_refreshed_at"], "2026-07-22T00:00:00+00:00")
 
     def test_openai_error_fallback_is_three_sentences(self):
         bench = summary.compute_benchmarks(self.cities[0], self.cities)
@@ -386,8 +400,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 "selected_percentile": 72.0,
             },
         )
-        self.assertIn("The strongest available signal is", structured["strength_sentence"])
-        self.assertNotIn("The strongest available signals are", structured["strength_sentence"])
+        self.assertIn("The strongest relative signal is", structured["strength_sentence"])
+        self.assertNotIn("The strongest relative signals are", structured["strength_sentence"])
 
     def test_two_weaknesses_use_plural_grammar(self):
         structured = summary.fallback_summary(
@@ -414,7 +428,7 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 "selected_percentile": 72.0,
             },
         )
-        self.assertIn("The biggest current weaknesses are", structured["weakness_sentence"])
+        self.assertIn("The main weaknesses are", structured["weakness_sentence"])
         self.assertIn(" and ", structured["weakness_sentence"])
 
     def test_one_weakness_uses_singular_grammar(self):
@@ -436,8 +450,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 "selected_percentile": 72.0,
             },
         )
-        self.assertIn("The biggest current weakness is", structured["weakness_sentence"])
-        self.assertNotIn("The biggest current weaknesses are", structured["weakness_sentence"])
+        self.assertIn("The main weakness is", structured["weakness_sentence"])
+        self.assertNotIn("The main weaknesses are", structured["weakness_sentence"])
 
     def test_no_duplicate_tracked_city_phrase_in_strength_sentence(self):
         structured = summary.fallback_summary(
@@ -802,6 +816,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("aiOverviewBody.textContent = text;", template)
         self.assertIn("aiOverviewMeta.textContent = text;", template)
         self.assertIn("city_key: city.city_key || \"\"", template)
+        self.assertIn("selectCurrentSearchCity", template)
+        self.assertIn("fire-searched-city-select", template)
 
     def test_model_output_html_is_sanitized(self):
         normalized = summary.normalize_summary(
