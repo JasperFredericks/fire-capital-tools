@@ -23,7 +23,17 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
+from fire_metrics.fire_metrics_updater.city_search import normalize_city_tokens
+
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+_CENSUS_SUFFIXES = (" municipality", " village", " town", " city", " cdp")
+_PROPER_CITY_ENDINGS = {
+    "oklahoma city",
+    "kansas city",
+    "salt lake city",
+    "carson city",
+}
 
 
 def get_db_path() -> Path:
@@ -289,6 +299,7 @@ def city_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     keys = row.keys()
     data = {k: row[k] for k in keys}
     data["include_flag"] = bool(data.get("include_flag"))
+    data["city_key"] = f"{str(data.get('city') or '').strip()}|{str(data.get('state') or '').strip().upper()}"
     return data
 
 
@@ -318,6 +329,37 @@ def fetch_city_by_identity(conn: sqlite3.Connection, city: str, state: str) -> d
     ).fetchone()
     if row is None:
         return None
+    return _city_dict_with_aliases(conn, row)
+
+
+def _strip_trailing_census_suffix(city_token: str) -> str:
+    token = normalize_city_tokens(city_token)
+    if token in _PROPER_CITY_ENDINGS:
+        return token
+    stripped = token
+    changed = True
+    while changed and stripped:
+        changed = False
+        for suffix in _CENSUS_SUFFIXES:
+            if stripped.endswith(suffix):
+                candidate = stripped[: -len(suffix)].strip()
+                if candidate:
+                    stripped = candidate
+                    changed = True
+    return stripped
+
+
+def _normalized_lookup_tokens(city_value: str) -> set[str]:
+    normalized = normalize_city_tokens(city_value)
+    if not normalized:
+        return set()
+    stripped = _strip_trailing_census_suffix(normalized)
+    if stripped == normalized:
+        return {normalized}
+    return {normalized, stripped}
+
+
+def _city_dict_with_aliases(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
     city_dict = city_row_to_dict(row)
     aliases = conn.execute(
         "SELECT search_key FROM search_aliases WHERE city = ? AND state = ?",
@@ -325,6 +367,63 @@ def fetch_city_by_identity(conn: sqlite3.Connection, city: str, state: str) -> d
     ).fetchall()
     city_dict["search_keys"] = [a["search_key"] for a in aliases]
     return city_dict
+
+
+def fetch_city_by_summary_identity(
+    conn: sqlite3.Connection,
+    *,
+    city_key: str | None,
+    city: str | None,
+    state: str | None,
+) -> dict[str, Any] | None:
+    state_token = str(state or "").strip().upper()
+    if not state_token and city_key:
+        parts = str(city_key).rsplit("|", 1)
+        if len(parts) == 2:
+            maybe_city, maybe_state = parts
+            state_token = maybe_state.strip().upper()
+            city = maybe_city.strip()
+
+    if city_key:
+        parts = str(city_key).rsplit("|", 1)
+        if len(parts) == 2:
+            key_city, key_state = parts
+            exact = fetch_city_by_identity(conn, key_city.strip(), key_state.strip().upper())
+            if exact:
+                return exact
+
+    city_token = str(city or "").strip()
+    if city_token and state_token:
+        exact = fetch_city_by_identity(conn, city_token, state_token)
+        if exact:
+            return exact
+
+    if not city_token or not state_token:
+        return None
+
+    incoming_tokens = _normalized_lookup_tokens(city_token)
+    if not incoming_tokens:
+        return None
+
+    rows = conn.execute(
+        "SELECT * FROM cities WHERE state = ? AND include_flag = 1",
+        (state_token,),
+    ).fetchall()
+
+    matches: list[sqlite3.Row] = []
+    for row in rows:
+        row_tokens = set()
+        row_tokens.update(_normalized_lookup_tokens(str(row["city"] or "")))
+        row_tokens.update(_normalized_lookup_tokens(str(row["normalized_city"] or "")))
+        display_city = str(row["display_name"] or "").split(",", 1)[0].strip()
+        row_tokens.update(_normalized_lookup_tokens(display_city))
+        if incoming_tokens & row_tokens:
+            matches.append(row)
+
+    if len(matches) == 1:
+        return _city_dict_with_aliases(conn, matches[0])
+
+    return None
 
 
 def fetch_cached_city_summary(

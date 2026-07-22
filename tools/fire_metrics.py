@@ -503,17 +503,31 @@ def search():
 @login_required
 def city_summary():
     payload = request.get_json(silent=True) or {}
+    city_key = str(payload.get("city_key") or "").strip()
     city = str(payload.get("city") or "").strip()
     state = str(payload.get("state") or "").strip().upper()
 
-    if not city or not state:
-        return jsonify({"status": "error", "user_message": "City identifier is required."}), 400
+    if not city_key and (not city or not state):
+        return jsonify({
+            "status": "error",
+            "error_code": "invalid_city_identifier",
+            "user_message": "City identifier is required.",
+        }), 400
 
     try:
         with db_module.get_connection() as conn:
-            selected_city = db_module.fetch_city_by_identity(conn, city, state)
+            selected_city = db_module.fetch_city_by_summary_identity(
+                conn,
+                city_key=city_key or None,
+                city=city or None,
+                state=state or None,
+            )
             if not selected_city:
-                return jsonify({"status": "error", "user_message": "City not found in tracked FIRE Metrics data."}), 404
+                return jsonify({
+                    "status": "error",
+                    "error_code": "city_not_found",
+                    "user_message": "City not found in tracked FIRE Metrics data.",
+                }), 404
 
             all_cities = db_module.fetch_all_included_cities(conn)
             metadata = db_module.get_metadata(conn)
@@ -536,14 +550,21 @@ def city_summary():
             )
             data_fingerprint = ai_summary.build_fingerprint(fingerprint_input)
 
-            cache_row = db_module.fetch_cached_city_summary(
-                conn,
-                city=selected_city["city"],
-                state=selected_city["state"],
-                data_fingerprint=data_fingerprint,
-                model_name=model_name,
-                prompt_version=ai_summary.PROMPT_VERSION,
-            )
+            try:
+                cache_row = db_module.fetch_cached_city_summary(
+                    conn,
+                    city=selected_city["city"],
+                    state=selected_city["state"],
+                    data_fingerprint=data_fingerprint,
+                    model_name=model_name,
+                    prompt_version=ai_summary.PROMPT_VERSION,
+                )
+            except Exception as exc:
+                current_app.logger.warning(
+                    "FIRE Metrics city-summary cache read failed: %s",
+                    exc.__class__.__name__,
+                )
+                cache_row = None
             if cache_row:
                 return jsonify({
                     "status": "ready",
@@ -609,8 +630,11 @@ def city_summary():
 
             try:
                 db_module.upsert_city_summary_cache(conn, cache_payload)
-            except Exception:
-                pass
+            except Exception as exc:
+                current_app.logger.warning(
+                    "FIRE Metrics city-summary cache write failed: %s",
+                    exc.__class__.__name__,
+                )
 
             return jsonify({
                 "status": "ready",
@@ -627,12 +651,15 @@ def city_summary():
                 "percentile": benchmarks.get("selected_percentile"),
                 "source": "generated",
             })
-    except Exception:
-        return jsonify(_summary_unavailable_response(
+    except Exception as exc:
+        current_app.logger.exception("FIRE Metrics city-summary endpoint failed: %s", exc.__class__.__name__)
+        response = _summary_unavailable_response(
             selected_city=None,
             benchmark_data=None,
             reason="Summary generation is currently unavailable.",
-        ))
+        )
+        response["error_code"] = "summary_endpoint_failed"
+        return jsonify(response), 500
 
 
 @fire_metrics_bp.route("/refresh-status")

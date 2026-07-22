@@ -459,6 +459,10 @@
     return String(city.display_name || city.display || fallbackDisplay || "").trim();
   }
 
+  function getCityKeyField(city) {
+    return String(city.city_key || city.summary_city_key || "").trim();
+  }
+
   function getPopulationField(city) {
     return city.population_current ?? city.population ?? city.population_estimate ?? null;
   }
@@ -847,8 +851,12 @@
     const cleanedDisplay = cleanDisplayFromCityObject(city);
     const cleanedCity = cityCoreName(getCityField(city) || getDisplayField(city));
     const stateValue = getStateField(city);
+    const normalizedState = normalizeStateToken(stateValue);
+    const rawCity = getCityField(city) || cleanedCity || "";
+    const stableCityKey = getCityKeyField(city) || `${rawCity}|${normalizedState}`;
     return {
-      city: cleanedCity || getCityField(city) || "",
+      city: rawCity,
+      city_key: stableCityKey,
       state: stateValue,
       display_name: cleanedDisplay,
       population_current: getPopulationField(city),
@@ -1055,6 +1063,7 @@
           "X-Requested-With": "XMLHttpRequest",
         },
         body: JSON.stringify({
+          city_key: city.city_key || "",
           city: getCityField(city),
           state: normalizeStateToken(getStateField(city)),
         }),

@@ -3,6 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
+from pathlib import Path
 
 from flask import Flask
 
@@ -90,11 +91,64 @@ class FireMetricsAISummaryTests(unittest.TestCase):
             )
         conn.commit()
 
-    def _call_city_summary(self, app: Flask, city: str = "Alpha", state: str = "AA"):
+    def _seed_single_city(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        city: str,
+        state: str,
+        display_name: str,
+        pop_growth: float = 0.05,
+        income_growth: float = 0.06,
+        employment_growth: float = 0.04,
+        landlord: float = 80,
+        climate: float = 30,
+        crime: float = 40,
+        density_crime: float = 35,
+        home_value: float = 350000,
+        home_growth: float = 0.05,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO cities (
+                city, state, display_name, normalized_city, normalized_display_name, search_key,
+                include_flag,
+                population_growth_recent, median_income_growth_recent, employment_growth_recent,
+                landlord_friendliness_score, climate_risk_score, crime_index_score,
+                density_adjusted_crime_score, median_home_value_current, median_home_value_growth_recent
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?,
+                1,
+                ?, ?, ?,
+                ?, ?, ?,
+                ?, ?, ?
+            )
+            """,
+            (
+                city,
+                state,
+                display_name,
+                city.lower(),
+                display_name.lower(),
+                f"{city.lower()} {state.lower()}",
+                pop_growth,
+                income_growth,
+                employment_growth,
+                landlord,
+                climate,
+                crime,
+                density_crime,
+                home_value,
+                home_growth,
+            ),
+        )
+        conn.commit()
+
+    def _call_city_summary(self, app: Flask, city: str = "Alpha", state: str = "AA", city_key: str = ""):
         with app.test_request_context(
             "/tools/fire-metrics/api/city-summary",
             method="POST",
-            json={"city": city, "state": state},
+            json={"city": city, "state": state, "city_key": city_key},
         ):
             result = city_summary.__wrapped__()
         if isinstance(result, tuple):
@@ -571,6 +625,183 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 os.environ.pop("FIRE_METRICS_DB_PATH", None)
             else:
                 os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_city_summary_succeeds_when_db_city_has_census_suffix(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=False,
+            FIRE_METRICS_SUMMARY_MODEL="",
+            OPENAI_API_KEY="",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-la-suffix-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_single_city(
+                        conn,
+                        city="Los Angeles city",
+                        state="CA",
+                        display_name="Los Angeles, CA",
+                    )
+
+                status_code, payload = self._call_city_summary(app, city="Los Angeles", state="CA")
+
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["status"], "ready")
+                self.assertEqual(payload["source"], "fallback")
+                self.assertFalse(payload["cached"])
+                self.assertEqual(summary.count_sentences(payload["summary"]), 3)
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_stable_city_key_lookup_overrides_cleaned_city_name(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=False,
+            FIRE_METRICS_SUMMARY_MODEL="",
+            OPENAI_API_KEY="",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-city-key-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_single_city(
+                        conn,
+                        city="Los Angeles city",
+                        state="CA",
+                        display_name="Los Angeles, CA",
+                    )
+
+                status_code, payload = self._call_city_summary(
+                    app,
+                    city="Los Angeles",
+                    state="CA",
+                    city_key="Los Angeles city|CA",
+                )
+
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["status"], "ready")
+                self.assertEqual(payload["source"], "fallback")
+                self.assertEqual(payload["city_key"], "Los Angeles city|CA")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_missing_openai_configuration_does_not_block_fallback(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=True,
+            FIRE_METRICS_SUMMARY_MODEL="model-a",
+            OPENAI_API_KEY="",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-no-openai-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_single_city(
+                        conn,
+                        city="Los Angeles city",
+                        state="CA",
+                        display_name="Los Angeles, CA",
+                    )
+
+                status_code, payload = self._call_city_summary(app, city="Los Angeles", state="CA")
+
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["status"], "ready")
+                self.assertEqual(payload["source"], "fallback")
+                self.assertFalse(payload["cached"])
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_cache_read_failure_does_not_block_fallback(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=True,
+            FIRE_METRICS_SUMMARY_MODEL="model-a",
+            OPENAI_API_KEY="",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cache-read-fail-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_single_city(
+                        conn,
+                        city="Los Angeles city",
+                        state="CA",
+                        display_name="Los Angeles, CA",
+                    )
+
+                with patch.object(db_module, "fetch_cached_city_summary", side_effect=sqlite3.OperationalError("no such table")):
+                    status_code, payload = self._call_city_summary(app, city="Los Angeles", state="CA")
+
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["status"], "ready")
+                self.assertEqual(payload["source"], "fallback")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_unknown_city_returns_controlled_json_error(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=False,
+            FIRE_METRICS_SUMMARY_MODEL="",
+            OPENAI_API_KEY="",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-unknown-city-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_single_city(
+                        conn,
+                        city="Los Angeles city",
+                        state="CA",
+                        display_name="Los Angeles, CA",
+                    )
+
+                status_code, payload = self._call_city_summary(app, city="Unknownville", state="CA")
+
+                self.assertEqual(status_code, 404)
+                self.assertEqual(payload["status"], "error")
+                self.assertEqual(payload["error_code"], "city_not_found")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_proper_city_name_suffixes_are_preserved_in_lookup_normalization(self):
+        self.assertEqual(db_module._strip_trailing_census_suffix("oklahoma city"), "oklahoma city")
+        self.assertEqual(db_module._strip_trailing_census_suffix("kansas city"), "kansas city")
+        self.assertEqual(db_module._strip_trailing_census_suffix("salt lake city"), "salt lake city")
+        self.assertEqual(db_module._strip_trailing_census_suffix("carson city"), "carson city")
+
+    def test_frontend_overview_renders_via_textcontent(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("aiOverviewBody.textContent = text;", template)
+        self.assertIn("aiOverviewMeta.textContent = text;", template)
+        self.assertIn("city_key: city.city_key || \"\"", template)
 
     def test_model_output_html_is_sanitized(self):
         normalized = summary.normalize_summary(
