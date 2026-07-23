@@ -1204,33 +1204,6 @@ hr.divider {
   cursor: not-allowed;
 }
 
-.fire-city-dashboard {
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 18px;
-  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(340px, 390px);
-  grid-template-areas:
-    "header map"
-    "metrics map"
-    "actions map";
-  column-gap: 16px;
-  row-gap: 12px;
-}
-
-.fire-city-dashboard .result-header {
-  grid-area: header;
-}
-
-.fire-city-dashboard .fire-metric-grid {
-  grid-area: metrics;
-}
-
-.fire-city-dashboard .fire-city-actions {
-  grid-area: actions;
-}
-
 .admin-data-panel {
   margin-top: 20px;
   padding-top: 16px;
@@ -1259,20 +1232,8 @@ hr.divider {
   gap: 10px;
 }
 
-.fire-metric-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 10px;
-}
-
-.fire-city-actions {
-  margin-top: 12px;
-  display: flex;
-  justify-content: flex-end;
-}
-
 .fire-ai-overview {
-  margin-top: 12px;
+  margin-top: 0;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   background: #f9fafb;
@@ -1343,7 +1304,6 @@ hr.divider {
 }
 
 .fire-map-panel {
-  grid-area: map;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
@@ -1364,8 +1324,8 @@ hr.divider {
   border-radius: 8px;
   background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
   overflow: hidden;
-  aspect-ratio: 16 / 9;
-  min-height: 240px;
+  height: clamp(520px, 65vh, 720px);
+  min-height: 520px;
   position: relative;
 }
 
@@ -1418,6 +1378,44 @@ hr.divider {
   color: #111827;
 }
 
+.fire-map-preview-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.fire-map-preview-grid {
+  display: grid;
+  gap: 5px;
+  min-width: 260px;
+}
+
+.fire-map-preview-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.fire-map-preview-label {
+  color: #4b5563;
+}
+
+.fire-map-preview-value {
+  justify-self: end;
+  text-align: right;
+  color: #111827;
+  font-weight: 600;
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fire-map-preview-growth {
+  color: #6b7280;
+  font-weight: 500;
+}
+
 .fire-map-legend {
   display: flex;
   flex-wrap: wrap;
@@ -1445,17 +1443,6 @@ hr.divider {
 
 .fire-map-dot-compared {
   background: #2563eb;
-}
-
-@media (max-width: 1180px) {
-  .fire-city-dashboard {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "header"
-      "metrics"
-      "actions"
-      "map";
-  }
 }
 
 .stat-box-freshness {
@@ -1522,13 +1509,9 @@ hr.divider {
     min-height: 44px;
   }
 
-  .fire-city-dashboard {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "header"
-      "metrics"
-      "actions"
-      "map";
+  .fire-map-frame {
+    height: clamp(380px, 58vh, 500px);
+    min-height: 380px;
   }
 
   .comparison-actions {

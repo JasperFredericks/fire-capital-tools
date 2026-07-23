@@ -43,108 +43,9 @@
   <p class="result-note" style="margin-top:8px;">Separate multiple cities with commas to add them to City Analytics.</p>
   <div id="fire-city-picker-status" class="result-note" aria-live="polite" style="margin-top:8px;"></div>
 
-  <div id="fire-search-message" class="alert alert-info" style="display:none; margin-top:14px;"></div>
-  <div id="fire-suggestions" class="fire-suggestion-grid" style="display:none;"></div>
-
-  <div id="fire-city-dashboard" class="fire-city-dashboard" style="display:none; margin-top:16px;">
-    <div class="result-header">
-      <div>
-        <div id="city-display-name" class="result-property"></div>
-        <div id="city-subline" class="result-period"></div>
-      </div>
-      <div id="city-warning-badges" class="status-chip-row"></div>
-    </div>
-
-    <div class="fire-metric-grid">
-      <div class="stat-box">
-        <div class="stat-box-label">Population Growth</div>
-        <div id="metric-pop-current" class="stat-box-value">-</div>
-        <div id="metric-pop-growth" class="stat-box-sub">-</div>
-        <div id="metric-pop-updated" class="stat-box-freshness"></div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-box-label">Median Household Income</div>
-        <div id="metric-income-current" class="stat-box-value">-</div>
-        <div id="metric-income-growth" class="stat-box-sub">-</div>
-        <div id="metric-income-updated" class="stat-box-freshness"></div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-box-label">Median Home Value</div>
-        <div id="metric-home-current" class="stat-box-value">-</div>
-        <div id="metric-home-growth" class="stat-box-sub">-</div>
-        <div id="metric-home-updated" class="stat-box-freshness"></div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-box-label">Resident Employment</div>
-        <div id="metric-employment-current" class="stat-box-value">-</div>
-        <div id="metric-employment-growth" class="stat-box-sub">-</div>
-        <div id="metric-employment-updated" class="stat-box-freshness"></div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-box-label">Climate Risk</div>
-        <div id="metric-climate-score" class="stat-box-value">-</div>
-        <div id="metric-climate-rating" class="stat-box-sub">-</div>
-        <div id="metric-climate-updated" class="stat-box-freshness"></div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-box-label">Crime Index</div>
-        <div id="metric-crime-score" class="stat-box-value">-</div>
-        <div id="metric-crime-rating" class="stat-box-sub">-</div>
-        <div id="metric-crime-updated" class="stat-box-freshness"></div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-box-label">Density-Adjusted Crime</div>
-        <div id="metric-density-score" class="stat-box-value">-</div>
-        <div id="metric-density-rating" class="stat-box-sub">-</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-box-label">Landlord Friendliness</div>
-        <div id="metric-landlord-score" class="stat-box-value">-</div>
-        <div id="metric-landlord-label" class="stat-box-sub">-</div>
-        <div id="metric-population-family-updated" class="stat-box-freshness"></div>
-      </div>
-    </div>
-
-    <div class="fire-city-actions">
-      <button id="add-to-comparison-btn" type="button" class="btn btn-primary">Add to City Analytics</button>
-    </div>
-
-    <div id="fire-ai-overview" class="fire-ai-overview" aria-live="polite">
-      <div class="fire-ai-overview-title">AI Market Overview</div>
-      <div id="fire-ai-overview-body" class="fire-ai-overview-body">Search a city to generate a screening overview.</div>
-      <div id="fire-ai-overview-meta" class="fire-ai-overview-meta">AI-generated screening overview based on current FIRE Metrics data.</div>
-    </div>
-
-    <div id="fire-map-panel" class="fire-map-panel">
-      <div class="fire-map-header">
-        <div class="dashboard-section-title" style="font-size:14px;">US City Map</div>
-        <div id="fire-map-note" class="result-note">Current and compared city dots</div>
-      </div>
-      <div class="fire-map-frame">
-        <div id="fire-google-map" class="fire-google-map" aria-label="Current and compared city locations on a United States map"></div>
-        <div id="fire-map-fallback" class="fire-map-fallback" style="display:none;">Map unavailable. Google Maps configuration is missing.</div>
-      </div>
-      <div class="fire-map-legend">
-        <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-current"></span>Current city</span>
-        <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-compared"></span>Compared cities</span>
-      </div>
-    </div>
-  </div>
-
-  {% if city_preview %}
-  <div class="result-note" style="margin-top:16px;">
-    Indexed city samples:
-    {% for row in city_preview %}
-      <span class="source-badge source-badge-neutral indexed-city-sample" data-display-name="{{ row.display_name }}" style="margin-top:6px;">{{ row.display_name }}</span>
-    {% endfor %}
-  </div>
-  {% endif %}
-</div>
-
-<div class="card">
-  <div class="result-header">
+  <div class="result-header" style="margin-top:14px;">
     <div>
-      <h2 class="dashboard-section-title">Quick City Rankings</h2>
+      <h3 class="dashboard-section-title" style="font-size:14px;">Quick City Rankings</h3>
       <p class="page-subtitle" style="margin-top:4px;">Load the 10 strongest tracked cities for a selected metric.</p>
     </div>
   </div>
@@ -159,6 +60,44 @@
   </div>
   <div id="quick-ranking-status" class="result-note" aria-live="polite" style="margin-top:10px;"></div>
   <div class="result-note" style="margin-top:8px; color:#6b7280;">Rankings use current stored FIRE Metrics data and do not represent investment recommendations.</div>
+
+  <div id="fire-search-message" class="alert alert-info" style="display:none; margin-top:14px;"></div>
+  <div id="fire-suggestions" class="fire-suggestion-grid" style="display:none;"></div>
+
+  {% if city_preview %}
+  <div class="result-note" style="margin-top:16px;">
+    Indexed city samples:
+    {% for row in city_preview %}
+      <span class="source-badge source-badge-neutral indexed-city-sample" data-display-name="{{ row.display_name }}" style="margin-top:6px;">{{ row.display_name }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="result-header">
+    <div>
+      <h2 class="dashboard-section-title">US City Map</h2>
+      <p id="active-city-subline" class="page-subtitle" style="margin-top:4px;">Active city: none selected</p>
+    </div>
+    <div class="comparison-actions">
+      <button id="add-to-comparison-btn" type="button" class="btn btn-primary">Add to City Analytics</button>
+    </div>
+  </div>
+  <div id="city-warning-badges" class="status-chip-row" style="margin-top:8px;"></div>
+  <div id="fire-map-panel" class="fire-map-panel" style="margin-top:12px;">
+    <div class="fire-map-header">
+      <div id="fire-map-note" class="result-note">Current and compared city dots</div>
+    </div>
+    <div class="fire-map-frame">
+      <div id="fire-google-map" class="fire-google-map" aria-label="Current and compared city locations on a United States map"></div>
+      <div id="fire-map-fallback" class="fire-map-fallback" style="display:none;">Map unavailable. Google Maps configuration is missing.</div>
+    </div>
+    <div class="fire-map-legend">
+      <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-current"></span>Current city</span>
+      <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-compared"></span>Compared cities</span>
+    </div>
+  </div>
 </div>
 
 <div class="card">
@@ -196,6 +135,14 @@
       </thead>
       <tbody id="comparison-table-body"></tbody>
     </table>
+  </div>
+</div>
+
+<div class="card" id="fire-ai-overview-card">
+  <div id="fire-ai-overview" class="fire-ai-overview" aria-live="polite">
+    <div class="fire-ai-overview-title">AI Market Overview</div>
+    <div id="fire-ai-overview-body" class="fire-ai-overview-body">Search a city to generate a screening overview.</div>
+    <div id="fire-ai-overview-meta" class="fire-ai-overview-meta">AI-generated screening overview based on current FIRE Metrics data.</div>
   </div>
 </div>
 
@@ -300,7 +247,8 @@
   const suggestionsEl = document.getElementById("fire-suggestions");
   const rankingStatusEl = document.getElementById("quick-ranking-status");
   const rankingButtons = Array.from(document.querySelectorAll(".quick-ranking-btn"));
-  const dashboardEl = document.getElementById("fire-city-dashboard");
+  const activeCitySubline = document.getElementById("active-city-subline");
+  const cityWarningBadges = document.getElementById("city-warning-badges");
   const statusChip = document.getElementById("status-chip");
   const addToComparisonBtn = document.getElementById("add-to-comparison-btn");
   const clearComparisonBtn = document.getElementById("clear-comparison-btn");
@@ -387,6 +335,13 @@
   let markersReady = false;
   let markersNeedRender = false;
   let markerRegistry = new Map();
+  const markerPreviewState = {
+    openKey: "",
+    pinnedKey: "",
+    hoverOpenTimer: null,
+    hoverCloseTimer: null,
+    suppressHoverUntil: 0,
+  };
   let lastViewportSignature = "";
   let summaryRequestController = null;
   let summaryRequestSequence = 0;
@@ -418,6 +373,34 @@
     const num = Number(value) * 100;
     if (Number.isNaN(num)) return String(value);
     return `${num.toFixed(2)}%`;
+  }
+
+  function supportsHoverPreview() {
+    if (!window.matchMedia) return false;
+    return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  }
+
+  function previewNum(value) {
+    return cmpFmtNum(value);
+  }
+
+  function previewMoney(value) {
+    return cmpFmtMoney(value);
+  }
+
+  function previewPct(value) {
+    return cmpFmtPct(value);
+  }
+
+  function previewScoreWithRating(score, rating) {
+    const scoreText = previewNum(score);
+    const ratingText = String(rating || "").trim() || "—";
+    return `${scoreText} (${escapeHtml(ratingText)})`;
+  }
+
+  function previewMetricRow(label, value, growth) {
+    const growthText = growth ? `<span class="fire-map-preview-growth">${escapeHtml(growth)}</span>` : "";
+    return `<div class="fire-map-preview-row"><span class="fire-map-preview-label">${escapeHtml(label)}</span><span class="fire-map-preview-value">${value}${growthText}</span></div>`;
   }
 
   function fmtFreshness(isoString) {
@@ -676,7 +659,7 @@
     currentCity = null;
     clearOverviewImmediate();
     resetComparisonAddButton();
-    dashboardEl.style.display = "none";
+    renderActiveCityMeta(null);
     renderCityChips();
     renderMapPoints();
     setCityPickerStatus("Cleared searched cities.");
@@ -766,7 +749,7 @@
       currentCity = null;
       activeSearchCityKey = "";
       resetComparisonAddButton();
-      dashboardEl.style.display = "none";
+      renderActiveCityMeta(null);
       clearOverviewImmediate();
       renderCityChips();
       renderMapPoints();
@@ -968,9 +951,95 @@
 
   function markerInfoContent(city) {
     const title = markerTitleForCity(city);
-    const score = fireMetricScoreForCity(city);
-    const scoreText = score === null ? "Unavailable" : score.toLocaleString(undefined, { maximumFractionDigits: 1 });
-    return `<div class="fire-map-infowindow"><strong>${escapeHtml(title)}</strong><div>Relative market profile score: ${escapeHtml(scoreText)}</div></div>`;
+    const population = previewNum(city.population_current);
+    const populationGrowth = `Growth: ${previewPct(city.population_growth_recent)}`;
+    const income = previewMoney(city.median_income_current);
+    const incomeGrowth = `Growth: ${previewPct(city.median_income_growth_recent)}`;
+    const homeValue = previewMoney(city.median_home_value_current);
+    const homeGrowth = `Growth: ${previewPct(city.median_home_value_growth_recent)}`;
+    const employment = previewNum(city.employment_current);
+    const employmentGrowth = `Growth: ${previewPct(city.employment_growth_recent)}`;
+    const crime = previewScoreWithRating(city.crime_index_score, city.crime_rating);
+    const densityCrime = previewScoreWithRating(city.density_adjusted_crime_score, city.density_adjusted_crime_rating);
+    const climate = previewScoreWithRating(city.climate_risk_score, city.climate_risk_rating);
+    const landlordValue = String(city.landlord_friendliness_label || "").trim() || previewNum(city.landlord_friendliness_score);
+
+    return `
+      <div class="fire-map-infowindow">
+        <div class="fire-map-preview-title">${escapeHtml(title)}</div>
+        <div class="fire-map-preview-grid">
+          ${previewMetricRow("Population", escapeHtml(population), populationGrowth)}
+          ${previewMetricRow("Median Income", escapeHtml(income), incomeGrowth)}
+          ${previewMetricRow("Home Value", escapeHtml(homeValue), homeGrowth)}
+          ${previewMetricRow("Employment", escapeHtml(employment), employmentGrowth)}
+          ${previewMetricRow("Crime", crime)}
+          ${previewMetricRow("Density-Adj. Crime", densityCrime)}
+          ${previewMetricRow("Climate", climate)}
+          ${previewMetricRow("Landlord", escapeHtml(landlordValue || "—"))}
+        </div>
+      </div>
+    `;
+  }
+
+  function clearMarkerHoverTimers() {
+    if (markerPreviewState.hoverOpenTimer) {
+      clearTimeout(markerPreviewState.hoverOpenTimer);
+      markerPreviewState.hoverOpenTimer = null;
+    }
+    if (markerPreviewState.hoverCloseTimer) {
+      clearTimeout(markerPreviewState.hoverCloseTimer);
+      markerPreviewState.hoverCloseTimer = null;
+    }
+  }
+
+  function closeMarkerPreview(force = false) {
+    clearMarkerHoverTimers();
+    if (!force && markerPreviewState.pinnedKey) return;
+    markerPreviewState.openKey = "";
+    markerPreviewState.pinnedKey = force ? "" : markerPreviewState.pinnedKey;
+    if (googleInfoWindow) {
+      googleInfoWindow.close();
+    }
+  }
+
+  function openMarkerPreview(registryKey, marker, trigger = "hover") {
+    if (!googleInfoWindow || !googleMap) return;
+    const entry = markerRegistry.get(registryKey);
+    if (!entry) return;
+
+    clearMarkerHoverTimers();
+    markerPreviewState.openKey = registryKey;
+    if (trigger === "click" || trigger === "focus") {
+      markerPreviewState.pinnedKey = registryKey;
+    }
+
+    googleInfoWindow.setContent(markerInfoContent(entry.city));
+    googleInfoWindow.open({ map: googleMap, anchor: marker });
+  }
+
+  function scheduleHoverOpen(registryKey, marker) {
+    if (!supportsHoverPreview()) return;
+    if (Date.now() < markerPreviewState.suppressHoverUntil) return;
+    clearMarkerHoverTimers();
+    markerPreviewState.hoverOpenTimer = setTimeout(() => {
+      markerPreviewState.hoverOpenTimer = null;
+      openMarkerPreview(registryKey, marker, "hover");
+    }, 120);
+  }
+
+  function scheduleHoverClose(registryKey) {
+    if (!supportsHoverPreview()) return;
+    if (markerPreviewState.pinnedKey === registryKey) return;
+    clearMarkerHoverTimers();
+    markerPreviewState.hoverCloseTimer = setTimeout(() => {
+      markerPreviewState.hoverCloseTimer = null;
+      if (markerPreviewState.openKey === registryKey && !markerPreviewState.pinnedKey) {
+        markerPreviewState.openKey = "";
+        if (googleInfoWindow) {
+          googleInfoWindow.close();
+        }
+      }
+    }, 220);
   }
 
   function showMapFallback(message) {
@@ -998,18 +1067,37 @@
       return true;
     }
 
+    const markerContent = markerContentFor(kind);
+    markerContent.tabIndex = 0;
+    markerContent.setAttribute("role", "button");
+    markerContent.setAttribute("aria-label", markerTitle);
+
     const marker = new markerLibrary.AdvancedMarkerElement({
       map: googleMap,
       position: coords,
       title: markerTitle,
-      content: markerContentFor(kind),
+      content: markerContent,
     });
+
     marker.addListener("click", () => {
-      if (!googleInfoWindow) return;
-      const liveEntry = markerRegistry.get(registryKey);
-      const liveCity = liveEntry?.city || city;
-      googleInfoWindow.setContent(markerInfoContent(liveCity));
-      googleInfoWindow.open({ map: googleMap, anchor: marker });
+      markerPreviewState.suppressHoverUntil = Date.now() + 500;
+      openMarkerPreview(registryKey, marker, "click");
+    });
+
+    markerContent.addEventListener("mouseenter", () => scheduleHoverOpen(registryKey, marker));
+    markerContent.addEventListener("mouseleave", () => scheduleHoverClose(registryKey));
+    markerContent.addEventListener("focus", () => openMarkerPreview(registryKey, marker, "focus"));
+    markerContent.addEventListener("blur", () => scheduleHoverClose(registryKey));
+    markerContent.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openMarkerPreview(registryKey, marker, "focus");
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        markerPreviewState.pinnedKey = "";
+        closeMarkerPreview(true);
+      }
     });
 
     markerRegistry.set(registryKey, { marker, city, kind });
@@ -1022,6 +1110,13 @@
       const entry = markerRegistry.get(key);
       if (entry && entry.marker) {
         entry.marker.map = null;
+      }
+      if (markerPreviewState.openKey === key || markerPreviewState.pinnedKey === key) {
+        markerPreviewState.openKey = "";
+        markerPreviewState.pinnedKey = "";
+        if (googleInfoWindow) {
+          googleInfoWindow.close();
+        }
       }
       markerRegistry.delete(key);
     });
@@ -1111,6 +1206,9 @@
     });
 
     removeMarkersNotIn(targetKeys);
+    if (!targetKeys.size) {
+      closeMarkerPreview(true);
+    }
 
     if (missing > 0) {
       mapNote.textContent = `Map location unavailable for ${missing} ${missing === 1 ? "city" : "cities"}.`;
@@ -1197,6 +1295,15 @@
       hideMapFallback();
       markersReady = true;
 
+      googleMap.addListener("click", () => {
+        markerPreviewState.pinnedKey = "";
+        closeMarkerPreview(true);
+      });
+      googleInfoWindow.addListener("closeclick", () => {
+        markerPreviewState.openKey = "";
+        markerPreviewState.pinnedKey = "";
+      });
+
       if (markersNeedRender) {
         markersNeedRender = false;
       }
@@ -1257,13 +1364,41 @@
       climate_risk_rating: city.climate_risk_rating || "",
       crime_index_score: city.crime_index_score ?? null,
       crime_rating: city.crime_rating || "",
+      density_adjusted_crime_score: city.density_adjusted_crime_score ?? null,
+      density_adjusted_crime_rating: city.density_adjusted_crime_rating || "",
       landlord_friendliness_score: city.landlord_friendliness_score ?? null,
       landlord_friendliness_label: city.landlord_friendliness_label || "",
+      population_rank: city.population_rank ?? null,
+      warnings: Array.isArray(city.warnings) ? city.warnings : [],
       latitude: city.latitude ?? city.lat ?? null,
       longitude: city.longitude ?? city.lng ?? city.lon ?? null,
       lat: city.lat ?? city.latitude ?? null,
       lon: city.lon ?? city.longitude ?? city.lng ?? null,
     };
+  }
+
+  function renderActiveCityMeta(city) {
+    if (!activeCitySubline) return;
+    if (!city) {
+      activeCitySubline.textContent = "Active city: none selected";
+      if (cityWarningBadges) cityWarningBadges.innerHTML = "";
+      return;
+    }
+
+    const displayName = cleanDisplayFromCityObject(city);
+    const rank = previewNum(city.population_rank);
+    const population = previewNum(city.population_current);
+    activeCitySubline.textContent = `Active city: ${displayName} | Population rank: ${rank} | Population: ${population}`;
+
+    if (!cityWarningBadges) return;
+    cityWarningBadges.innerHTML = "";
+    const warnings = Array.isArray(city.warnings) ? city.warnings : [];
+    warnings.forEach((warning) => {
+      const chip = document.createElement("span");
+      chip.className = "source-badge source-badge-warning";
+      chip.textContent = warning;
+      cityWarningBadges.appendChild(chip);
+    });
   }
 
   function renderComparisonTable() {
@@ -1371,18 +1506,6 @@
     suggestionsEl.style.display = "flex";
   }
 
-  function setMetric(id, value, formatter = fmtNum) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = formatter(value);
-  }
-
-  function setFreshness(id, isoString) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = fmtFreshness(isoString);
-  }
-
   function setOverviewBody(text) {
     if (!aiOverviewBody) return;
     aiOverviewBody.textContent = text;
@@ -1475,50 +1598,7 @@
 
   function renderCity(city) {
     currentCity = sanitizeCity(city);
-    dashboardEl.style.display = "grid";
-    document.getElementById("city-display-name").textContent = cleanDisplayFromCityObject(city);
-    document.getElementById("city-subline").textContent = `Population rank: ${fmtNum(city.population_rank)} | Population: ${fmtNum(city.population_current)}`;
-
-    setMetric("metric-pop-current", city.population_current);
-    setMetric("metric-pop-growth", `2020-latest: ${fmtPct(city.population_growth_2020_2025)} | Recent: ${fmtPct(city.population_growth_recent)}`, String);
-    setFreshness("metric-pop-updated", city.population_updated_at);
-    setFreshness("metric-population-family-updated", city.population_updated_at);
-
-    setMetric("metric-income-current", city.median_income_current, fmtMoney);
-    setMetric("metric-income-growth", `2021-latest: ${fmtPct(city.median_income_growth_2021_2024)} | Recent: ${fmtPct(city.median_income_growth_recent)}`, String);
-    setFreshness("metric-income-updated", city.income_updated_at);
-
-    setMetric("metric-home-current", city.median_home_value_current, fmtMoney);
-    setMetric("metric-home-growth", `2021-latest: ${fmtPct(city.median_home_value_growth_2021_2024)} | Recent: ${fmtPct(city.median_home_value_growth_recent)}`, String);
-    setFreshness("metric-home-updated", city.home_value_updated_at);
-
-    setMetric("metric-employment-current", city.employment_current);
-    setMetric("metric-employment-growth", `2021-latest: ${fmtPct(city.employment_growth_2021_2025)} | Recent: ${fmtPct(city.employment_growth_recent)}`, String);
-    setFreshness("metric-employment-updated", city.employment_updated_at);
-
-    setMetric("metric-climate-score", city.climate_risk_score);
-    setMetric("metric-climate-rating", city.climate_risk_rating, String);
-    setFreshness("metric-climate-updated", city.climate_updated_at);
-
-    setMetric("metric-crime-score", city.crime_index_score);
-    setMetric("metric-crime-rating", city.crime_rating, String);
-    setFreshness("metric-crime-updated", city.crime_updated_at);
-
-    setMetric("metric-density-score", city.density_adjusted_crime_score);
-    setMetric("metric-density-rating", city.density_adjusted_crime_rating, String);
-
-    setMetric("metric-landlord-score", city.landlord_friendliness_score);
-    setMetric("metric-landlord-label", city.landlord_friendliness_label, String);
-
-    const warnings = city.warnings || [];
-    const warningsWrap = document.getElementById("city-warning-badges");
-    warningsWrap.innerHTML = "";
-    warnings.forEach((warning) => {
-      const chip = document.createElement("span");
-      chip.className = "source-badge source-badge-warning";
-      chip.textContent = warning;
-      warningsWrap.appendChild(chip);
-    });
+    renderActiveCityMeta(currentCity);
 
     syncComparisonAddButton();
     requestCityOverview(currentCity);

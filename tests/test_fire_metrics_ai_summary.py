@@ -1262,6 +1262,49 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn('aria-live="polite"', template)
         self.assertIn('id="quick-ranking-status"', template)
 
+    def test_frontend_map_first_layout_order_and_removed_scorecard_grid(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertNotIn('id="fire-city-dashboard"', template)
+        self.assertNotIn('id="metric-pop-current"', template)
+        self.assertNotIn('id="metric-income-current"', template)
+        self.assertNotIn('id="metric-home-current"', template)
+        self.assertNotIn('id="metric-employment-current"', template)
+        self.assertNotIn('id="metric-climate-score"', template)
+        self.assertNotIn('id="metric-crime-score"', template)
+        self.assertNotIn('id="metric-density-score"', template)
+        self.assertNotIn('id="metric-landlord-score"', template)
+
+        rankings_idx = template.index('id="quick-ranking-controls"')
+        map_idx = template.index('id="fire-map-panel"')
+        analytics_idx = template.index('id="comparison-table-wrap"')
+        overview_idx = template.index('id="fire-ai-overview-card"')
+        self.assertLess(rankings_idx, map_idx)
+        self.assertLess(map_idx, analytics_idx)
+        self.assertLess(analytics_idx, overview_idx)
+
+    def test_frontend_marker_preview_helpers_and_shared_state_present(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("const markerPreviewState =", template)
+        self.assertIn("function markerInfoContent(city)", template)
+        self.assertIn("function previewMetricRow(label, value, growth)", template)
+        self.assertIn("Density-Adj. Crime", template)
+        self.assertIn("function scheduleHoverOpen", template)
+        self.assertIn("function scheduleHoverClose", template)
+        self.assertIn("function openMarkerPreview", template)
+        self.assertIn("function closeMarkerPreview", template)
+        self.assertIn("supportsHoverPreview", template)
+        self.assertIn("markerContent.addEventListener(\"mouseenter\"", template)
+        self.assertIn("markerContent.addEventListener(\"focus\"", template)
+
+    def test_frontend_map_dominant_css_sizing_rules_present(self):
+        stylesheet = Path("static/style.css").read_text(encoding="utf-8")
+        self.assertIn("height: clamp(520px, 65vh, 720px);", stylesheet)
+        self.assertIn("min-height: 520px;", stylesheet)
+        self.assertIn("height: clamp(380px, 58vh, 500px);", stylesheet)
+        self.assertIn(".fire-map-preview-grid", stylesheet)
+        self.assertIn(".fire-map-preview-row", stylesheet)
+        self.assertIn(".fire-map-preview-growth", stylesheet)
+
     def test_model_output_html_is_sanitized(self):
         normalized = summary.normalize_summary(
             {
