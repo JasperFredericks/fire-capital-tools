@@ -40,6 +40,8 @@ ALLOWED_UPLOAD_EXT = {
     ".jpg", ".jpeg", ".png", ".heic",
 }
 MAX_COMP_ADDRESS_LEN = 255
+MAX_RECENT_SALES_COMPS = 3
+COMP_SOURCE_OPTIONS = ("Redfin", "Crexi", "Other")
 
 
 def _upload_dir(deal_id: int) -> Path:
@@ -82,6 +84,20 @@ def _deal_not_found():
     existed a moment ago on the same page.)"""
     flash("That deal could not be found — it may have been deleted.", "danger")
     return redirect(url_for("deal_dive.index"))
+
+
+def _split_comps(comps):
+    """"Recent Sales Comps" is deliberately a short preview (Michelle's
+    request: up to 3, don't pad with placeholders if fewer exist) --
+    comps is already ordered newest-first by db.list_comps(). Rental
+    comps still exist here (comp_type='rental' is how promote_market_comp
+    already tags a promoted RentCast comparable -- see that route's own
+    docstring; that flow is untouched) and are kept in their own list
+    rather than silently dropped from view now that the main table is
+    sales-only."""
+    sales = [c for c in comps if c.get("comp_type") == "sale"]
+    rentals = [c for c in comps if c.get("comp_type") == "rental"]
+    return sales[:MAX_RECENT_SALES_COMPS], rentals
 
 
 def _promoted_market_addresses(comps) -> set[str]:
@@ -191,10 +207,14 @@ def detail(deal_id):
     with market_data_cache.get_connection() as mconn:
         auto_market_data = market_data_cache.get_cached(mconn, address_key)
 
+    sales_comps, rental_comps = _split_comps(comps)
+
     return render_template(
         "tools/deal_dive_detail.html",
         deal=deal,
-        comps=comps,
+        sales_comps=sales_comps,
+        rental_comps=rental_comps,
+        comp_source_options=COMP_SOURCE_OPTIONS,
         financial_files=financial_files,
         condition_files=condition_files,
         market=market,
@@ -311,20 +331,33 @@ def update_condition(deal_id):
 @deal_dive_bp.route("/deal/<int:deal_id>/comps", methods=["POST"])
 @login_required
 def add_comp(deal_id):
+    # This form is scoped to Recent Sales Comps specifically -- comp_type
+    # is no longer a user choice here (always "sale"). "rental" is still a
+    # real, valid comp_type in the schema/DB, used by promote_market_comp
+    # for promoted RentCast rental comparables; that route is untouched.
+    address = (request.form.get("address") or "").strip()[:MAX_COMP_ADDRESS_LEN]
+    source = (request.form.get("source") or "").strip()
+    source_other = (request.form.get("source_other") or "").strip()
+    if source == "Other":
+        source_notes = source_other or "Other"
+    elif source in COMP_SOURCE_OPTIONS:
+        source_notes = source
+    else:
+        source_notes = source_other or None
+
     with db.get_connection() as conn:
         if not db.get_deal(conn, deal_id):
             return _deal_not_found()
-        address = (request.form.get("address") or "").strip()[:MAX_COMP_ADDRESS_LEN]
         db.add_comp(
             conn,
             deal_id,
             {
-                "comp_type": request.form.get("comp_type") if request.form.get("comp_type") in ("sale", "rental") else "sale",
+                "comp_type": "sale",
                 "address": address or None,
                 "price": _to_float(request.form.get("price")),
                 "unit_count": _to_int(request.form.get("unit_count")),
                 "comp_date": (request.form.get("comp_date") or "").strip() or None,
-                "source_notes": (request.form.get("source_notes") or "").strip() or None,
+                "source_notes": source_notes,
             },
         )
     flash("Comp added.", "success")

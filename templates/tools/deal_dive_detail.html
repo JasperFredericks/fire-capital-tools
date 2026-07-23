@@ -123,7 +123,7 @@
 
 <!-- ── Comps ──────────────────────────────────────────────────────── -->
 <div class="card" id="comps">
-  <div class="scorecard-section-title">Comps</div>
+  <div class="scorecard-section-title">Recent Sales Comps</div>
 
   <div style="margin:14px 0 20px;">
     <div class="scorecard-mini-title" style="margin-bottom:8px;">Market Context (FIRE Metric)</div>
@@ -267,25 +267,23 @@
 
   <hr class="divider" style="margin:20px 0;">
 
-  <div class="scorecard-mini-title" style="margin-bottom:10px;">Manually-Entered Comps</div>
+  <div class="scorecard-mini-title" style="margin-bottom:10px;">Recent Sales Comps{% if sales_comps %} ({{ sales_comps|length }}){% endif %}</div>
   <div class="table-wrap" style="margin-bottom:16px;">
     <table class="deal-dive-table">
       <thead>
         <tr>
-          <th>Type</th>
           <th>Address</th>
-          <th>Price / Rent</th>
+          <th>Sale Price</th>
           <th>Units</th>
           <th>Date</th>
-          <th>Notes</th>
+          <th>Source</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
-        {% if comps %}
-          {% for comp in comps %}
+        {% if sales_comps %}
+          {% for comp in sales_comps %}
             <tr>
-              <td>{{ comp.comp_type|title }}</td>
               <td>{{ comp.address or '—' }}</td>
               <td>{{ '${:,.0f}'.format(comp.price) if comp.price is not none else '—' }}</td>
               <td>{{ comp.unit_count or '—' }}</td>
@@ -300,28 +298,21 @@
             </tr>
           {% endfor %}
         {% else %}
-          <tr><td colspan="7">No comps added yet.</td></tr>
+          <tr><td colspan="6">No sales comps added yet.</td></tr>
         {% endif %}
       </tbody>
     </table>
   </div>
 
-  <form method="POST" action="{{ url_for('deal_dive.add_comp', deal_id=deal.id) }}">
+  <form method="POST" action="{{ url_for('deal_dive.add_comp', deal_id=deal.id) }}" id="addSalesCompForm">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div style="display:grid; grid-template-columns: repeat(6, 1fr); gap:10px; align-items:end;">
-      <div class="form-group" style="margin-bottom:0;">
-        <label class="form-label" for="comp_type">Type</label>
-        <select class="form-input" id="comp_type" name="comp_type">
-          <option value="sale">Sale</option>
-          <option value="rental">Rental</option>
-        </select>
-      </div>
+    <div style="display:grid; grid-template-columns: repeat(5, 1fr); gap:10px; align-items:end;">
       <div class="form-group" style="margin-bottom:0; grid-column: span 2;">
         <label class="form-label" for="comp_address">Address</label>
         <input class="form-input" type="text" id="comp_address" name="address">
       </div>
       <div class="form-group" style="margin-bottom:0;">
-        <label class="form-label" for="comp_price">Price / Rent ($)</label>
+        <label class="form-label" for="comp_price">Sale Price ($)</label>
         <input class="form-input" type="text" id="comp_price" name="price">
       </div>
       <div class="form-group" style="margin-bottom:0;">
@@ -329,17 +320,69 @@
         <input class="form-input" type="number" id="comp_units" name="unit_count" min="0">
       </div>
       <div class="form-group" style="margin-bottom:0;">
-        <label class="form-label" for="comp_date">Sale / As-of Date</label>
+        <label class="form-label" for="comp_date">Sale Date</label>
         <input class="form-input" type="date" id="comp_date" name="comp_date">
       </div>
     </div>
-    <div class="form-group">
-      <label class="form-label" for="comp_notes">Source Notes</label>
-      <input class="form-input" type="text" id="comp_notes" name="source_notes" placeholder="e.g. CoStar listing, broker call, county records">
+    <div style="display:grid; grid-template-columns: 1fr 2fr; gap:10px;">
+      <div class="form-group">
+        <label class="form-label" for="comp_source">Source</label>
+        <select class="form-input" id="comp_source" name="source">
+          {% for option in comp_source_options %}
+            <option value="{{ option }}">{{ option }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group" id="comp_source_other_group" style="display:none;">
+        <label class="form-label" for="comp_source_other">Specify Source</label>
+        <input class="form-input" type="text" id="comp_source_other" name="source_other" placeholder="e.g. CoStar listing, broker call, county records">
+      </div>
     </div>
     <button type="submit" class="btn btn-primary">Add Comp</button>
   </form>
+
+  {% if rental_comps %}
+    <hr class="divider" style="margin:20px 0;">
+    <div class="scorecard-mini-title" style="margin-bottom:10px;">Promoted Rental Comps ({{ rental_comps|length }})</div>
+    <p class="page-subtitle" style="margin-bottom:10px;">Rental comparables added from Auto-Pulled Market Data above &mdash; kept separate from Recent Sales Comps.</p>
+    <div class="table-wrap">
+      <table class="deal-dive-table">
+        <thead>
+          <tr><th>Address</th><th>Rent</th><th>Date</th><th>Source</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for comp in rental_comps %}
+            <tr>
+              <td>{{ comp.address or '—' }}</td>
+              <td>{{ '${:,.0f}'.format(comp.price) if comp.price is not none else '—' }}</td>
+              <td>{{ comp.comp_date or '—' }}</td>
+              <td>{{ comp.source_notes or '—' }}</td>
+              <td>
+                <form method="POST" action="{{ url_for('deal_dive.delete_comp', deal_id=deal.id, comp_id=comp.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
 </div>
+
+<script>
+(function () {
+  var sourceSelect = document.getElementById("comp_source");
+  var otherGroup = document.getElementById("comp_source_other_group");
+  if (!sourceSelect || !otherGroup) return;
+  function syncOtherField() {
+    otherGroup.style.display = sourceSelect.value === "Other" ? "block" : "none";
+  }
+  sourceSelect.addEventListener("change", syncOtherField);
+  syncOtherField();
+})();
+</script>
 
 <!-- ── Condition ──────────────────────────────────────────────────── -->
 <div class="card" id="condition">
