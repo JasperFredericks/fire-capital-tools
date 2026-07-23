@@ -53,6 +53,23 @@ class FireMetricsAISummaryTests(unittest.TestCase):
             make_city("Delta", "DD", pop_growth=None, income_growth=None, employment_growth=None, landlord=None, climate=None, crime=None, density_crime=None, home_value=None, home_growth=None),
         ]
 
+    def _rich_city(self) -> dict:
+        return {
+            **self.cities[0],
+            "display_name": "New York, NY",
+            "population_current": 8258035,
+            "employment_current": 4132450,
+            "median_income_current": 79713,
+            "median_home_value_current": 839000,
+            "crime_index_score": 42,
+            "crime_rating": "Moderate",
+            "climate_risk_score": 86,
+            "climate_risk_rating": "Very High",
+            "density_adjusted_crime_score": 44,
+            "density_adjusted_crime_rating": "Moderate",
+            "landlord_friendliness_label": "Tenant-friendly",
+        }
+
     def _seed_cities_table(self, conn: sqlite3.Connection) -> None:
         for city in self.cities:
             conn.execute(
@@ -443,7 +460,7 @@ class FireMetricsAISummaryTests(unittest.TestCase):
 
     def test_fallback_summary_uses_concrete_investor_focused_stats(self):
         city = {
-            **self.cities[0],
+            **self._rich_city(),
             "display_name": "Gilbert, AZ",
             "population_current": 273136,
             "employment_current": 141205,
@@ -464,10 +481,45 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         )
         combined = summary.combined_summary(structured)
         self.assertIn("$124,968", combined)
-        self.assertIn("141,205", combined)
         self.assertIn("4.00%", combined)
-        self.assertIn("climate-risk score of 100 (Very High)", combined)
-        self.assertIn("selectively attractive", combined.lower())
+        self.assertIn("climate-risk score of 100, rated Very High", combined)
+        self.assertIn("mixed preliminary investment opportunity", combined.lower())
+
+    def test_approved_facts_structure_and_minimum_concrete_rules(self):
+        city = self._rich_city()
+        benchmarks = summary.compute_benchmarks(city, [city, self.cities[1], self.cities[2]])
+        facts_ctx = summary.build_approved_city_facts(city, benchmarks)
+        facts = facts_ctx["facts"]
+        self.assertGreaterEqual(facts_ctx["usable_count"], 4)
+        self.assertTrue(facts_ctx["growth_available"])
+        self.assertTrue(facts_ctx["risk_available"])
+        self.assertTrue(any(f["metric"] == "median_income_current" for f in facts))
+        self.assertTrue(any(f["metric"] == "population_current" for f in facts))
+        self.assertTrue(any(f["metric"] == "climate_risk_score" for f in facts))
+
+    def test_population_and_employment_and_income_formatting(self):
+        city = self._rich_city()
+        benchmarks = summary.compute_benchmarks(city, [city, self.cities[1], self.cities[2]])
+        facts = summary.build_approved_city_facts(city, benchmarks)["facts"]
+        pop = next(f for f in facts if f["metric"] == "population_current")
+        emp = next(f for f in facts if f["metric"] == "employment_current")
+        inc = next(f for f in facts if f["metric"] == "median_income_current")
+        self.assertEqual(pop["formatted_value"], "8,258,035")
+        self.assertEqual(emp["formatted_value"], "4,132,450")
+        self.assertEqual(inc["formatted_value"], "$79,713")
+
+    def test_growth_risk_and_landlord_formatting(self):
+        city = self._rich_city()
+        benchmarks = summary.compute_benchmarks(city, [city, self.cities[1], self.cities[2]])
+        facts = summary.build_approved_city_facts(city, benchmarks)["facts"]
+        growth = next(f for f in facts if f["metric"] == "employment_growth_recent")
+        crime = next(f for f in facts if f["metric"] == "crime_index_score")
+        climate = next(f for f in facts if f["metric"] == "climate_risk_score")
+        landlord = next(f for f in facts if f["metric"] == "landlord_friendliness")
+        self.assertIn("%", growth["formatted_value"])
+        self.assertIn("rated Moderate", crime["formatted_value"])
+        self.assertIn("rated Very High", climate["formatted_value"])
+        self.assertIn("Tenant-friendly", landlord["formatted_value"])
 
     def test_fallback_summary_removes_percentile_and_tracked_city_language(self):
         city = {**self.cities[0], "display_name": "Alpha, AA", "population_current": 150000, "employment_current": 95000, "median_income_current": 98000}
@@ -520,8 +572,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         high_risk = summary.combined_summary(
             summary.fallback_summary(city, {"strength_candidates": [], "weakness_candidates": [{"field": "crime_index_score"}], "recommendation_category": summary.RECOMMENDATION_HIGH_RISK})
         ).lower()
-        self.assertIn("attractive for further underwriting", strong)
-        self.assertIn("selectively attractive", mixed)
+        self.assertIn("attractive for further investment underwriting", strong)
+        self.assertIn("mixed preliminary investment opportunity", mixed)
         self.assertIn("higher risk", high_risk)
 
     def test_normalize_summary_rejects_percentile_and_prohibited_claims(self):
@@ -546,12 +598,14 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         prompt_data = summary.build_prompt_input(self.cities[0], benchmarks)
         self.assertIn("recommendation_category", prompt_data["benchmarks"])
         self.assertNotIn("relative_market_profile_percentile", prompt_data["benchmarks"])
-        self.assertEqual(summary.PROMPT_VERSION, "fire_metrics_summary_v3")
+        self.assertIn("approved_city_facts", prompt_data)
+        self.assertGreaterEqual(len(prompt_data["approved_city_facts"]), 1)
+        self.assertEqual(summary.PROMPT_VERSION, "fire_metrics_summary_v4")
 
     def test_prompt_source_requires_no_percentiles_and_concrete_stats(self):
         module_source = Path("tools/fire_metrics_ai_summary.py").read_text(encoding="utf-8")
         self.assertIn("Do not mention percentiles", module_source)
-        self.assertIn("concrete city statistics", module_source)
+        self.assertIn("APPROVED CITY FACTS", module_source)
         self.assertIn("preliminary investment conclusion", module_source)
 
     def test_fingerprint_changes_when_prompt_version_changes(self):
@@ -564,9 +618,115 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         )
         fp_current = summary.build_fingerprint(payload)
         payload_old = dict(payload)
-        payload_old["prompt_version"] = "fire_metrics_summary_v2"
+        payload_old["prompt_version"] = "fire_metrics_summary_v3"
         fp_old = summary.build_fingerprint(payload_old)
         self.assertNotEqual(fp_current, fp_old)
+
+    def test_ai_output_without_enough_approved_facts_is_rejected(self):
+        city = self._rich_city()
+        benchmarks = summary.compute_benchmarks(city, [city, self.cities[1], self.cities[2]])
+        normalized = summary.normalize_summary(
+            {
+                "strength_sentence": "New York has a population of 8,258,035.",
+                "weakness_sentence": "The city faces underwriting tradeoffs.",
+                "comparison_sentence": "Overall, New York appears selectively attractive.",
+            },
+            city,
+            benchmarks,
+        )
+        merged = summary.combined_summary(normalized)
+        self.assertNotEqual(merged, "New York has a population of 8,258,035. The city faces underwriting tradeoffs. Overall, New York appears selectively attractive.")
+        self.assertGreaterEqual(len(summary.matched_fact_indexes(merged, summary.build_approved_city_facts(city, benchmarks)["facts"])), 3)
+
+    def test_ai_output_with_invented_number_is_rejected(self):
+        city = self._rich_city()
+        benchmarks = summary.compute_benchmarks(city, [city, self.cities[1], self.cities[2]])
+        normalized = summary.normalize_summary(
+            {
+                "strength_sentence": "New York combines population of 8,258,035 and median household income of $79,713, supporting renter demand.",
+                "weakness_sentence": "The main underwriting concern is climate-risk score of 999, rated Very High.",
+                "comparison_sentence": "Overall, New York presents a mixed preliminary investment opportunity.",
+            },
+            city,
+            benchmarks,
+        )
+        self.assertNotIn("999", summary.combined_summary(normalized))
+
+    def test_generic_new_york_style_output_is_rejected(self):
+        city = self._rich_city()
+        benchmarks = summary.compute_benchmarks(city, [city, self.cities[1], self.cities[2]])
+        generic = {
+            "strength_sentence": "New York, NY presents investable signals from available economic and household metrics that support additional screening.",
+            "weakness_sentence": "The main tradeoffs are concentrated in risk and data-completeness factors that require property-level verification.",
+            "comparison_sentence": "Overall, New York, NY appears selectively attractive for further underwriting with disciplined due diligence.",
+        }
+        normalized = summary.normalize_summary(generic, city, benchmarks)
+        combined = summary.combined_summary(normalized).lower()
+        self.assertNotIn("presents investable signals", combined)
+        self.assertNotIn("available economic and household metrics", combined)
+        self.assertNotIn("risk and data-completeness factors", combined)
+        self.assertGreaterEqual(len(summary.matched_fact_indexes(combined, summary.build_approved_city_facts(city, benchmarks)["facts"])), 3)
+
+    def test_ai_output_with_sufficient_approved_facts_is_accepted(self):
+        city = self._rich_city()
+        benchmarks = summary.compute_benchmarks(city, [city, self.cities[1], self.cities[2]])
+        candidate = {
+            "strength_sentence": "New York combines recent employment growth of 4.00%, median household income of $79,713, and population of 8,258,035, supporting renter demand and household stability.",
+            "weakness_sentence": "The main underwriting concern is climate-risk score of 86, rated Very High, which may increase insurance and resilience costs.",
+            "comparison_sentence": "Overall, New York presents a mixed preliminary investment opportunity because demand scale is strong but climate exposure remains elevated.",
+        }
+        normalized = summary.normalize_summary(candidate, city, benchmarks)
+        self.assertEqual(summary.combined_summary(normalized), summary.combined_summary({k: summary.one_sentence(v) for k, v in candidate.items()}))
+
+    def test_missing_data_language_only_when_fields_are_missing(self):
+        city = self._rich_city()
+        benchmarks = summary.compute_benchmarks(city, [city, self.cities[1], self.cities[2]])
+        fallback_text = summary.combined_summary(summary.fallback_summary(city, benchmarks)).lower()
+        self.assertNotIn("currently unavailable", fallback_text)
+
+        sparse = {
+            **self.cities[3],
+            "city": "Sparse",
+            "state": "SS",
+            "display_name": "Sparse, SS",
+        }
+        sparse_bench = summary.compute_benchmarks(sparse, self.cities)
+        sparse_text = summary.combined_summary(summary.fallback_summary(sparse, sparse_bench)).lower()
+        self.assertIn("limited", sparse_text)
+
+    def test_fallback_contains_three_or_more_real_facts_when_available(self):
+        city = self._rich_city()
+        benchmarks = summary.compute_benchmarks(city, [city, self.cities[1], self.cities[2]])
+        fallback_struct = summary.fallback_summary(city, benchmarks)
+        fallback_text = summary.combined_summary(fallback_struct)
+        facts = summary.build_approved_city_facts(city, benchmarks)["facts"]
+        self.assertGreaterEqual(len(summary.matched_fact_indexes(fallback_text, facts)), 3)
+
+    def test_fallback_avoids_removed_generic_phrases(self):
+        city = self._rich_city()
+        benchmarks = summary.compute_benchmarks(city, [city, self.cities[1], self.cities[2]])
+        text = summary.combined_summary(summary.fallback_summary(city, benchmarks)).lower()
+        self.assertNotIn("presents investable signals", text)
+        self.assertNotIn("available economic and household metrics", text)
+        self.assertNotIn("risk and data-completeness factors", text)
+        self.assertNotIn("requires disciplined due diligence", text)
+
+    def test_unsupported_rent_cap_and_vacancy_claims_are_rejected(self):
+        city = self._rich_city()
+        benchmarks = summary.compute_benchmarks(city, [city, self.cities[1], self.cities[2]])
+        normalized = summary.normalize_summary(
+            {
+                "strength_sentence": "New York combines recent employment growth of 4.00% and median household income of $79,713.",
+                "weakness_sentence": "Rent growth, cap rates, and vacancy trends are favorable.",
+                "comparison_sentence": "Overall, New York appears attractive for further investment underwriting.",
+            },
+            city,
+            benchmarks,
+        )
+        combined = summary.combined_summary(normalized).lower()
+        self.assertNotIn("rent growth", combined)
+        self.assertNotIn("cap rates", combined)
+        self.assertNotIn("vacancy", combined)
 
     def test_ai_disabled_mode_ignores_seeded_cached_summary(self):
         app = Flask(__name__)
