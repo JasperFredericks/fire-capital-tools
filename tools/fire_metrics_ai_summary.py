@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-PROMPT_VERSION = "fire_metrics_summary_v2"
+PROMPT_VERSION = "fire_metrics_summary_v3"
 SUMMARY_SCHEMA_NAME = "fire_metrics_market_overview"
 
 RECOMMENDATION_STRONG = "strong preliminary candidate"
@@ -20,6 +20,32 @@ LANDLORD_SCORE_MAP = {
     0: 50.0,
     -1: 25.0,
 }
+
+BANNED_SUMMARY_TERMS: tuple[str, ...] = (
+    "percentile",
+    "tracked cities",
+    "tracked-city",
+    "better than roughly",
+    "relative_market_profile_score",
+    "top-performing percentile",
+    "bottom quartile",
+    "above/below the tracked-city average",
+    "undefined",
+    "null",
+    "nan",
+)
+
+PROHIBITED_MARKET_CLAIMS: tuple[str, ...] = (
+    "rent growth",
+    "cap rate",
+    "cap-rate",
+    "vacancy",
+    "cash flow",
+    "cashflow",
+    "property tax",
+    "insurance price",
+    "guaranteed",
+)
 
 
 @dataclass(frozen=True)
@@ -173,6 +199,243 @@ def join_phrases(phrases: list[str]) -> str:
     if len(phrases) == 2:
         return f"{phrases[0]} and {phrases[1]}"
     return ", ".join(phrases[:-1]) + f", and {phrases[-1]}"
+
+
+def fmt_count(value: Any) -> str | None:
+    num = as_float(value)
+    if num is None:
+        return None
+    return f"{int(round(num)):,}"
+
+
+def fmt_currency(value: Any) -> str | None:
+    num = as_float(value)
+    if num is None:
+        return None
+    return f"${int(round(num)):,}"
+
+
+def fmt_percent(value: Any) -> str | None:
+    num = as_float(value)
+    if num is None:
+        return None
+    return f"{num * 100:.2f}%"
+
+
+def fmt_score(value: Any) -> str | None:
+    num = as_float(value)
+    if num is None:
+        return None
+    rounded = round(num, 1)
+    if abs(rounded - int(rounded)) < 1e-9:
+        return str(int(rounded))
+    return f"{rounded:.1f}"
+
+
+def city_display_name(city: dict[str, Any]) -> str:
+    display = str(city.get("display_name") or "").strip()
+    if display:
+        return display
+    city_name = str(city.get("city") or "").strip() or "This city"
+    state = str(city.get("state") or "").strip().upper()
+    return f"{city_name}, {state}" if state else city_name
+
+
+def positive_growth_phrase(label: str, value: Any) -> str | None:
+    pct = fmt_percent(value)
+    if pct is None:
+        return None
+    return f"{label} of {pct}"
+
+
+def risk_growth_phrase(label: str, value: Any) -> str | None:
+    num = as_float(value)
+    pct = fmt_percent(value)
+    if num is None or pct is None:
+        return None
+    if num < 0:
+        return f"{label} decline of {pct}"
+    if num <= 0.003:
+        return f"modest {label.lower()} of {pct}"
+    return f"slower {label.lower()} of {pct}"
+
+
+def score_with_rating(score: Any, rating: Any) -> str | None:
+    score_text = fmt_score(score)
+    if score_text is None:
+        return None
+    rating_text = str(rating or "").strip()
+    if rating_text:
+        return f"{score_text} ({rating_text})"
+    return score_text
+
+
+def build_strength_metric_phrases(selected_city: dict[str, Any], benchmarks: dict[str, Any]) -> list[tuple[str, str]]:
+    candidate_fields = [str(item.get("field") or "") for item in benchmarks.get("strength_candidates") or []]
+    ordered_fields = candidate_fields + [
+        "employment_growth_recent",
+        "population_growth_recent",
+        "median_income_current",
+        "median_income_growth_recent",
+        "crime_index_score",
+        "median_home_value_growth_recent",
+        "climate_risk_score",
+        "landlord_friendliness_score",
+    ]
+
+    phrases: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for field in ordered_fields:
+        if field in seen:
+            continue
+        seen.add(field)
+
+        phrase = None
+        theme = "market stability"
+        if field == "employment_growth_recent":
+            growth_text = positive_growth_phrase("recent employment growth", selected_city.get(field))
+            employment_count = fmt_count(selected_city.get("employment_current"))
+            if growth_text and employment_count:
+                phrase = f"resident employment of {employment_count} with {growth_text}"
+            else:
+                phrase = growth_text
+            theme = "housing-demand momentum"
+        elif field == "population_growth_recent":
+            growth_text = positive_growth_phrase("recent population growth", selected_city.get(field))
+            population_count = fmt_count(selected_city.get("population_current"))
+            if growth_text and population_count:
+                phrase = f"population of {population_count} with {growth_text}"
+            else:
+                phrase = growth_text
+            theme = "long-term demand support"
+        elif field == "median_income_current":
+            income = fmt_currency(selected_city.get(field))
+            if income:
+                phrase = f"median household income of {income}"
+                theme = "rent-paying capacity"
+        elif field == "median_income_growth_recent":
+            phrase = positive_growth_phrase("recent income growth", selected_city.get(field))
+            theme = "household-income momentum"
+        elif field == "crime_index_score":
+            scored = score_with_rating(selected_city.get("crime_index_score"), selected_city.get("crime_rating"))
+            if scored:
+                phrase = f"crime index score of {scored}"
+                theme = "tenant appeal and operating stability"
+        elif field == "climate_risk_score":
+            scored = score_with_rating(selected_city.get("climate_risk_score"), selected_city.get("climate_risk_rating"))
+            if scored:
+                phrase = f"climate-risk score of {scored}"
+                theme = "resilience planning"
+        elif field == "median_home_value_growth_recent":
+            phrase = positive_growth_phrase("recent home-value growth", selected_city.get(field))
+            theme = "demand durability"
+        elif field == "landlord_friendliness_score":
+            label = str(selected_city.get("landlord_friendliness_label") or "").strip()
+            if label:
+                phrase = f"a {label.lower()} landlord-policy environment"
+                theme = "operating flexibility"
+
+        if phrase:
+            phrases.append((phrase, theme))
+        if len(phrases) >= 3:
+            break
+
+    return phrases
+
+
+def build_risk_metric_phrases(selected_city: dict[str, Any], benchmarks: dict[str, Any]) -> list[tuple[str, str]]:
+    candidate_fields = [str(item.get("field") or "") for item in benchmarks.get("weakness_candidates") or []]
+    ordered_fields = candidate_fields + [
+        "climate_risk_score",
+        "crime_index_score",
+        "density_adjusted_crime_score",
+        "employment_growth_recent",
+        "population_growth_recent",
+        "median_income_growth_recent",
+        "median_home_value_current",
+        "median_home_value_growth_recent",
+        "landlord_friendliness_score",
+    ]
+
+    phrases: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for field in ordered_fields:
+        if field in seen:
+            continue
+        seen.add(field)
+
+        phrase = None
+        impact = "warrant additional property-level diligence"
+        if field == "climate_risk_score":
+            scored = score_with_rating(selected_city.get("climate_risk_score"), selected_city.get("climate_risk_rating"))
+            climate_num = as_float(selected_city.get("climate_risk_score"))
+            should_include = field in candidate_fields or (climate_num is not None and climate_num >= 50)
+            if scored and should_include:
+                phrase = f"climate-risk score of {scored}"
+                impact = "increase resilience and operating-cost uncertainty"
+        elif field == "crime_index_score":
+            scored = score_with_rating(selected_city.get("crime_index_score"), selected_city.get("crime_rating"))
+            crime_num = as_float(selected_city.get("crime_index_score"))
+            should_include = field in candidate_fields or (crime_num is not None and crime_num >= 50)
+            if scored and should_include:
+                phrase = f"crime index score of {scored}"
+                impact = "require tighter property and submarket screening"
+        elif field == "density_adjusted_crime_score":
+            scored = score_with_rating(selected_city.get("density_adjusted_crime_score"), selected_city.get("density_adjusted_crime_rating"))
+            density_num = as_float(selected_city.get("density_adjusted_crime_score"))
+            should_include = field in candidate_fields or (density_num is not None and density_num >= 50)
+            if scored and should_include:
+                phrase = f"density-adjusted crime score of {scored}"
+                impact = "add location-selection and tenant-risk complexity"
+        elif field == "employment_growth_recent":
+            phrase = risk_growth_phrase("Recent employment", selected_city.get(field))
+            impact = "signal softer near-term housing-demand momentum"
+        elif field == "population_growth_recent":
+            phrase = risk_growth_phrase("Recent population", selected_city.get(field))
+            impact = "limit long-run rental-demand expansion"
+        elif field == "median_income_growth_recent":
+            phrase = risk_growth_phrase("Recent income", selected_city.get(field))
+            impact = "temper household spending and rent-growth resilience"
+        elif field == "median_home_value_current":
+            value = fmt_currency(selected_city.get(field))
+            if value:
+                phrase = f"median home value of {value}"
+                impact = "raise acquisition-cost pressure"
+        elif field == "median_home_value_growth_recent":
+            growth = fmt_percent(selected_city.get(field))
+            if growth:
+                phrase = f"recent home-value growth of {growth}"
+                impact = "tighten entry pricing for new acquisitions"
+        elif field == "landlord_friendliness_score":
+            label = str(selected_city.get("landlord_friendliness_label") or "").strip().lower()
+            if label and "tenant" in label:
+                phrase = f"a {label} landlord-policy environment"
+                impact = "increase regulatory and management complexity"
+
+        if phrase:
+            phrases.append((phrase, impact))
+        if len(phrases) >= 2:
+            break
+
+    return phrases
+
+
+def pick_opening(options: list[str], seed_key: str) -> str:
+    if not options:
+        return ""
+    digest = hashlib.sha256(seed_key.encode("utf-8")).hexdigest()
+    idx = int(digest[:8], 16) % len(options)
+    return options[idx]
+
+
+def contains_banned_summary_language(text: str) -> bool:
+    lower = text.lower()
+    return any(term in lower for term in BANNED_SUMMARY_TERMS)
+
+
+def contains_prohibited_claims(text: str) -> bool:
+    lower = text.lower()
+    return any(term in lower for term in PROHIBITED_MARKET_CLAIMS)
 
 
 def metric_distributions(cities: list[dict[str, Any]]) -> dict[str, list[float]]:
@@ -555,80 +818,81 @@ def build_fingerprint(payload: dict[str, Any]) -> str:
 
 
 def fallback_summary(selected_city: dict[str, Any], benchmarks: dict[str, Any]) -> dict[str, str]:
-    strength_sentence = "No metric materially outperforms the tracked-city benchmark with current data."
-    weakness_sentence = "No metric materially underperforms the tracked-city benchmark with current data."
+    display = city_display_name(selected_city)
+    seed_key = city_key(selected_city) or display
 
-    strengths = benchmarks.get("strength_candidates") or []
-    weaknesses = benchmarks.get("weakness_candidates") or []
-    completeness = as_float(benchmarks.get("data_completeness"))
-
-    if strengths and (completeness is None or completeness > 0):
-        pieces = [directional_phrase(item, weakness=False) for item in strengths[:2]]
-        has_material = any(
-            float(item.get("directional_percentile") or 0) >= 75
-            or bool(item.get("is_material"))
-            for item in strengths[:2]
+    strength_metrics = build_strength_metric_phrases(selected_city, benchmarks)
+    strength_values = [item[0] for item in strength_metrics[:3]]
+    strength_themes = [item[1] for item in strength_metrics[:3]]
+    if strength_values:
+        opening = pick_opening(
+            [
+                f"{display} combines",
+                f"The investment case in {display} is supported by",
+                f"{display} benefits from",
+            ],
+            f"{seed_key}:strength",
         )
-        if len(pieces) == 1:
-            if has_material:
-                strength_sentence = f"The strongest relative signal is {pieces[0]}."
-            else:
-                strength_sentence = f"No metric materially outperforms the tracked-city benchmark, though the strongest relative indicator is {pieces[0]}."
-        else:
-            if has_material:
-                strength_sentence = f"The strongest relative signals are {join_phrases(pieces)}."
-            else:
-                strength_sentence = f"No metric materially outperforms the tracked-city benchmark, though the strongest relative indicators are {join_phrases(pieces)}."
-
-    if weaknesses and (completeness is None or completeness > 0):
-        pieces = [directional_phrase(item, weakness=True) for item in weaknesses[:2]]
-        has_material = any(
-            float(item.get("directional_percentile") or 100) <= 25
-            or bool(item.get("is_material"))
-            or bool(item.get("is_major_risk"))
-            for item in weaknesses[:2]
-        )
-        if len(pieces) == 1:
-            if has_material:
-                weakness_sentence = f"The main weakness is {pieces[0]}."
-            else:
-                weakness_sentence = f"No metric materially underperforms the tracked-city benchmark, though the weakest relative indicator is {pieces[0]}."
-        else:
-            if has_material:
-                weakness_sentence = f"The main weaknesses are {join_phrases(pieces)}."
-            else:
-                weakness_sentence = f"No metric materially underperforms the tracked-city benchmark, though the weakest relative indicators are {join_phrases(pieces)}."
-
-    overall = benchmarks.get("relative_market_profile_score")
-    avg = benchmarks.get("tracked_city_relative_market_profile_average")
-    count = benchmarks.get("tracked_city_count")
-    pct = benchmarks.get("relative_market_profile_percentile")
-    category = str(benchmarks.get("recommendation_category") or RECOMMENDATION_MIXED)
-    home_context = benchmarks.get("home_value_context") or {}
-    home_value_label = str(home_context.get("value_label") or "")
-
-    if overall is None or avg is None or not count:
-        comparison_sentence = "Overall, this market is a selective or mixed opportunity because available indicators are too sparse for a firmer preliminary assessment."
+        theme_tail = "housing demand and renter stability"
+        if strength_themes:
+            theme_tail = join_phrases(sorted(set(strength_themes))[:2])
+        strength_sentence = f"{opening} {join_phrases(strength_values)}, supporting {theme_tail}."
     else:
-        if home_value_label and "unavailable" not in home_value_label:
-            home_fragment = f" and {home_value_label}"
-        else:
-            home_fragment = ""
+        strength_sentence = (
+            f"{display} has limited high-confidence upside signals in the current dataset, so the investment case depends on property-level fundamentals."
+        )
 
-        if pct is None:
-            comparison_sentence = (
-                f"Overall, this city appears to be a {category}, based on a preliminary relative-market profile versus {count} tracked cities{home_fragment}."
-            )
-        else:
-            comparison_sentence = (
-                f"Overall, this city appears to be a {category}, with a preliminary relative-market profile around the {ordinal(int(round(pct)))} percentile among {count} tracked cities{home_fragment}."
-            )
+    risk_metrics = build_risk_metric_phrases(selected_city, benchmarks)
+    risk_values = [item[0] for item in risk_metrics[:2]]
+    risk_impacts = [item[1] for item in risk_metrics[:2]]
+    if risk_values:
+        concern_noun = "concern is" if len(risk_values) == 1 else "concerns are"
+        impact_text = join_phrases(sorted(set(risk_impacts))[:2]) if risk_impacts else "warrant additional property-level diligence"
+        weakness_sentence = f"The primary underwriting {concern_noun} {join_phrases(risk_values)}, which may {impact_text}."
+    else:
+        weakness_sentence = (
+            "The main tradeoff is limited risk visibility in several metrics, so underwriting should emphasize property-specific due diligence."
+        )
 
-    return {
+    category = str(benchmarks.get("recommendation_category") or RECOMMENDATION_MIXED)
+    priority_themes: list[str] = []
+    for _, theme in strength_metrics:
+        lowered = theme.lower()
+        if "demand" in lowered:
+            priority_themes.append("demand growth")
+        elif "income" in lowered or "household" in lowered:
+            priority_themes.append("household strength")
+        elif "stability" in lowered:
+            priority_themes.append("market stability")
+        elif "flexibility" in lowered:
+            priority_themes.append("operating flexibility")
+    priorities = join_phrases(list(dict.fromkeys(priority_themes))[:2]) or "balanced market fundamentals"
+
+    if category == RECOMMENDATION_STRONG:
+        comparison_sentence = (
+            f"Overall, {display} appears attractive for further underwriting, particularly for investors prioritizing {priorities}, while still requiring property-level due diligence."
+        )
+    elif category == RECOMMENDATION_HIGH_RISK:
+        comparison_sentence = (
+            f"Overall, {display} appears higher risk and may be less attractive for investors seeking stable demand without substantial property-level diligence."
+        )
+    else:
+        comparison_sentence = (
+            f"Overall, {display} appears selectively attractive for investors prioritizing {priorities}, but the identified tradeoffs warrant additional property-level diligence."
+        )
+
+    structured = {
         "strength_sentence": one_sentence(strength_sentence),
         "weakness_sentence": one_sentence(weakness_sentence),
         "comparison_sentence": one_sentence(comparison_sentence),
     }
+    if contains_banned_summary_language(combined_summary(structured)):
+        structured = {
+            "strength_sentence": one_sentence(f"{display} presents investable signals from available economic and household metrics that support additional screening."),
+            "weakness_sentence": one_sentence("The main tradeoffs are concentrated in risk and data-completeness factors that require property-level verification."),
+            "comparison_sentence": one_sentence(f"Overall, {display} appears selectively attractive for further underwriting with disciplined due diligence."),
+        }
+    return structured
 
 
 def build_prompt_input(selected_city: dict[str, Any], benchmarks: dict[str, Any]) -> dict[str, Any]:
@@ -641,10 +905,6 @@ def build_prompt_input(selected_city: dict[str, Any], benchmarks: dict[str, Any]
                     "label": item.get("label"),
                     "value": item.get("value"),
                     "favorable_when_higher": bool(item.get("favorable_when_higher")),
-                    "raw_percentile": item.get("raw_percentile"),
-                    "directional_percentile": item.get("directional_percentile"),
-                    "favorable_percentile": item.get("directional_percentile"),
-                    "delta_directional_percentile": item.get("delta_directional_percentile"),
                     "is_categorical": bool(item.get("is_categorical")),
                     "landlord_policy_category": item.get("landlord_policy_category"),
                     "landlord_policy_label": item.get("landlord_policy_label"),
@@ -664,9 +924,13 @@ def build_prompt_input(selected_city: dict[str, Any], benchmarks: dict[str, Any]
             "median_income_current": selected_city.get("median_income_current"),
             "median_income_growth_recent": selected_city.get("median_income_growth_recent"),
             "median_home_value_current": selected_city.get("median_home_value_current"),
+            "median_home_value_growth_2021_2024": selected_city.get("median_home_value_growth_2021_2024"),
             "median_home_value_growth_recent": selected_city.get("median_home_value_growth_recent"),
             "employment_current": selected_city.get("employment_current"),
+            "employment_growth_2021_2025": selected_city.get("employment_growth_2021_2025"),
             "employment_growth_recent": selected_city.get("employment_growth_recent"),
+            "population_growth_2020_2025": selected_city.get("population_growth_2020_2025"),
+            "median_income_growth_2021_2024": selected_city.get("median_income_growth_2021_2024"),
             "climate_risk_score": selected_city.get("climate_risk_score"),
             "climate_risk_rating": selected_city.get("climate_risk_rating"),
             "crime_index_score": selected_city.get("crime_index_score"),
@@ -678,15 +942,9 @@ def build_prompt_input(selected_city: dict[str, Any], benchmarks: dict[str, Any]
             "warnings": selected_city.get("warnings") or [],
         },
         "benchmarks": {
-            "relative_market_profile_score": benchmarks.get("relative_market_profile_score"),
-            "tracked_city_relative_market_profile_average": benchmarks.get("tracked_city_relative_market_profile_average"),
-            "tracked_city_count": benchmarks.get("tracked_city_count"),
-            "relative_market_profile_percentile": benchmarks.get("relative_market_profile_percentile"),
+            "recommendation_category": benchmarks.get("recommendation_category"),
             "strength_candidates": prompt_candidate_rows(benchmarks.get("strength_candidates") or []),
             "weakness_candidates": prompt_candidate_rows(benchmarks.get("weakness_candidates") or []),
-            "ambiguous_metric_context": benchmarks.get("ambiguous_metric_context") or [],
-            "home_value_context": benchmarks.get("home_value_context") or {},
-            "recommendation_category": benchmarks.get("recommendation_category"),
             "data_completeness": benchmarks.get("data_completeness"),
         },
     }
@@ -704,20 +962,15 @@ def openai_summary(
     client = OpenAI(api_key=api_key)
 
     instructions = (
-        "You are generating a concise city real-estate screening overview from provided FIRE Metrics data only. "
-        "Return valid JSON matching the schema with exactly three fields. "
-        "Each field must be exactly one sentence. "
-        "Use only supplied values and benchmark comparisons. "
-        "Mention at most two strengths and at most two weaknesses. "
-        "Third sentence must give a clear preliminary investment assessment using the provided recommendation category verbatim. "
-        "Do not rename or reinterpret the provided recommendation category. "
-        "For each strength/weakness candidate, raw_percentile is the raw metric percentile and favorable_percentile/directional_percentile is adjusted for whether higher values are favorable. "
-        "Do not describe unfavorable-when-higher metrics as if the raw metric itself were at the favorable percentile. "
-        "Do not assign percentile wording to landlord-policy categories. "
-        "Do not claim missing data unless the provided data_completeness or missing fields indicate missing values. "
-        "Do not mention data not present in input. "
-        "Do not mention rent growth, cap rates, vacancy, taxes, insurance, supply pipelines, neighborhood quality, future appreciation, or returns. "
-        "Avoid promotional language, certainty, or financial-advice claims."
+        "You are a concise real estate market analyst writing an investor screening memo for one city. "
+        "Return valid JSON matching the schema with exactly three fields, and each field must be exactly one sentence. "
+        "Sentence 1 must explain the investment case using two or three concrete city statistics when available. "
+        "Sentence 2 must explain the key risks or tradeoffs using one or two concrete city statistics or ratings. "
+        "Sentence 3 must provide a clear preliminary investment conclusion aligned with recommendation_category. "
+        "Use only provided city statistics and candidate metrics, and omit missing values rather than fabricating numbers. "
+        "Do not mention percentiles, tracked-city comparisons, relative market profile scores, quartiles, or internal scoring weights. "
+        "Do not invent rent growth, cap rates, vacancy, taxes, insurance prices, future returns, or guaranteed outcomes. "
+        "Keep a neutral professional tone, avoid promotional language, and include a property-level due diligence caveat when appropriate."
     )
 
     schema = {
@@ -774,13 +1027,25 @@ def normalize_summary(structured: dict[str, str], selected_city: dict[str, Any],
     if any(count_sentences(value) != 1 for value in out.values()):
         return fallback_summary(selected_city, benchmarks)
 
-    allowed = {
-        RECOMMENDATION_STRONG,
-        RECOMMENDATION_MIXED,
-        RECOMMENDATION_HIGH_RISK,
-    }
-    comparison_lower = out["comparison_sentence"].lower()
-    if not any(category in comparison_lower for category in allowed):
+    merged = combined_summary(out)
+    if count_sentences(merged) != 3:
+        return fallback_summary(selected_city, benchmarks)
+
+    if contains_banned_summary_language(merged):
+        return fallback_summary(selected_city, benchmarks)
+
+    if contains_prohibited_claims(merged):
+        return fallback_summary(selected_city, benchmarks)
+
+    conclusion_markers = (
+        "appears attractive",
+        "appears selectively attractive",
+        "mixed preliminary",
+        "higher risk",
+        "warrants additional property-level diligence",
+        "further underwriting",
+    )
+    if not any(marker in out["comparison_sentence"].lower() for marker in conclusion_markers):
         return fallback_summary(selected_city, benchmarks)
 
     return out

@@ -409,226 +409,164 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         text = summary.combined_summary(structured)
         self.assertEqual(summary.count_sentences(text), 3)
 
-    def test_fallback_uses_favorable_metric_wording(self):
-        structured = summary.fallback_summary(
-            self.cities[0],
-            {
-                "strength_candidates": [
-                    {
-                        "field": "population_growth_recent",
-                        "label": "Population growth",
-                        "favorable_when_higher": True,
-                        "directional_percentile": 83.2,
-                    }
-                ],
-                "weakness_candidates": [],
-                "selected_overall_score": 70.0,
-                "tracked_city_average": 60.0,
-                "tracked_city_count": 3,
-                "selected_percentile": 72.0,
-            },
-        )
-        self.assertIn("Population growth at approximately the 83rd percentile", structured["strength_sentence"])
-
-    def test_fallback_uses_unfavorable_metric_plain_language(self):
-        structured = summary.fallback_summary(
-            self.cities[0],
-            {
-                "strength_candidates": [
-                    {
-                        "field": "climate_risk_score",
-                        "label": "Climate risk",
-                        "favorable_when_higher": False,
-                        "raw_percentile": 17.0,
-                        "directional_percentile": 83.0,
-                    }
-                ],
-                "weakness_candidates": [],
-                "selected_overall_score": 70.0,
-                "tracked_city_average": 60.0,
-                "tracked_city_count": 3,
-                "selected_percentile": 72.0,
-            },
-        )
-        self.assertIn("lower climate risk than roughly 83% of tracked cities", structured["strength_sentence"])
-        self.assertNotIn("Climate risk at approximately the 83rd percentile", structured["strength_sentence"])
-
-    def test_two_strengths_joined_with_and(self):
-        structured = summary.fallback_summary(
-            self.cities[0],
-            {
-                "strength_candidates": [
-                    {
-                        "field": "population_growth_recent",
-                        "label": "Population growth",
-                        "favorable_when_higher": True,
-                        "directional_percentile": 83.0,
-                    },
-                    {
-                        "field": "climate_risk_score",
-                        "label": "Climate risk",
-                        "favorable_when_higher": False,
-                        "directional_percentile": 83.0,
-                    },
-                ],
-                "weakness_candidates": [],
-                "selected_overall_score": 70.0,
-                "tracked_city_average": 60.0,
-                "tracked_city_count": 3,
-                "selected_percentile": 72.0,
-            },
-        )
-        self.assertIn(" and ", structured["strength_sentence"])
-        self.assertNotIn(", lower climate risk than roughly", structured["strength_sentence"])
-
-    def test_one_strength_uses_singular_grammar(self):
-        structured = summary.fallback_summary(
-            self.cities[0],
-            {
-                "strength_candidates": [
-                    {
-                        "field": "population_growth_recent",
-                        "label": "Population growth",
-                        "favorable_when_higher": True,
-                        "directional_percentile": 83.0,
-                    }
-                ],
-                "weakness_candidates": [],
-                "selected_overall_score": 70.0,
-                "tracked_city_average": 60.0,
-                "tracked_city_count": 3,
-                "selected_percentile": 72.0,
-            },
-        )
-        self.assertIn("The strongest relative signal is", structured["strength_sentence"])
-        self.assertNotIn("The strongest relative signals are", structured["strength_sentence"])
-
-    def test_two_weaknesses_use_plural_grammar(self):
-        structured = summary.fallback_summary(
-            self.cities[0],
-            {
-                "strength_candidates": [],
-                "weakness_candidates": [
-                    {
-                        "field": "crime_index_score",
-                        "label": "Crime index",
-                        "favorable_when_higher": False,
-                        "directional_percentile": 22.0,
-                    },
-                    {
-                        "field": "density_adjusted_crime_score",
-                        "label": "Density-adjusted crime",
-                        "favorable_when_higher": False,
-                        "directional_percentile": 35.0,
-                    },
-                ],
-                "selected_overall_score": 70.0,
-                "tracked_city_average": 60.0,
-                "tracked_city_count": 3,
-                "selected_percentile": 72.0,
-            },
-        )
-        self.assertIn("The main weaknesses are", structured["weakness_sentence"])
-        self.assertIn(" and ", structured["weakness_sentence"])
-
-    def test_one_weakness_uses_singular_grammar(self):
-        structured = summary.fallback_summary(
-            self.cities[0],
-            {
-                "strength_candidates": [],
-                "weakness_candidates": [
-                    {
-                        "field": "crime_index_score",
-                        "label": "Crime index",
-                        "favorable_when_higher": False,
-                        "directional_percentile": 22.0,
-                    }
-                ],
-                "selected_overall_score": 70.0,
-                "tracked_city_average": 60.0,
-                "tracked_city_count": 3,
-                "selected_percentile": 72.0,
-            },
-        )
-        self.assertIn("The main weakness is", structured["weakness_sentence"])
-        self.assertNotIn("The main weaknesses are", structured["weakness_sentence"])
-
-    def test_no_duplicate_tracked_city_phrase_in_strength_sentence(self):
-        structured = summary.fallback_summary(
-            self.cities[0],
-            {
-                "strength_candidates": [
-                    {
-                        "field": "climate_risk_score",
-                        "label": "Climate risk",
-                        "favorable_when_higher": False,
-                        "directional_percentile": 83.0,
-                    }
-                ],
-                "weakness_candidates": [],
-                "selected_overall_score": 70.0,
-                "tracked_city_average": 60.0,
-                "tracked_city_count": 3,
-                "selected_percentile": 72.0,
-            },
-        )
-        self.assertNotIn("tracked cities among tracked cities", structured["strength_sentence"])
-
-    def test_no_duplicate_tracked_city_phrase_in_weakness_sentence(self):
-        structured = summary.fallback_summary(
-            self.cities[0],
-            {
-                "strength_candidates": [],
-                "weakness_candidates": [
-                    {
-                        "field": "crime_index_score",
-                        "label": "Crime index",
-                        "favorable_when_higher": False,
-                        "directional_percentile": 22.0,
-                    }
-                ],
-                "selected_overall_score": 70.0,
-                "tracked_city_average": 60.0,
-                "tracked_city_count": 3,
-                "selected_percentile": 72.0,
-            },
-        )
-        self.assertNotIn("tracked cities relative to tracked cities", structured["weakness_sentence"])
-
     def test_fallback_summary_remains_exactly_three_sentences(self):
         structured = summary.fallback_summary(
-            self.cities[0],
+            {
+                **self.cities[0],
+                "display_name": "Alpha, AA",
+                "population_current": 198432,
+                "employment_current": 101244,
+                "median_income_current": 124968,
+                "crime_rating": "Low",
+                "climate_risk_rating": "High",
+                "landlord_friendliness_label": "Landlord Friendly",
+            },
             {
                 "strength_candidates": [
                     {
-                        "field": "population_growth_recent",
-                        "label": "Population growth",
-                        "favorable_when_higher": True,
-                        "directional_percentile": 83.0,
+                        "field": "employment_growth_recent",
                     },
                     {
-                        "field": "climate_risk_score",
-                        "label": "Climate risk",
-                        "favorable_when_higher": False,
-                        "directional_percentile": 83.0,
+                        "field": "median_income_current",
                     },
                 ],
                 "weakness_candidates": [
                     {
-                        "field": "crime_index_score",
-                        "label": "Crime index",
-                        "favorable_when_higher": False,
-                        "directional_percentile": 22.0,
+                        "field": "climate_risk_score",
                     }
                 ],
-                "selected_overall_score": 63.4,
-                "tracked_city_average": 55.1,
-                "tracked_city_count": 120,
-                "selected_percentile": 68.0,
+                "recommendation_category": summary.RECOMMENDATION_MIXED,
             },
         )
         text = summary.combined_summary(structured)
         self.assertEqual(summary.count_sentences(text), 3)
+
+    def test_fallback_summary_uses_concrete_investor_focused_stats(self):
+        city = {
+            **self.cities[0],
+            "display_name": "Gilbert, AZ",
+            "population_current": 273136,
+            "employment_current": 141205,
+            "median_income_current": 124968,
+            "crime_index_score": 6,
+            "crime_rating": "Very Low",
+            "climate_risk_score": 100,
+            "climate_risk_rating": "Very High",
+            "landlord_friendliness_label": "Landlord Friendly",
+        }
+        structured = summary.fallback_summary(
+            city,
+            {
+                "strength_candidates": [{"field": "employment_growth_recent"}, {"field": "median_income_current"}],
+                "weakness_candidates": [{"field": "climate_risk_score"}],
+                "recommendation_category": summary.RECOMMENDATION_MIXED,
+            },
+        )
+        combined = summary.combined_summary(structured)
+        self.assertIn("$124,968", combined)
+        self.assertIn("141,205", combined)
+        self.assertIn("4.00%", combined)
+        self.assertIn("climate-risk score of 100 (Very High)", combined)
+        self.assertIn("selectively attractive", combined.lower())
+
+    def test_fallback_summary_removes_percentile_and_tracked_city_language(self):
+        city = {**self.cities[0], "display_name": "Alpha, AA", "population_current": 150000, "employment_current": 95000, "median_income_current": 98000}
+        structured = summary.fallback_summary(
+            city,
+            {
+                "strength_candidates": [{"field": "population_growth_recent"}],
+                "weakness_candidates": [{"field": "crime_index_score"}],
+                "recommendation_category": summary.RECOMMENDATION_STRONG,
+            },
+        )
+        combined = summary.combined_summary(structured).lower()
+        self.assertNotIn("percentile", combined)
+        self.assertNotIn("tracked cities", combined)
+        self.assertNotIn("better than roughly", combined)
+        self.assertNotIn("relative_market_profile_score", combined)
+
+    def test_fallback_summary_omits_missing_values_cleanly(self):
+        city = {
+            "city": "Sparse",
+            "state": "SS",
+            "display_name": "Sparse, SS",
+            "population_growth_recent": None,
+            "median_income_current": None,
+            "employment_growth_recent": None,
+            "climate_risk_score": None,
+            "crime_index_score": None,
+        }
+        structured = summary.fallback_summary(
+            city,
+            {
+                "strength_candidates": [{"field": "employment_growth_recent"}],
+                "weakness_candidates": [{"field": "climate_risk_score"}],
+                "recommendation_category": summary.RECOMMENDATION_HIGH_RISK,
+            },
+        )
+        combined = summary.combined_summary(structured).lower()
+        self.assertNotIn("undefined", combined)
+        self.assertNotIn("null", combined)
+        self.assertNotIn("nan", combined)
+
+    def test_fallback_conclusion_wording_by_recommendation_category(self):
+        city = {**self.cities[0], "display_name": "Alpha, AA", "population_current": 200000, "employment_current": 100000, "median_income_current": 100000}
+        strong = summary.combined_summary(
+            summary.fallback_summary(city, {"strength_candidates": [{"field": "employment_growth_recent"}], "weakness_candidates": [], "recommendation_category": summary.RECOMMENDATION_STRONG})
+        ).lower()
+        mixed = summary.combined_summary(
+            summary.fallback_summary(city, {"strength_candidates": [{"field": "median_income_current"}], "weakness_candidates": [{"field": "climate_risk_score"}], "recommendation_category": summary.RECOMMENDATION_MIXED})
+        ).lower()
+        high_risk = summary.combined_summary(
+            summary.fallback_summary(city, {"strength_candidates": [], "weakness_candidates": [{"field": "crime_index_score"}], "recommendation_category": summary.RECOMMENDATION_HIGH_RISK})
+        ).lower()
+        self.assertIn("attractive for further underwriting", strong)
+        self.assertIn("selectively attractive", mixed)
+        self.assertIn("higher risk", high_risk)
+
+    def test_normalize_summary_rejects_percentile_and_prohibited_claims(self):
+        benchmarks = summary.compute_benchmarks(self.cities[0], self.cities)
+        normalized = summary.normalize_summary(
+            {
+                "strength_sentence": "Alpha is better than roughly 90% of tracked cities.",
+                "weakness_sentence": "Cap rate upside is strong with rising rent growth.",
+                "comparison_sentence": "Overall, this is a strong preliminary candidate.",
+            },
+            self.cities[0],
+            benchmarks,
+        )
+        combined = summary.combined_summary(normalized).lower()
+        self.assertNotIn("better than roughly", combined)
+        self.assertNotIn("tracked cities", combined)
+        self.assertNotIn("cap rate", combined)
+        self.assertEqual(summary.count_sentences(summary.combined_summary(normalized)), 3)
+
+    def test_build_prompt_input_and_version_reflect_new_methodology(self):
+        benchmarks = summary.compute_benchmarks(self.cities[0], self.cities)
+        prompt_data = summary.build_prompt_input(self.cities[0], benchmarks)
+        self.assertIn("recommendation_category", prompt_data["benchmarks"])
+        self.assertNotIn("relative_market_profile_percentile", prompt_data["benchmarks"])
+        self.assertEqual(summary.PROMPT_VERSION, "fire_metrics_summary_v3")
+
+    def test_prompt_source_requires_no_percentiles_and_concrete_stats(self):
+        module_source = Path("tools/fire_metrics_ai_summary.py").read_text(encoding="utf-8")
+        self.assertIn("Do not mention percentiles", module_source)
+        self.assertIn("concrete city statistics", module_source)
+        self.assertIn("preliminary investment conclusion", module_source)
+
+    def test_fingerprint_changes_when_prompt_version_changes(self):
+        benchmarks = summary.compute_benchmarks(self.cities[0], self.cities)
+        payload = summary.fingerprint_payload(
+            selected_city=self.cities[0],
+            benchmarks=benchmarks,
+            model_name="model-a",
+            refresh_last_at="2026-07-22T00:00:00+00:00",
+        )
+        fp_current = summary.build_fingerprint(payload)
+        payload_old = dict(payload)
+        payload_old["prompt_version"] = "fire_metrics_summary_v2"
+        fp_old = summary.build_fingerprint(payload_old)
+        self.assertNotEqual(fp_current, fp_old)
 
     def test_ai_disabled_mode_ignores_seeded_cached_summary(self):
         app = Flask(__name__)
