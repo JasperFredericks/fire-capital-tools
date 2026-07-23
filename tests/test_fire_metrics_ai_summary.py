@@ -1202,7 +1202,9 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("aiOverviewMeta.textContent = text;", template)
         self.assertIn("city_key: city.city_key || \"\"", template)
         self.assertIn("selectCurrentSearchCity", template)
-        self.assertIn("fire-searched-city-select", template)
+        self.assertIn("fire-city-chip-list", template)
+        self.assertIn("fire-city-chip-select", template)
+        self.assertIn("fire-city-chip-remove", template)
 
     def test_frontend_quick_ranking_and_city_analytics_hooks_present(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
@@ -1213,7 +1215,10 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("rankingRequestSequence", template)
         self.assertIn("rankingRequestController", template)
         self.assertIn("setCurrentSearchCities", template)
+        self.assertIn("appendToCurrentSearchCities", template)
+        self.assertIn("removeSearchCityByKey", template)
         self.assertIn("selectCurrentSearchCity", template)
+        self.assertIn("clearSearchedCitiesWorkspace", template)
         self.assertIn("mergeCitiesIntoCityAnalytics", template)
         self.assertIn("city_key", template)
         self.assertIn("Clear City Analytics", template)
@@ -1222,6 +1227,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("City Analytics", template)
         self.assertIn("topCitiesUrl", template)
         self.assertIn("Loading", template)
+        self.assertIn("aria-current", template)
+        self.assertIn("Remove", template)
 
     def test_frontend_copy_uses_fire_metrics_plural_and_city_analytics(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
@@ -1230,13 +1237,30 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("Add to City Analytics", template)
         self.assertNotIn(">FIRE Metric<", template)
         self.assertNotIn("Add to Comparison", template)
+        self.assertIn("Clear searched cities", template)
 
     def test_frontend_search_and_multi_search_hooks_remain_present(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
         self.assertIn("splitSearchQueries", template)
         self.assertIn("performSingleSearch", template)
         self.assertIn("performMultiSearch", template)
+        self.assertIn("performRankingShortcut", template)
+        self.assertIn("summaryRequestSequence", template)
         self.assertIn("_strip_trailing_census_suffix", Path("fire_metrics/fire_metrics_updater/db.py").read_text(encoding="utf-8"))
+
+    def test_frontend_old_searched_city_tabs_and_dropdown_are_removed(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertNotIn("Searched Cities", template)
+        self.assertNotIn("fire-searched-city-select", template)
+        self.assertNotIn("fire-searched-cities-tabs", template)
+        self.assertNotIn('role="tablist"', template)
+
+    def test_frontend_chip_picker_has_single_text_input_and_live_regions(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertEqual(template.count('id="fire-search-input"'), 1)
+        self.assertIn('id="fire-city-picker-status"', template)
+        self.assertIn('aria-live="polite"', template)
+        self.assertIn('id="quick-ranking-status"', template)
 
     def test_model_output_html_is_sanitized(self):
         normalized = summary.normalize_summary(

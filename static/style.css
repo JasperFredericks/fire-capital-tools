@@ -1090,21 +1090,92 @@ hr.divider {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 10px;
+  align-items: start;
+}
+
+.fire-city-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.fire-city-chip-list {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  background: #ffffff;
+}
+
+.fire-city-chip-list:focus-within {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
 
 .fire-search-input {
-  width: 100%;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  padding: 11px 12px;
+  flex: 1 1 180px;
+  min-width: 180px;
+  border: none;
+  background: transparent;
+  padding: 8px;
   font-size: 14px;
   color: #111827;
 }
 
 .fire-search-input:focus {
-  border-color: #2563eb;
   outline: none;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.fire-city-chip {
+  max-width: min(320px, 100%);
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  background: #f8fafc;
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+}
+
+.fire-city-chip.active {
+  border-color: #60a5fa;
+  background: #dbeafe;
+}
+
+.fire-city-chip-select,
+.fire-city-chip-remove {
+  border: none;
+  background: transparent;
+  color: #1f2937;
+  cursor: pointer;
+}
+
+.fire-city-chip-select {
+  max-width: 250px;
+  padding: 6px 8px 6px 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+
+.fire-city-chip-remove {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  margin-right: 4px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.fire-city-chip-select:focus-visible,
+.fire-city-chip-remove:focus-visible,
+.quick-ranking-btn:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 2px;
 }
 
 .fire-suggestion-grid {
@@ -1126,12 +1197,6 @@ hr.divider {
   line-height: 1.35;
   padding: 7px 11px;
   border-radius: 999px;
-}
-
-.quick-ranking-btn:focus-visible,
-.fire-searched-city-tab:focus-visible {
-  outline: 2px solid #1d4ed8;
-  outline-offset: 2px;
 }
 
 .quick-ranking-btn:disabled {
@@ -1204,65 +1269,6 @@ hr.divider {
   margin-top: 12px;
   display: flex;
   justify-content: flex-end;
-}
-
-.fire-searched-cities-switcher {
-  margin-top: 14px;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  background: #ffffff;
-  padding: 10px;
-  display: grid;
-  gap: 8px;
-}
-
-.fire-searched-cities-header {
-  font-size: 11px;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  color: #374151;
-  font-weight: 600;
-}
-
-.fire-searched-cities-tabs {
-  display: flex;
-  overflow-x: auto;
-  gap: 8px;
-  padding-bottom: 2px;
-}
-
-.fire-searched-city-tab {
-  border: 1px solid #d1d5db;
-  border-radius: 999px;
-  background: #f9fafb;
-  color: #1f2937;
-  font-size: 12px;
-  padding: 6px 10px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.fire-searched-city-tab[aria-selected="true"] {
-  background: #dbeafe;
-  border-color: #60a5fa;
-  color: #1d4ed8;
-  font-weight: 600;
-}
-
-.fire-searched-city-select-label {
-  display: none;
-  font-size: 12px;
-  color: #4b5563;
-}
-
-.fire-searched-city-select {
-  display: none;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 13px;
-  color: #111827;
-  background: #ffffff;
 }
 
 .fire-ai-overview {
@@ -1476,6 +1482,30 @@ hr.divider {
     grid-template-columns: 1fr;
   }
 
+  .fire-search-row > .btn {
+    min-height: 44px;
+  }
+
+  .fire-search-input {
+    min-width: 140px;
+    flex-basis: 140px;
+  }
+
+  .fire-city-chip {
+    max-width: 100%;
+    min-height: 40px;
+  }
+
+  .fire-city-chip-select {
+    max-width: 220px;
+    min-height: 36px;
+  }
+
+  .fire-city-chip-remove {
+    width: 32px;
+    height: 32px;
+  }
+
   .quick-ranking-controls {
     display: grid;
     grid-template-columns: 1fr;
@@ -1488,13 +1518,8 @@ hr.divider {
     min-height: 40px;
   }
 
-  .fire-searched-cities-tabs {
-    display: none;
-  }
-
-  .fire-searched-city-select-label,
-  .fire-searched-city-select {
-    display: block;
+  .fire-city-picker .btn {
+    min-height: 44px;
   }
 
   .fire-city-dashboard {

@@ -24,27 +24,27 @@
 <div class="card">
   <h2 class="dashboard-section-title">Search Dashboard</h2>
   <form id="fire-search-form" class="fire-search-row" autocomplete="off">
-    <input
-      id="fire-search-input"
-      class="fire-search-input"
-      type="text"
-      name="q"
-      value="{{ search_query }}"
-      placeholder="Search one or more cities, e.g. NYC, Chicago, Seattle"
-    >
-    <button class="btn btn-primary" type="submit">Search</button>
+    <div class="fire-city-picker" aria-label="City search picker">
+      <div id="fire-city-chip-list" class="fire-city-chip-list">
+        <input
+          id="fire-search-input"
+          class="fire-search-input"
+          type="text"
+          name="q"
+          value="{{ search_query }}"
+          placeholder="Search one or more cities"
+          aria-label="Search one or more cities"
+        >
+      </div>
+      <button id="clear-searched-cities-btn" class="btn btn-ghost" type="button" style="display:none;">Clear searched cities</button>
+    </div>
+    <button class="btn btn-primary" type="submit">Add</button>
   </form>
   <p class="result-note" style="margin-top:8px;">Separate multiple cities with commas to add them to City Analytics.</p>
+  <div id="fire-city-picker-status" class="result-note" aria-live="polite" style="margin-top:8px;"></div>
 
   <div id="fire-search-message" class="alert alert-info" style="display:none; margin-top:14px;"></div>
   <div id="fire-suggestions" class="fire-suggestion-grid" style="display:none;"></div>
-
-  <div id="fire-searched-cities-switcher" class="fire-searched-cities-switcher" style="display:none;">
-    <div class="fire-searched-cities-header">Searched Cities</div>
-    <div id="fire-searched-cities-tabs" class="fire-searched-cities-tabs" role="tablist" aria-label="Searched cities"></div>
-    <label for="fire-searched-city-select" class="fire-searched-city-select-label">View searched city</label>
-    <select id="fire-searched-city-select" class="fire-searched-city-select" aria-label="View searched city"></select>
-  </div>
 
   <div id="fire-city-dashboard" class="fire-city-dashboard" style="display:none; margin-top:16px;">
     <div class="result-header">
@@ -293,13 +293,13 @@
   const csrfToken = "{{ csrf_token() }}";
   const form = document.getElementById("fire-search-form");
   const input = document.getElementById("fire-search-input");
+  const cityChipList = document.getElementById("fire-city-chip-list");
+  const cityPickerStatus = document.getElementById("fire-city-picker-status");
+  const clearSearchedCitiesBtn = document.getElementById("clear-searched-cities-btn");
   const messageEl = document.getElementById("fire-search-message");
   const suggestionsEl = document.getElementById("fire-suggestions");
   const rankingStatusEl = document.getElementById("quick-ranking-status");
   const rankingButtons = Array.from(document.querySelectorAll(".quick-ranking-btn"));
-  const searchedCitiesSwitcher = document.getElementById("fire-searched-cities-switcher");
-  const searchedCitiesTabs = document.getElementById("fire-searched-cities-tabs");
-  const searchedCitySelect = document.getElementById("fire-searched-city-select");
   const dashboardEl = document.getElementById("fire-city-dashboard");
   const statusChip = document.getElementById("status-chip");
   const addToComparisonBtn = document.getElementById("add-to-comparison-btn");
@@ -556,85 +556,227 @@
     return cleanCityDisplayName(getDisplayField(city));
   }
 
-  function showSearchedCitySelector() {
-    if (!searchedCitiesSwitcher) return;
-    searchedCitiesSwitcher.style.display = currentSearchCities.length > 1 ? "grid" : "none";
+  function setCityPickerStatus(text) {
+    if (!cityPickerStatus) return;
+    cityPickerStatus.textContent = text || "";
   }
 
-  function renderSearchedCitySelector() {
-    if (!searchedCitiesTabs || !searchedCitySelect) return;
+  function chipSelectButtons() {
+    if (!cityChipList) return [];
+    return Array.from(cityChipList.querySelectorAll(".fire-city-chip-select"));
+  }
 
-    searchedCitiesTabs.innerHTML = "";
-    searchedCitySelect.innerHTML = "";
+  function focusSearchInput() {
+    if (!input) return;
+    input.focus();
+  }
+
+  function updateSearchPlaceholder() {
+    if (!input) return;
+    input.placeholder = currentSearchCities.length ? "Add another city" : "Search one or more cities";
+  }
+
+  function clearOverviewImmediate() {
+    if (summaryRequestController) {
+      summaryRequestController.abort();
+      summaryRequestController = null;
+    }
+    clearOverview();
+  }
+
+  function renderCityChips() {
+    if (!cityChipList || !input) return;
+
+    cityChipList.querySelectorAll(".fire-city-chip").forEach((node) => node.remove());
 
     currentSearchCities.forEach((city, index) => {
       const key = stableCityKey(city);
       const label = cityLabel(city);
 
-      const tab = document.createElement("button");
-      tab.type = "button";
-      tab.className = "fire-searched-city-tab";
-      tab.setAttribute("role", "tab");
-      tab.setAttribute("data-city-key", key);
-      tab.id = `fire-city-tab-${index}`;
-      tab.setAttribute("aria-controls", "fire-city-dashboard");
-      tab.setAttribute("aria-selected", key === activeSearchCityKey ? "true" : "false");
-      tab.tabIndex = key === activeSearchCityKey ? 0 : -1;
-      tab.textContent = label;
-      tab.addEventListener("click", () => {
+      const chip = document.createElement("div");
+      chip.className = `fire-city-chip${key === activeSearchCityKey ? " active" : ""}`;
+      chip.setAttribute("data-city-key", key);
+
+      const selectButton = document.createElement("button");
+      selectButton.type = "button";
+      selectButton.className = "fire-city-chip-select";
+      selectButton.setAttribute("data-city-key", key);
+      selectButton.setAttribute("title", label);
+      selectButton.setAttribute("aria-label", `View ${label}`);
+      selectButton.setAttribute("aria-current", key === activeSearchCityKey ? "true" : "false");
+      selectButton.textContent = label;
+      selectButton.addEventListener("click", () => {
         selectCurrentSearchCity(key);
       });
-      tab.addEventListener("keydown", (event) => {
+      selectButton.addEventListener("keydown", (event) => {
+        const buttons = chipSelectButtons();
+        const buttonIndex = buttons.findIndex((item) => item.getAttribute("data-city-key") === key);
+        if (buttonIndex < 0) return;
+
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectCurrentSearchCity(key);
+          return;
+        }
+
+        if (event.key === "Delete" || event.key === "Backspace") {
+          event.preventDefault();
+          removeSearchCityByKey(key, { focusSource: "chip", chipIndexHint: buttonIndex });
+          return;
+        }
+
         if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
         event.preventDefault();
-        const tabs = Array.from(searchedCitiesTabs.querySelectorAll('[role="tab"]'));
-        if (!tabs.length) return;
-        let nextIndex = tabs.findIndex((item) => item.getAttribute("data-city-key") === key);
-        if (event.key === "ArrowRight") nextIndex = (nextIndex + 1) % tabs.length;
-        if (event.key === "ArrowLeft") nextIndex = (nextIndex - 1 + tabs.length) % tabs.length;
+        if (!buttons.length) return;
+        let nextIndex = buttonIndex;
+        if (event.key === "ArrowRight") nextIndex = (nextIndex + 1) % buttons.length;
+        if (event.key === "ArrowLeft") nextIndex = (nextIndex - 1 + buttons.length) % buttons.length;
         if (event.key === "Home") nextIndex = 0;
-        if (event.key === "End") nextIndex = tabs.length - 1;
-        const nextKey = tabs[nextIndex].getAttribute("data-city-key") || "";
-        selectCurrentSearchCity(nextKey);
+        if (event.key === "End") nextIndex = buttons.length - 1;
+        buttons[nextIndex].focus();
       });
-      searchedCitiesTabs.appendChild(tab);
 
-      const option = document.createElement("option");
-      option.value = key;
-      option.textContent = label;
-      option.selected = key === activeSearchCityKey;
-      searchedCitySelect.appendChild(option);
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "fire-city-chip-remove";
+      removeButton.setAttribute("data-city-key", key);
+      removeButton.setAttribute("aria-label", `Remove ${label}`);
+      removeButton.setAttribute("title", `Remove ${label}`);
+      removeButton.textContent = "×";
+      removeButton.addEventListener("click", () => {
+        removeSearchCityByKey(key, { focusSource: "remove", chipIndexHint: index });
+      });
+
+      chip.appendChild(selectButton);
+      chip.appendChild(removeButton);
+      cityChipList.insertBefore(chip, input);
     });
 
-    showSearchedCitySelector();
+    updateSearchPlaceholder();
+    if (clearSearchedCitiesBtn) {
+      clearSearchedCitiesBtn.style.display = currentSearchCities.length >= 2 ? "inline-flex" : "none";
+    }
   }
 
-  function setCurrentSearchCities(cities) {
-    currentSearchCities = dedupeCitiesByStableKey(cities || []);
+  function setCurrentSearchCities(cities, options = {}) {
+    const nextCities = dedupeCitiesByStableKey(cities || []);
+    const preserveActive = !!options.preserveActive;
+    const hasActive = nextCities.some((city) => stableCityKey(city) === activeSearchCityKey);
+    currentSearchCities = nextCities;
+    if (!preserveActive || !hasActive) {
+      activeSearchCityKey = "";
+    }
+    renderCityChips();
+  }
+
+  function clearSearchedCitiesWorkspace(options = {}) {
+    const shouldFocusInput = options.focusInput !== false;
+    currentSearchCities = [];
     activeSearchCityKey = "";
-    renderSearchedCitySelector();
+    currentCity = null;
+    clearOverviewImmediate();
+    resetComparisonAddButton();
+    dashboardEl.style.display = "none";
+    renderCityChips();
+    renderMapPoints();
+    setCityPickerStatus("Cleared searched cities.");
+    if (shouldFocusInput) {
+      focusSearchInput();
+    }
   }
 
   function clearCurrentSearchCities() {
-    currentSearchCities = [];
-    activeSearchCityKey = "";
-    renderSearchedCitySelector();
+    clearSearchedCitiesWorkspace({ focusInput: false });
+  }
+
+  function appendToCurrentSearchCities(cities) {
+    const incoming = dedupeCitiesByStableKey(cities || []);
+    if (!incoming.length) {
+      return { merged: currentSearchCities.slice(), added: [], firstAdded: null };
+    }
+
+    const merged = currentSearchCities.slice();
+    const indexByKey = new Map();
+    merged.forEach((city, index) => indexByKey.set(stableCityKey(city), index));
+    const added = [];
+
+    incoming.forEach((city) => {
+      const key = stableCityKey(city);
+      if (!key) return;
+      if (indexByKey.has(key)) {
+        merged[indexByKey.get(key)] = city;
+        return;
+      }
+      indexByKey.set(key, merged.length);
+      merged.push(city);
+      added.push(city);
+    });
+
+    const previousActive = activeSearchCityKey;
+    setCurrentSearchCities(merged, { preserveActive: true });
+    if (previousActive && currentSearchCities.some((city) => stableCityKey(city) === previousActive)) {
+      activeSearchCityKey = previousActive;
+      renderCityChips();
+    }
+    return { merged, added, firstAdded: added[0] || null };
+  }
+
+  function removeSearchCityByKey(cityKeyToRemove, options = {}) {
+    const chipIndexHint = Number.isInteger(options.chipIndexHint) ? options.chipIndexHint : -1;
+    const focusSource = options.focusSource || "remove";
+    const idx = currentSearchCities.findIndex((city) => stableCityKey(city) === cityKeyToRemove);
+    if (idx < 0) return;
+
+    const wasActive = activeSearchCityKey === cityKeyToRemove || (currentCity && stableCityKey(currentCity) === cityKeyToRemove);
+    const remaining = currentSearchCities.filter((city) => stableCityKey(city) !== cityKeyToRemove);
+
+    if (!remaining.length) {
+      clearSearchedCitiesWorkspace({ focusInput: true });
+      return;
+    }
+
+    if (!wasActive) {
+      setCurrentSearchCities(remaining, { preserveActive: true });
+      renderMapPoints();
+      if (focusSource !== "mouse") {
+        const nextButtons = chipSelectButtons();
+        const targetIdx = Math.max(0, Math.min(chipIndexHint, nextButtons.length - 1));
+        if (nextButtons[targetIdx]) {
+          nextButtons[targetIdx].focus();
+        }
+      }
+      return;
+    }
+
+    const nextIndex = Math.min(idx, remaining.length - 1);
+    const nextKey = stableCityKey(remaining[nextIndex]);
+    setCurrentSearchCities(remaining, { preserveActive: false });
+    selectCurrentSearchCity(nextKey);
+
+    if (focusSource !== "mouse") {
+      const nextButtons = chipSelectButtons();
+      if (nextButtons[nextIndex]) {
+        nextButtons[nextIndex].focus();
+      }
+    }
   }
 
   function selectCurrentSearchCity(targetKey) {
     if (!currentSearchCities.length) {
       currentCity = null;
+      activeSearchCityKey = "";
       resetComparisonAddButton();
       dashboardEl.style.display = "none";
-      clearOverview();
+      clearOverviewImmediate();
+      renderCityChips();
       renderMapPoints();
       return;
     }
 
     const nextCity = currentSearchCities.find((city) => stableCityKey(city) === targetKey) || currentSearchCities[0];
     activeSearchCityKey = stableCityKey(nextCity);
-    renderSearchedCitySelector();
-    if (searchedCitySelect) searchedCitySelect.value = activeSearchCityKey;
+    renderCityChips();
+    clearOverviewImmediate();
     renderCity(nextCity);
   }
 
@@ -747,7 +889,7 @@
     const mySequence = rankingRequestSequence;
 
     setRankingButtonsDisabled(true);
-    const loadingMessage = `Loading ${loadingLabel} cities...`;
+    const loadingMessage = `Loading ${String(loadingLabel || "selected metric").replace(/-/g, " ")} cities...`;
     setRankingStatus(loadingMessage);
     showMessage(loadingMessage, "info");
 
@@ -783,6 +925,7 @@
       const success = `Loaded the ${payload.city_count} tracked cities for ${metricPhrase}.`;
       showMessage(success, "success");
       setRankingStatus(`${payload.metric_label}: loaded ${payload.city_count} cities.`);
+      setCityPickerStatus(`Loaded ${payload.city_count} ranked searched cities.`);
     } catch (err) {
       if (err && err.name === "AbortError") {
         return;
@@ -1385,10 +1528,7 @@
   async function performSingleSearch(query) {
     if (!query || !query.trim()) {
       showMessage("Enter a city name to search FIRE Metrics data.", "warning");
-      clearCurrentSearchCities();
-      dashboardEl.style.display = "none";
-      hideSuggestions();
-      clearOverview();
+      setCityPickerStatus("Type a city name to add it to searched cities.");
       return;
     }
 
@@ -1398,45 +1538,39 @@
 
       if (status === "found") {
         hideSuggestions();
-        showMessage(payload.user_message || "City found.", "success");
-        setCurrentSearchCities([payload.city || {}]);
-        selectCurrentSearchCity(stableCityKey(sanitizeCity(payload.city || {})));
+        const foundCity = sanitizeCity(payload.city || {});
+        const key = stableCityKey(foundCity);
+        const result = appendToCurrentSearchCities([foundCity]);
+        if (result.added.length) {
+          setCityPickerStatus(`Added ${cityLabel(foundCity)}.`);
+          showMessage(payload.user_message || "City added.", "success");
+        } else {
+          setCityPickerStatus(`${cityLabel(foundCity)} is already in searched cities.`);
+          showMessage(payload.user_message || "City already present. Activated it.", "info");
+        }
+        selectCurrentSearchCity(key);
+        input.value = "";
         return;
       }
 
       if (status === "suggestions") {
-        clearCurrentSearchCities();
-        currentCity = null;
-        resetComparisonAddButton();
-        dashboardEl.style.display = "none";
         showMessage(payload.user_message || "No exact match found.", "info");
         renderSuggestions(payload.suggestions || []);
-        clearOverview();
-        renderMapPoints();
+        setCityPickerStatus("Select one of the suggested cities to add it.");
         return;
       }
 
-      clearCurrentSearchCities();
-      currentCity = null;
-      resetComparisonAddButton();
-      dashboardEl.style.display = "none";
       hideSuggestions();
       if (status === "excluded" || status === "not_found") {
         showMessage(payload.user_message, "warning");
       } else {
         showMessage(payload.user_message || "Search failed.", "error");
       }
-      clearOverview();
-      renderMapPoints();
+      setCityPickerStatus("No city chip was added for that search.");
     } catch (err) {
-      clearCurrentSearchCities();
-      currentCity = null;
-      resetComparisonAddButton();
-      dashboardEl.style.display = "none";
       hideSuggestions();
       showMessage(`Search failed: ${err}`, "error");
-      clearOverview();
-      renderMapPoints();
+      setCityPickerStatus("Search failed; existing searched cities are unchanged.");
     }
   }
 
@@ -1483,15 +1617,11 @@
 
     hideSuggestions();
     if (foundCities.length) {
-      setCurrentSearchCities(foundCities);
-      selectCurrentSearchCity(stableCityKey(foundCities[0]));
-    } else {
-      clearCurrentSearchCities();
-      currentCity = null;
-      resetComparisonAddButton();
-      dashboardEl.style.display = "none";
-      clearOverview();
-      renderMapPoints();
+      const appendResult = appendToCurrentSearchCities(foundCities);
+      const firstCity = appendResult.firstAdded || foundCities[0];
+      selectCurrentSearchCity(stableCityKey(firstCity));
+      input.value = "";
+      setCityPickerStatus(`Added ${appendResult.added.length || 0} new searched ${appendResult.added.length === 1 ? "city" : "cities"}.`);
     }
 
     const messages = [];
@@ -1541,6 +1671,31 @@
     performSearch(input.value);
   });
 
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Backspace" && !input.value) {
+      const chips = chipSelectButtons();
+      if (chips.length) {
+        event.preventDefault();
+        chips[chips.length - 1].focus();
+      }
+      return;
+    }
+
+    if (event.key === "ArrowLeft" && !input.value) {
+      const chips = chipSelectButtons();
+      if (chips.length) {
+        event.preventDefault();
+        chips[chips.length - 1].focus();
+      }
+    }
+  });
+
+  if (clearSearchedCitiesBtn) {
+    clearSearchedCitiesBtn.addEventListener("click", () => {
+      clearSearchedCitiesWorkspace({ focusInput: true });
+    });
+  }
+
   rankingButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const metric = button.getAttribute("data-metric") || "";
@@ -1576,11 +1731,7 @@
   renderComparisonTable();
   resetComparisonAddButton();
   clearOverview();
-  if (searchedCitySelect) {
-    searchedCitySelect.addEventListener("change", () => {
-      selectCurrentSearchCity(searchedCitySelect.value || "");
-    });
-  }
+  renderCityChips();
   cleanIndexedCitySamples();
   initializeGoogleMap();
   renderMapPoints();
@@ -1588,14 +1739,13 @@
   if (payloadFromServer) {
     if (payloadFromServer.status === "found") {
       showMessage(payloadFromServer.user_message || "City found.", "success");
-      setCurrentSearchCities([payloadFromServer.city || {}]);
-      selectCurrentSearchCity(stableCityKey(sanitizeCity(payloadFromServer.city || {})));
+      const bootCity = sanitizeCity(payloadFromServer.city || {});
+      appendToCurrentSearchCities([bootCity]);
+      selectCurrentSearchCity(stableCityKey(bootCity));
     } else if (payloadFromServer.status === "suggestions") {
-      clearCurrentSearchCities();
       showMessage(payloadFromServer.user_message || "No exact match found.", "info");
       renderSuggestions(payloadFromServer.suggestions || []);
     } else if (payloadFromServer.user_message) {
-      clearCurrentSearchCities();
       showMessage(payloadFromServer.user_message, payloadFromServer.status === "excluded" ? "warning" : "info");
     }
   }
