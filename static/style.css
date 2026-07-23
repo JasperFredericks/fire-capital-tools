@@ -295,6 +295,13 @@ a { color: inherit; text-decoration: none; }
 }
 .btn-ghost:hover { background: #f9fafb; }
 
+.btn-danger {
+  background: transparent;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+}
+.btn-danger:hover { background: #fef2f2; }
+
 /* ── Upload zone ─────────────────────────────────────────────────────────── */
 .upload-zone {
   border: 2px dashed #d1d5db;

@@ -83,10 +83,13 @@
   }
 
   var headers = table.tHead.rows[0].cells;
+  var sortableHeaders = [];
   Array.prototype.forEach.call(headers, function (th, colIndex) {
     var sortType = th.getAttribute("data-sort");
     if (!sortType) return;
     var ascending = true;
+    var label = th.textContent;
+    sortableHeaders.push(th);
     th.addEventListener("click", function () {
       var rows = Array.prototype.filter.call(tbody.rows, function (row) {
         return row.cells.length > 1;
@@ -101,6 +104,12 @@
         return 0;
       });
       rows.forEach(function (row) { tbody.appendChild(row); });
+      // Visual feedback on which column is sorted and in which direction --
+      // clicking a header previously gave no indication a sort had even
+      // happened beyond the row order itself.
+      sortableHeaders.forEach(function (otherTh) { otherTh.textContent = otherTh.getAttribute("data-label") || otherTh.textContent; });
+      th.setAttribute("data-label", label);
+      th.textContent = label + (ascending ? " ▲" : " ▼");
       ascending = !ascending;
     });
   });

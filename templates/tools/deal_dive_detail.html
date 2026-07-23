@@ -14,9 +14,9 @@
 </div>
 
 <div class="card">
-  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
     <span class="source-badge deal-status-{{ deal.status }}" style="font-size:13px; padding:6px 12px;">{{ deal.status.replace('_', ' ')|title }}</span>
-    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+    <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
       <form method="POST" action="{{ url_for('deal_dive.update_status', deal_id=deal.id) }}" style="display:flex; gap:8px; align-items:center;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <select class="form-input" name="status" style="width:auto;">
@@ -26,12 +26,15 @@
         </select>
         <button type="submit" class="btn btn-ghost">Update Status</button>
       </form>
-      <a href="{{ url_for('deal_dive.edit_deal', deal_id=deal.id) }}" class="btn btn-ghost">Edit</a>
-      <form method="POST" action="{{ url_for('deal_dive.delete_deal', deal_id=deal.id) }}"
-            onsubmit="return confirm('Delete this deal permanently? This removes all its comps and uploaded files and cannot be undone.');">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-ghost" style="color:#dc2626;">Delete</button>
-      </form>
+      <div style="width:1px; align-self:stretch; background:#f3f4f6;"></div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <a href="{{ url_for('deal_dive.edit_deal', deal_id=deal.id) }}" class="btn btn-ghost">Edit</a>
+        <form method="POST" action="{{ url_for('deal_dive.delete_deal', deal_id=deal.id) }}"
+              onsubmit="return confirm('Delete this deal permanently? This removes all its comps and uploaded files and cannot be undone.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-danger">Delete</button>
+        </form>
+      </div>
     </div>
   </div>
 </div>
