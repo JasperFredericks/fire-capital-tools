@@ -10,7 +10,7 @@ from flask import Flask
 from fire_metrics.fire_metrics_updater import db as db_module
 from tools import fire_metrics as fire_metrics_routes
 from tools import fire_metrics_ai_summary as summary
-from tools.fire_metrics import _summary_unavailable_response, city_summary
+from tools.fire_metrics import _summary_unavailable_response, city_summary, top_cities
 
 
 def make_city(
@@ -157,6 +157,106 @@ class FireMetricsAISummaryTests(unittest.TestCase):
             response = result
             status_code = response.status_code
         return status_code, response.get_json()
+
+    def _call_top_cities(self, app: Flask, metric: str, limit: int | None = None):
+        query = {"metric": metric}
+        if limit is not None:
+            query["limit"] = str(limit)
+        with app.test_request_context(
+            "/tools/fire-metrics/api/top-cities",
+            method="GET",
+            query_string=query,
+        ):
+            result = top_cities.__wrapped__()
+        if isinstance(result, tuple):
+            response, status_code = result
+        else:
+            response = result
+            status_code = response.status_code
+        return status_code, response.get_json()
+
+    def _seed_top_cities_fixture(self, conn: sqlite3.Connection) -> None:
+        rows = [
+            ("Arbor", "AA", 120000, 0.040, 0.050, 0.030, 0.040, 30.0, 15.0, 10.0, 33.1, -84.3, 1),
+            ("Benton", "AA", 90000, 0.020, 0.030, 0.010, 0.010, 40.0, 15.0, 25.0, 34.2, -83.3, 1),
+            ("Cedar", "AA", 150000, -0.010, 0.000, -0.020, -0.010, 35.0, 15.0, 10.0, 35.3, -82.3, 1),
+            ("Dover", "BB", 50000, 0.010, 0.020, 0.000, 0.020, 25.0, 22.0, 30.0, 36.4, -81.3, 1),
+            ("Essex", "BB", 70000, 0.015, 0.018, 0.012, 0.015, 28.0, 35.0, 32.0, 37.5, -80.3, 1),
+            ("Fairview", "CC", 80000, 0.022, 0.019, 0.011, 0.017, 22.0, 45.0, 28.0, 38.6, -79.3, 1),
+            ("Grove", "CC", 85000, 0.023, 0.021, 0.013, 0.019, 27.0, 55.0, 26.0, 39.7, -78.3, 1),
+            ("Harbor", "DD", 92000, 0.025, -0.005, 0.015, 0.021, 32.0, 65.0, 24.0, 40.8, -77.3, 1),
+            ("Irving", "DD", 94000, 0.026, 0.010, 0.016, 0.023, 20.0, 75.0, 22.0, 41.9, -76.3, 1),
+            ("Jasper", "EE", 96000, 0.027, 0.011, 0.017, 0.025, 24.0, 85.0, 20.0, 42.0, -75.3, 1),
+            ("Kingston", "EE", 98000, 0.028, 0.012, 0.018, 0.027, 26.0, 95.0, 18.0, 43.1, -74.3, 1),
+            ("Larkin", "FF", 99000, 0.029, 0.013, 0.019, 0.029, 29.0, 105.0, 16.0, 44.2, -73.3, 1),
+            ("Monroe", "FF", 65000, 0.021, 0.022, 0.009, 0.018, 31.0, None, 19.0, 45.3, -72.3, 1),
+            ("Noble", "GG", 200000, 0.090, 0.100, 0.080, 0.090, 1.0, 1.0, 1.0, 46.4, -71.3, 0),
+        ]
+
+        for city, state, population, pop_growth, income_growth, job_growth, home_growth, climate, crime, density, lat, lng, include_flag in rows:
+            display = f"{city}, {state}"
+            conn.execute(
+                """
+                INSERT INTO cities (
+                    city, state, display_name, normalized_city, normalized_display_name, search_key,
+                    latitude, longitude, include_flag,
+                    population_current, population_growth_recent,
+                    median_income_growth_recent, employment_growth_recent,
+                    median_home_value_growth_recent, climate_risk_score,
+                    crime_index_score, density_adjusted_crime_score,
+                    climate_risk_rating, crime_rating, density_adjusted_crime_rating,
+                    population_updated_at, income_updated_at, home_value_updated_at,
+                    employment_updated_at, climate_updated_at, crime_updated_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?,
+                    ?, ?,
+                    ?, ?,
+                    ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?
+                )
+                """,
+                (
+                    city,
+                    state,
+                    display,
+                    city.lower(),
+                    display.lower(),
+                    f"{city.lower()} {state.lower()}",
+                    lat,
+                    lng,
+                    include_flag,
+                    population,
+                    pop_growth,
+                    income_growth,
+                    job_growth,
+                    home_growth,
+                    climate,
+                    crime,
+                    density,
+                    "Moderate",
+                    "Moderate",
+                    "Moderate",
+                    "2026-07-20T00:00:00+00:00",
+                    "2026-07-20T00:00:00+00:00",
+                    "2026-07-20T00:00:00+00:00",
+                    "2026-07-20T00:00:00+00:00",
+                    "2026-07-20T00:00:00+00:00",
+                    "2026-07-20T00:00:00+00:00",
+                ),
+            )
+        conn.commit()
+
+    def _assert_metric_sorted(self, payload: dict, metric: str, direction: str) -> None:
+        values = [city.get(metric) for city in payload.get("cities", [])]
+        self.assertTrue(values, "Expected ranking payload with at least one city")
+        if direction == "asc":
+            self.assertEqual(values, sorted(values))
+        else:
+            self.assertEqual(values, sorted(values, reverse=True))
 
     def test_tracked_city_average_excludes_null_overall_scores(self):
         bench = summary.compute_benchmarks(self.cities[0], self.cities)
@@ -805,6 +905,291 @@ class FireMetricsAISummaryTests(unittest.TestCase):
             else:
                 os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
 
+    def test_top_cities_lowest_crime_sorts_ascending(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-crime-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "crime_index_score")
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["direction"], "asc")
+                self._assert_metric_sorted(payload, "crime_index_score", "asc")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_lowest_density_adjusted_crime_sorts_ascending(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-density-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "density_adjusted_crime_score")
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["direction"], "asc")
+                self._assert_metric_sorted(payload, "density_adjusted_crime_score", "asc")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_highest_job_growth_sorts_descending(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-jobs-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "employment_growth_recent")
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["direction"], "desc")
+                self._assert_metric_sorted(payload, "employment_growth_recent", "desc")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_highest_population_growth_sorts_descending(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-pop-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "population_growth_recent")
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["direction"], "desc")
+                self._assert_metric_sorted(payload, "population_growth_recent", "desc")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_highest_income_growth_sorts_descending(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-income-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "median_income_growth_recent")
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["direction"], "desc")
+                self._assert_metric_sorted(payload, "median_income_growth_recent", "desc")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_highest_home_value_growth_sorts_descending(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-home-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "median_home_value_growth_recent")
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["direction"], "desc")
+                self._assert_metric_sorted(payload, "median_home_value_growth_recent", "desc")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_lowest_climate_risk_sorts_ascending(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-climate-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "climate_risk_score")
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["direction"], "asc")
+                self._assert_metric_sorted(payload, "climate_risk_score", "asc")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_excludes_null_values(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-nulls-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "crime_index_score")
+                self.assertEqual(status_code, 200)
+                self.assertTrue(all(city.get("crime_index_score") is not None for city in payload["cities"]))
+                self.assertNotIn("Monroe", [city["city"] for city in payload["cities"]])
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_zero_and_negative_growth_values_are_eligible(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-negative-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    minimal_rows = [
+                        ("ZeroTown", "ZT", 50000, 0.0),
+                        ("NegativeTown", "NT", 60000, -0.01),
+                        ("PositiveTown", "PT", 70000, 0.02),
+                    ]
+                    for city, state, population, growth in minimal_rows:
+                        display = f"{city}, {state}"
+                        conn.execute(
+                            """
+                            INSERT INTO cities (
+                                city, state, display_name, normalized_city, normalized_display_name, search_key,
+                                include_flag, population_current, employment_growth_recent
+                            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                            """,
+                            (
+                                city,
+                                state,
+                                display,
+                                city.lower(),
+                                display.lower(),
+                                f"{city.lower()} {state.lower()}",
+                                population,
+                                growth,
+                            ),
+                        )
+                    conn.commit()
+                status_code, payload = self._call_top_cities(app, "employment_growth_recent", limit=10)
+                self.assertEqual(status_code, 200)
+                values = [city.get("employment_growth_recent") for city in payload["cities"]]
+                self.assertIn(0.0, values)
+                self.assertIn(-0.01, values)
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_limit_is_capped_to_ten(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-limit-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "crime_index_score", limit=999)
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["city_count"], 10)
+                self.assertLessEqual(len(payload["cities"]), 10)
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_returns_unique_city_rows(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-unique-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "population_growth_recent", limit=10)
+                self.assertEqual(status_code, 200)
+                keys = [city.get("city_key") for city in payload["cities"]]
+                self.assertEqual(len(keys), len(set(keys)))
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_tie_breaking_is_deterministic(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-ties-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "crime_index_score", limit=10)
+                self.assertEqual(status_code, 200)
+                keys = [city.get("city_key") for city in payload["cities"]]
+                # Arbor/Benton/Cedar share key crime values; Cedar has higher population than Benton.
+                self.assertLess(keys.index("Cedar|AA"), keys.index("Benton|AA"))
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_invalid_metric_is_rejected(self):
+        app = Flask(__name__)
+        status_code, payload = self._call_top_cities(app, "landlord_friendliness_score")
+        self.assertEqual(status_code, 400)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["error_code"], "invalid_metric")
+
+    def test_top_cities_sql_injection_like_metric_is_rejected(self):
+        app = Flask(__name__)
+        metric = "crime_index_score DESC; DROP TABLE cities; --"
+        status_code, payload = self._call_top_cities(app, metric)
+        self.assertEqual(status_code, 400)
+        self.assertEqual(payload["error_code"], "invalid_metric")
+
+    def test_top_cities_payload_includes_city_key_and_coordinates(self):
+        app = Flask(__name__)
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-top-payload-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_top_cities_fixture(conn)
+                status_code, payload = self._call_top_cities(app, "climate_risk_score", limit=3)
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["status"], "ready")
+                self.assertEqual(payload["metric"], "climate_risk_score")
+                self.assertEqual(payload["direction"], "asc")
+                self.assertEqual(payload["city_count"], 3)
+                first = payload["cities"][0]
+                self.assertIn("city_key", first)
+                self.assertIn("latitude", first)
+                self.assertIn("longitude", first)
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_top_cities_route_is_login_protected(self):
+        self.assertTrue(hasattr(top_cities, "__wrapped__"))
+        self.assertNotEqual(top_cities, top_cities.__wrapped__)
+
     def test_proper_city_name_suffixes_are_preserved_in_lookup_normalization(self):
         self.assertEqual(db_module._strip_trailing_census_suffix("oklahoma city"), "oklahoma city")
         self.assertEqual(db_module._strip_trailing_census_suffix("kansas city"), "kansas city")
@@ -818,6 +1203,40 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("city_key: city.city_key || \"\"", template)
         self.assertIn("selectCurrentSearchCity", template)
         self.assertIn("fire-searched-city-select", template)
+
+    def test_frontend_quick_ranking_and_city_analytics_hooks_present(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("Quick City Rankings", template)
+        self.assertIn("Load the 10 strongest tracked cities for a selected metric.", template)
+        self.assertIn("quick-ranking-btn", template)
+        self.assertIn("performRankingShortcut", template)
+        self.assertIn("rankingRequestSequence", template)
+        self.assertIn("rankingRequestController", template)
+        self.assertIn("setCurrentSearchCities", template)
+        self.assertIn("selectCurrentSearchCity", template)
+        self.assertIn("mergeCitiesIntoCityAnalytics", template)
+        self.assertIn("city_key", template)
+        self.assertIn("Clear City Analytics", template)
+        self.assertIn("Add to City Analytics", template)
+        self.assertIn("Already in City Analytics", template)
+        self.assertIn("City Analytics", template)
+        self.assertIn("topCitiesUrl", template)
+        self.assertIn("Loading", template)
+
+    def test_frontend_copy_uses_fire_metrics_plural_and_city_analytics(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("FIRE Metrics", template)
+        self.assertIn("City Analytics", template)
+        self.assertIn("Add to City Analytics", template)
+        self.assertNotIn(">FIRE Metric<", template)
+        self.assertNotIn("Add to Comparison", template)
+
+    def test_frontend_search_and_multi_search_hooks_remain_present(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("splitSearchQueries", template)
+        self.assertIn("performSingleSearch", template)
+        self.assertIn("performMultiSearch", template)
+        self.assertIn("_strip_trailing_census_suffix", Path("fire_metrics/fire_metrics_updater/db.py").read_text(encoding="utf-8"))
 
     def test_model_output_html_is_sanitized(self):
         normalized = summary.normalize_summary(

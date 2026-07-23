@@ -66,6 +66,99 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # cold cache) but still bounded.
 REFRESH_STALE_AFTER_SECONDS = 60 * 60
 
+TOP_CITY_METRICS: dict[str, dict[str, str]] = {
+    "crime_index_score": {
+        "column": "crime_index_score",
+        "direction": "asc",
+        "label": "Lowest Crime",
+    },
+    "density_adjusted_crime_score": {
+        "column": "density_adjusted_crime_score",
+        "direction": "asc",
+        "label": "Lowest Density-Adjusted Crime",
+    },
+    "employment_growth_recent": {
+        "column": "employment_growth_recent",
+        "direction": "desc",
+        "label": "Highest Job Growth",
+    },
+    "population_growth_recent": {
+        "column": "population_growth_recent",
+        "direction": "desc",
+        "label": "Highest Population Growth",
+    },
+    "median_income_growth_recent": {
+        "column": "median_income_growth_recent",
+        "direction": "desc",
+        "label": "Highest Income Growth",
+    },
+    "median_home_value_growth_recent": {
+        "column": "median_home_value_growth_recent",
+        "direction": "desc",
+        "label": "Highest Home-Value Growth",
+    },
+    "climate_risk_score": {
+        "column": "climate_risk_score",
+        "direction": "asc",
+        "label": "Lowest Climate Risk",
+    },
+}
+
+
+def _parse_top_cities_limit(value: str | None) -> int:
+    if value is None or not str(value).strip():
+        return 10
+    try:
+        parsed = int(str(value).strip())
+    except ValueError as exc:
+        raise ValueError("limit must be an integer") from exc
+    if parsed < 1:
+        raise ValueError("limit must be at least 1")
+    return min(parsed, 10)
+
+
+def _fetch_top_cities(
+    conn,
+    *,
+    metric_key: str,
+    limit: int,
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    spec = TOP_CITY_METRICS.get(metric_key)
+    if not spec:
+        raise KeyError(metric_key)
+
+    column = spec["column"]
+    primary_dir = "ASC" if spec["direction"] == "asc" else "DESC"
+
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM cities
+        WHERE include_flag = 1
+          AND {column} IS NOT NULL
+        ORDER BY
+          {column} {primary_dir},
+          population_current DESC,
+          state ASC,
+          city ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+    cities = []
+    for row in rows:
+        city = db_module.city_row_to_dict(row)
+        aliases = conn.execute(
+            "SELECT search_key FROM search_aliases WHERE city = ? AND state = ?",
+            (city["city"], city["state"]),
+        ).fetchall()
+        city["search_keys"] = [item["search_key"] for item in aliases]
+        city["warnings"] = list(city.get("warnings") or [])
+        cities.append(city)
+
+    return spec, cities
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -508,6 +601,47 @@ def search():
         return jsonify(payload)
     except Exception as exc:
         return jsonify({"status": "error", "query": query, "user_message": f"Search failed: {exc}"}), 500
+
+
+@fire_metrics_bp.route("/api/top-cities")
+@login_required
+def top_cities():
+    metric = str(request.args.get("metric") or "").strip()
+    try:
+        limit = _parse_top_cities_limit(request.args.get("limit"))
+    except ValueError as exc:
+        return jsonify({
+            "status": "error",
+            "error_code": "invalid_limit",
+            "user_message": f"Invalid limit: {exc}",
+        }), 400
+
+    if metric not in TOP_CITY_METRICS:
+        return jsonify({
+            "status": "error",
+            "error_code": "invalid_metric",
+            "user_message": "Unknown ranking metric.",
+        }), 400
+
+    try:
+        with db_module.get_connection() as conn:
+            spec, cities = _fetch_top_cities(conn, metric_key=metric, limit=limit)
+    except Exception as exc:
+        current_app.logger.exception("FIRE Metrics top-cities endpoint failed: %s", exc.__class__.__name__)
+        return jsonify({
+            "status": "error",
+            "error_code": "top_cities_failed",
+            "user_message": "Top city ranking is currently unavailable.",
+        }), 500
+
+    return jsonify({
+        "status": "ready",
+        "metric": metric,
+        "metric_label": spec["label"],
+        "direction": spec["direction"],
+        "city_count": len(cities),
+        "cities": cities,
+    })
 
 
 @fire_metrics_bp.route("/api/city-summary", methods=["POST"])

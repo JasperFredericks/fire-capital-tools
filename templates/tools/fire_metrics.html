@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}FIRE Metric — FIRE Capital Tools{% endblock %}
+{% block title %}FIRE Metrics — FIRE Capital Tools{% endblock %}
 
 {% block content %}
 <div class="page-header">
@@ -9,7 +9,7 @@
     </svg>
     Back to Dashboard
   </a>
-  <h1 class="page-title">FIRE Metric</h1>
+  <h1 class="page-title">FIRE Metrics</h1>
   <p class="page-subtitle">Search city-level market indicators</p>
   <div class="status-chip-row" style="margin-top:10px;">
     <span id="status-chip" class="source-badge source-badge-{{ status.status|default('missing') }}">{{ status.status|default('missing')|upper }}</span>
@@ -34,7 +34,7 @@
     >
     <button class="btn btn-primary" type="submit">Search</button>
   </form>
-  <p class="result-note" style="margin-top:8px;">Separate multiple cities with commas to add them to comparison.</p>
+  <p class="result-note" style="margin-top:8px;">Separate multiple cities with commas to add them to City Analytics.</p>
 
   <div id="fire-search-message" class="alert alert-info" style="display:none; margin-top:14px;"></div>
   <div id="fire-suggestions" class="fire-suggestion-grid" style="display:none;"></div>
@@ -106,7 +106,7 @@
     </div>
 
     <div class="fire-city-actions">
-      <button id="add-to-comparison-btn" type="button" class="btn btn-primary">Add to Comparison</button>
+      <button id="add-to-comparison-btn" type="button" class="btn btn-primary">Add to City Analytics</button>
     </div>
 
     <div id="fire-ai-overview" class="fire-ai-overview" aria-live="polite">
@@ -144,15 +144,35 @@
 <div class="card">
   <div class="result-header">
     <div>
-      <h2 class="dashboard-section-title">City Comparison</h2>
+      <h2 class="dashboard-section-title">Quick City Rankings</h2>
+      <p class="page-subtitle" style="margin-top:4px;">Load the 10 strongest tracked cities for a selected metric.</p>
+    </div>
+  </div>
+  <div id="quick-ranking-controls" class="quick-ranking-controls" role="group" aria-label="Quick city rankings">
+    <button type="button" class="btn btn-ghost quick-ranking-btn" data-metric="crime_index_score" data-loading-label="lowest-crime">Lowest Crime</button>
+    <button type="button" class="btn btn-ghost quick-ranking-btn" data-metric="density_adjusted_crime_score" data-loading-label="lowest-density-adjusted-crime">Lowest Density-Adjusted Crime</button>
+    <button type="button" class="btn btn-ghost quick-ranking-btn" data-metric="employment_growth_recent" data-loading-label="highest-job-growth">Highest Job Growth</button>
+    <button type="button" class="btn btn-ghost quick-ranking-btn" data-metric="population_growth_recent" data-loading-label="highest-population-growth">Highest Population Growth</button>
+    <button type="button" class="btn btn-ghost quick-ranking-btn" data-metric="median_income_growth_recent" data-loading-label="highest-income-growth">Highest Income Growth</button>
+    <button type="button" class="btn btn-ghost quick-ranking-btn" data-metric="median_home_value_growth_recent" data-loading-label="highest-home-value-growth">Highest Home-Value Growth</button>
+    <button type="button" class="btn btn-ghost quick-ranking-btn" data-metric="climate_risk_score" data-loading-label="lowest-climate-risk">Lowest Climate Risk</button>
+  </div>
+  <div id="quick-ranking-status" class="result-note" aria-live="polite" style="margin-top:10px;"></div>
+  <div class="result-note" style="margin-top:8px; color:#6b7280;">Rankings use current stored FIRE Metrics data and do not represent investment recommendations.</div>
+</div>
+
+<div class="card">
+  <div class="result-header">
+    <div>
+      <h2 class="dashboard-section-title">City Analytics</h2>
       <p class="page-subtitle" style="margin-top:4px;">Compare multiple cities from successful search results.</p>
     </div>
     <div class="comparison-actions">
-      <button id="clear-comparison-btn" type="button" class="btn btn-ghost">Clear All</button>
+      <button id="clear-comparison-btn" type="button" class="btn btn-ghost">Clear City Analytics</button>
     </div>
   </div>
 
-  <div id="comparison-empty-message" class="result-note">Search and add cities to build a comparison table.</div>
+  <div id="comparison-empty-message" class="result-note">Search and add cities to build City Analytics.</div>
 
   <div id="comparison-table-wrap" class="comparison-table-wrap" style="display:none;">
     <table class="comparison-table">
@@ -266,6 +286,7 @@
 <script>
 (() => {
   const searchUrl = "{{ url_for('fire_metrics.search') }}";
+  const topCitiesUrl = "{{ url_for('fire_metrics.top_cities') }}";
   const citySummaryUrl = "{{ url_for('fire_metrics.city_summary') }}";
   const statusUrl = "{{ url_for('fire_metrics.refresh_status') }}";
   const uploadCrimeUrl = "{{ url_for('fire_metrics.upload_crime_workbook') }}";
@@ -274,6 +295,8 @@
   const input = document.getElementById("fire-search-input");
   const messageEl = document.getElementById("fire-search-message");
   const suggestionsEl = document.getElementById("fire-suggestions");
+  const rankingStatusEl = document.getElementById("quick-ranking-status");
+  const rankingButtons = Array.from(document.querySelectorAll(".quick-ranking-btn"));
   const searchedCitiesSwitcher = document.getElementById("fire-searched-cities-switcher");
   const searchedCitiesTabs = document.getElementById("fire-searched-cities-tabs");
   const searchedCitySelect = document.getElementById("fire-searched-city-select");
@@ -367,6 +390,8 @@
   let lastViewportSignature = "";
   let summaryRequestController = null;
   let summaryRequestSequence = 0;
+  let rankingRequestController = null;
+  let rankingRequestSequence = 0;
   let currentSearchCities = [];
   let activeSearchCityKey = "";
   let currentCity = null;
@@ -675,6 +700,104 @@
     return res.json();
   }
 
+  function setRankingButtonsDisabled(disabled) {
+    rankingButtons.forEach((button) => {
+      button.disabled = !!disabled;
+      button.setAttribute("aria-disabled", disabled ? "true" : "false");
+    });
+  }
+
+  function setRankingStatus(text) {
+    if (!rankingStatusEl) return;
+    rankingStatusEl.textContent = text || "";
+  }
+
+  async function fetchTopCitiesPayload(metric, limit = 10, signal) {
+    const params = new URLSearchParams({ metric, limit: String(limit) });
+    const res = await fetch(`${topCitiesUrl}?${params.toString()}`, {
+      method: "GET",
+      headers: {
+        "X-Requested-With": "XMLHttpRequest",
+      },
+      signal,
+    });
+    return res.json();
+  }
+
+  function mergeCitiesIntoCityAnalytics(existingCities, incomingCities) {
+    return dedupeCitiesByStableKey([...(existingCities || []), ...(incomingCities || [])]);
+  }
+
+  function setRankedSearchCities(cities) {
+    const ranked = dedupeCitiesByStableKey(cities || []);
+    if (!ranked.length) return false;
+    setCurrentSearchCities(ranked);
+    selectCurrentSearchCity(stableCityKey(ranked[0]));
+    return true;
+  }
+
+  async function performRankingShortcut(metric, loadingLabel) {
+    if (!metric) return;
+
+    if (rankingRequestController) {
+      rankingRequestController.abort();
+    }
+    rankingRequestController = new AbortController();
+    rankingRequestSequence += 1;
+    const mySequence = rankingRequestSequence;
+
+    setRankingButtonsDisabled(true);
+    const loadingMessage = `Loading ${loadingLabel} cities...`;
+    setRankingStatus(loadingMessage);
+    showMessage(loadingMessage, "info");
+
+    try {
+      const payload = await fetchTopCitiesPayload(metric, 10, rankingRequestController.signal);
+      if (mySequence !== rankingRequestSequence) return;
+
+      if (!payload || payload.status !== "ready" || !Array.isArray(payload.cities)) {
+        const msg = payload?.user_message || "Ranking request failed.";
+        showMessage(msg, "error");
+        setRankingStatus(msg);
+        return;
+      }
+
+      const rankedCities = dedupeCitiesByStableKey(payload.cities);
+      if (!rankedCities.length) {
+        const msg = "No ranked cities available for that metric right now.";
+        showMessage(msg, "warning");
+        setRankingStatus(msg);
+        return;
+      }
+
+      const updatedComparison = mergeCitiesIntoCityAnalytics(comparisonCities, rankedCities);
+      comparisonCities = updatedComparison;
+      saveComparison();
+      renderComparisonTable();
+
+      setRankedSearchCities(rankedCities);
+      syncComparisonAddButton();
+      renderMapPoints();
+
+      const metricPhrase = String(payload.metric_label || "selected metric").toLowerCase();
+      const success = `Loaded the ${payload.city_count} tracked cities for ${metricPhrase}.`;
+      showMessage(success, "success");
+      setRankingStatus(`${payload.metric_label}: loaded ${payload.city_count} cities.`);
+    } catch (err) {
+      if (err && err.name === "AbortError") {
+        return;
+      }
+      if (mySequence !== rankingRequestSequence) return;
+      const message = `Ranking request failed: ${err}`;
+      showMessage(message, "error");
+      setRankingStatus(message);
+    } finally {
+      if (mySequence === rankingRequestSequence) {
+        setRankingButtonsDisabled(false);
+      }
+    }
+  }
+
   function escapeHtml(value) {
     return String(value)
       .replace(/&/g, "&amp;")
@@ -704,7 +827,7 @@
     const title = markerTitleForCity(city);
     const score = fireMetricScoreForCity(city);
     const scoreText = score === null ? "Unavailable" : score.toLocaleString(undefined, { maximumFractionDigits: 1 });
-    return `<div class="fire-map-infowindow"><strong>${escapeHtml(title)}</strong><div>Computed FIRE Metrics composite score: ${escapeHtml(scoreText)}</div></div>`;
+    return `<div class="fire-map-infowindow"><strong>${escapeHtml(title)}</strong><div>Relative market profile score: ${escapeHtml(scoreText)}</div></div>`;
   }
 
   function showMapFallback(message) {
@@ -1056,7 +1179,7 @@
 
   function resetComparisonAddButton() {
     addToComparisonBtn.disabled = true;
-    addToComparisonBtn.textContent = "Add to Comparison";
+    addToComparisonBtn.textContent = "Add to City Analytics";
   }
 
   function syncComparisonAddButton() {
@@ -1066,7 +1189,7 @@
     }
     const exists = comparisonCities.some((item) => stableCityKey(item) === stableCityKey(currentCity));
     addToComparisonBtn.disabled = exists;
-    addToComparisonBtn.textContent = exists ? "Already in Comparison" : "Add to Comparison";
+    addToComparisonBtn.textContent = exists ? "Already in City Analytics" : "Add to City Analytics";
   }
 
   function showMessage(text, kind = "info") {
@@ -1261,7 +1384,7 @@
 
   async function performSingleSearch(query) {
     if (!query || !query.trim()) {
-      showMessage("Enter a city name to search FIRE Metric data.", "warning");
+      showMessage("Enter a city name to search FIRE Metrics data.", "warning");
       clearCurrentSearchCities();
       dashboardEl.style.display = "none";
       hideSuggestions();
@@ -1373,7 +1496,7 @@
 
     const messages = [];
     if (added.length) {
-      messages.push(`Added ${added.length} ${added.length === 1 ? "city" : "cities"} to comparison: ${summarizeCities(added)}.`);
+      messages.push(`Added ${added.length} ${added.length === 1 ? "city" : "cities"} to City Analytics: ${summarizeCities(added)}.`);
     }
     if (notFound.length) {
       messages.push(`Could not find: ${notFound.join(", ")}.`);
@@ -1389,7 +1512,7 @@
     }
 
     if (!messages.length) {
-      showMessage("No cities were added to comparison.", "warning");
+      showMessage("No cities were added to City Analytics.", "warning");
       return;
     }
 
@@ -1416,6 +1539,14 @@
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     performSearch(input.value);
+  });
+
+  rankingButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const metric = button.getAttribute("data-metric") || "";
+      const loadingLabel = button.getAttribute("data-loading-label") || "selected-metric";
+      performRankingShortcut(metric, loadingLabel);
+    });
   });
 
   addToComparisonBtn.addEventListener("click", () => {

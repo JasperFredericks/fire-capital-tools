@@ -1107,6 +1107,31 @@ hr.divider {
   gap: 8px;
 }
 
+.quick-ranking-controls {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quick-ranking-btn {
+  font-size: 12px;
+  line-height: 1.35;
+  padding: 7px 11px;
+  border-radius: 999px;
+}
+
+.quick-ranking-btn:focus-visible,
+.fire-searched-city-tab:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 2px;
+}
+
+.quick-ranking-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .fire-city-dashboard {
   border: 1px solid #e5e7eb;
   border-radius: 12px;
@@ -1442,6 +1467,18 @@ hr.divider {
 
   .fire-search-row {
     grid-template-columns: 1fr;
+  }
+
+  .quick-ranking-controls {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .quick-ranking-btn {
+    width: 100%;
+    text-align: left;
+    min-height: 40px;
   }
 
   .fire-searched-cities-tabs {
