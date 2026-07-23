@@ -40,6 +40,7 @@ from flask import (
 from flask_login import login_required
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Polygon
+from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Font, PatternFill
 from werkzeug.utils import secure_filename
 
@@ -897,6 +898,33 @@ _CANYON_EXCLUDED_CODES = {
 }
 
 
+def _safe_set_cell_value(sheet, row, col, value):
+    """Write a value at (row, col), unmerging first if that coordinate
+    currently falls on a non-anchor cell of a merged range.
+
+    openpyxl's Worksheet.insert_cols()/insert_rows() shift cell *values*
+    but do not shift merged_cells.ranges to match (confirmed against a
+    real Canyon Scorecard: after inserting 8 missing month columns, the
+    sheet's pre-existing decorative merges like "V50:AB50" still claimed
+    columns 22-28 even though columns 26-28 now hold real newly-inserted
+    month data) -- so a merge that used to sit harmlessly off to the side
+    of the real data columns can end up silently overlapping them after
+    insertion. Writing into the covered-but-not-anchor part of that stale
+    merge raises "'MergedCell' object attribute 'value' is read-only".
+    Once unmerged here, the range is not re-merged -- the merge's
+    coordinates are already stale/meaningless post-insert, so re-applying
+    it would just perpetuate the misalignment.
+    """
+    cell = sheet.cell(row=row, column=col)
+    if isinstance(cell, MergedCell):
+        for merged_range in list(sheet.merged_cells.ranges):
+            if merged_range.min_row <= row <= merged_range.max_row and merged_range.min_col <= col <= merged_range.max_col:
+                sheet.unmerge_cells(str(merged_range))
+                break
+        cell = sheet.cell(row=row, column=col)
+    cell.value = value
+
+
 class ScorecardUpdater:
     def __init__(self, scorecard_path, data):
         self.scorecard_path = scorecard_path
@@ -983,7 +1011,7 @@ class ScorecardUpdater:
                 self.sheet.insert_cols(insertion_col, amount=len(missing_months))
                 for offset, month_key in enumerate(missing_months):
                     col = insertion_col + offset
-                    self.sheet.cell(row=header_row, column=col).value = f"{month_key} Actual"
+                    _safe_set_cell_value(self.sheet, header_row, col, f"{month_key} Actual")
                     excel_month_map[month_key] = col
         elif missing_months:
             skipped_months = missing_months
@@ -1110,7 +1138,7 @@ class ScorecardUpdater:
 
         updates_count = 0
         for (row_idx, col_idx), total in cell_totals.items():
-            self.sheet.cell(row=row_idx, column=col_idx).value = total
+            _safe_set_cell_value(self.sheet, row_idx, col_idx, total)
             updates_count += 1
 
         if skipped_months:
