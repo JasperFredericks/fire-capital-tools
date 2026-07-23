@@ -347,10 +347,12 @@
   let summaryRequestSequence = 0;
   let rankingRequestController = null;
   let rankingRequestSequence = 0;
+  let activeRankingMetric = "";
   let currentSearchCities = [];
   let activeSearchCityKey = "";
   let currentCity = null;
   let comparisonCities = [];
+  let pendingCurrentCityPreview = { cityKey: "", panMap: false };
   let lastObservedRefreshAt = initialLastRefreshAt;
   let wasRefreshRunning = Boolean(initiallyRunning);
 
@@ -589,7 +591,14 @@
       selectButton.setAttribute("aria-current", key === activeSearchCityKey ? "true" : "false");
       selectButton.textContent = label;
       selectButton.addEventListener("click", () => {
-        selectCurrentSearchCity(key);
+        selectCurrentSearchCity(key, {
+          city,
+          ensureAnalyticsRow: true,
+          openMapPreview: true,
+          panMap: true,
+          requestOverview: true,
+          scrollAnalyticsRow: true,
+        });
       });
       selectButton.addEventListener("keydown", (event) => {
         const buttons = chipSelectButtons();
@@ -598,7 +607,14 @@
 
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          selectCurrentSearchCity(key);
+          selectCurrentSearchCity(key, {
+            city,
+            ensureAnalyticsRow: true,
+            openMapPreview: true,
+            panMap: true,
+            requestOverview: true,
+            scrollAnalyticsRow: true,
+          });
           return;
         }
 
@@ -657,6 +673,11 @@
     currentSearchCities = [];
     activeSearchCityKey = "";
     currentCity = null;
+    clearPendingCurrentCityPreview();
+    setActiveRankingMetric("");
+    if (googleInfoWindow) {
+      googleInfoWindow.close();
+    }
     clearOverviewImmediate();
     resetComparisonAddButton();
     renderActiveCityMeta(null);
@@ -734,7 +755,14 @@
     const nextIndex = Math.min(idx, remaining.length - 1);
     const nextKey = stableCityKey(remaining[nextIndex]);
     setCurrentSearchCities(remaining, { preserveActive: false });
-    selectCurrentSearchCity(nextKey);
+    selectCurrentSearchCity(nextKey, {
+      city: remaining[nextIndex],
+      ensureAnalyticsRow: false,
+      openMapPreview: true,
+      panMap: true,
+      requestOverview: true,
+      scrollAnalyticsRow: true,
+    });
 
     if (focusSource !== "mouse") {
       const nextButtons = chipSelectButtons();
@@ -744,23 +772,57 @@
     }
   }
 
-  function selectCurrentSearchCity(targetKey) {
-    if (!currentSearchCities.length) {
+  function selectCurrentSearchCity(targetKey, options = {}) {
+    const requestedKey = String(targetKey || "");
+    const candidateCity = options.city ? sanitizeCity(options.city) : null;
+    const nextCity = currentSearchCities.find((city) => stableCityKey(city) === requestedKey)
+      || candidateCity
+      || comparisonCities.find((city) => stableCityKey(city) === requestedKey)
+      || currentSearchCities[0]
+      || null;
+
+    if (!nextCity) {
       currentCity = null;
       activeSearchCityKey = "";
+      clearPendingCurrentCityPreview();
       resetComparisonAddButton();
       renderActiveCityMeta(null);
       clearOverviewImmediate();
       renderCityChips();
+      renderComparisonTable();
       renderMapPoints();
       return;
     }
 
-    const nextCity = currentSearchCities.find((city) => stableCityKey(city) === targetKey) || currentSearchCities[0];
-    activeSearchCityKey = stableCityKey(nextCity);
+    const sanitized = sanitizeCity(nextCity);
+    const nextCityKey = stableCityKey(sanitized);
+    const existsInSearch = currentSearchCities.some((city) => stableCityKey(city) === nextCityKey);
+    currentCity = sanitized;
+    activeSearchCityKey = existsInSearch ? nextCityKey : "";
+
+    if (options.ensureAnalyticsRow && ensureCityAnalyticsCity(sanitized)) {
+      renderComparisonTable();
+    }
+
     renderCityChips();
-    clearOverviewImmediate();
-    renderCity(nextCity);
+    renderActiveCityMeta(currentCity);
+    renderComparisonTable();
+    syncComparisonAddButton();
+
+    if (options.requestOverview !== false) {
+      clearOverviewImmediate();
+      requestCityOverview(currentCity);
+    }
+
+    renderMapPoints();
+
+    if (options.openMapPreview !== false) {
+      openCurrentCityPreview(options.panMap !== false);
+    }
+
+    if (options.scrollAnalyticsRow) {
+      scrollAnalyticsRowIntoView(nextCityKey);
+    }
   }
 
   function asNumber(value) {
@@ -837,6 +899,94 @@
     rankingStatusEl.textContent = text || "";
   }
 
+  function setActiveRankingMetric(metric) {
+    activeRankingMetric = metric || "";
+    rankingButtons.forEach((button) => {
+      const buttonMetric = button.getAttribute("data-metric") || "";
+      const isActive = !!activeRankingMetric && buttonMetric === activeRankingMetric;
+      button.classList.toggle("active", isActive);
+      button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    });
+  }
+
+  function prefersReducedMotion() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+
+  function cssEscapeValue(value) {
+    const raw = String(value || "");
+    if (window.CSS && typeof window.CSS.escape === "function") {
+      return window.CSS.escape(raw);
+    }
+    return raw.replace(/"/g, "\\\"");
+  }
+
+  function scrollAnalyticsRowIntoView(cityKey) {
+    if (!comparisonWrap || !comparisonBody || !cityKey) return;
+    const row = comparisonBody.querySelector(`[data-city-key="${cssEscapeValue(cityKey)}"]`);
+    if (!row) return;
+
+    const rowRect = row.getBoundingClientRect();
+    const wrapRect = comparisonWrap.getBoundingClientRect();
+    const verticallyVisible = rowRect.top >= wrapRect.top && rowRect.bottom <= wrapRect.bottom;
+    const horizontallyVisible = rowRect.left >= wrapRect.left && rowRect.right <= wrapRect.right;
+    if (verticallyVisible && horizontallyVisible) return;
+
+    const behavior = prefersReducedMotion() ? "auto" : "smooth";
+    row.scrollIntoView({ behavior, block: "nearest", inline: "nearest" });
+  }
+
+  function setPendingCurrentCityPreview(cityKey, panMap) {
+    pendingCurrentCityPreview = {
+      cityKey: String(cityKey || ""),
+      panMap: !!panMap,
+    };
+  }
+
+  function clearPendingCurrentCityPreview() {
+    pendingCurrentCityPreview = { cityKey: "", panMap: false };
+  }
+
+  function ensureCityAnalyticsCity(city) {
+    const sanitized = sanitizeCity(city);
+    const key = stableCityKey(sanitized);
+    if (!key) return false;
+    if (comparisonCities.some((item) => stableCityKey(item) === key)) return false;
+    comparisonCities = [...comparisonCities, sanitized];
+    saveComparison();
+    return true;
+  }
+
+  function openCurrentCityPreview(panMap = false) {
+    if (!currentCity) return false;
+    const currentKey = stableCityKey(currentCity);
+    const entry = markerRegistry.get(selectedMarkerRegistryKey);
+    if (!entry || !entry.marker || !googleMap || !googleInfoWindow) {
+      setPendingCurrentCityPreview(currentKey, panMap);
+      return false;
+    }
+
+    clearPendingCurrentCityPreview();
+    if (panMap && entry.marker.position) {
+      googleMap.panTo(entry.marker.position);
+      const zoom = googleMap.getZoom() || 4;
+      if (zoom < 5) googleMap.setZoom(5);
+      if (zoom > 7) googleMap.setZoom(7);
+    }
+
+    openMarkerPreview(selectedMarkerRegistryKey, entry.marker, "click");
+    return true;
+  }
+
+  function flushPendingCurrentCityPreview() {
+    if (!pendingCurrentCityPreview.cityKey || !currentCity) return;
+    if (stableCityKey(currentCity) !== pendingCurrentCityPreview.cityKey) {
+      clearPendingCurrentCityPreview();
+      return;
+    }
+    openCurrentCityPreview(pendingCurrentCityPreview.panMap);
+  }
+
   async function fetchTopCitiesPayload(metric, limit = 10, signal) {
     const params = new URLSearchParams({ metric, limit: String(limit) });
     const res = await fetch(`${topCitiesUrl}?${params.toString()}`, {
@@ -849,15 +999,18 @@
     return res.json();
   }
 
-  function mergeCitiesIntoCityAnalytics(existingCities, incomingCities) {
-    return dedupeCitiesByStableKey([...(existingCities || []), ...(incomingCities || [])]);
-  }
-
   function setRankedSearchCities(cities) {
     const ranked = dedupeCitiesByStableKey(cities || []);
     if (!ranked.length) return false;
     setCurrentSearchCities(ranked);
-    selectCurrentSearchCity(stableCityKey(ranked[0]));
+    selectCurrentSearchCity(stableCityKey(ranked[0]), {
+      city: ranked[0],
+      ensureAnalyticsRow: false,
+      openMapPreview: true,
+      panMap: true,
+      requestOverview: true,
+      scrollAnalyticsRow: true,
+    });
     return true;
   }
 
@@ -877,6 +1030,7 @@
     showMessage(loadingMessage, "info");
 
     try {
+      setActiveRankingMetric(metric);
       const payload = await fetchTopCitiesPayload(metric, 10, rankingRequestController.signal);
       if (mySequence !== rankingRequestSequence) return;
 
@@ -892,11 +1046,11 @@
         const msg = "No ranked cities available for that metric right now.";
         showMessage(msg, "warning");
         setRankingStatus(msg);
+        setActiveRankingMetric("");
         return;
       }
 
-      const updatedComparison = mergeCitiesIntoCityAnalytics(comparisonCities, rankedCities);
-      comparisonCities = updatedComparison;
+      comparisonCities = rankedCities;
       saveComparison();
       renderComparisonTable();
 
@@ -917,6 +1071,7 @@
       const message = `Ranking request failed: ${err}`;
       showMessage(message, "error");
       setRankingStatus(message);
+      setActiveRankingMetric("");
     } finally {
       if (mySequence === rankingRequestSequence) {
         setRankingButtonsDisabled(false);
@@ -1081,7 +1236,14 @@
 
     marker.addListener("click", () => {
       markerPreviewState.suppressHoverUntil = Date.now() + 500;
-      openMarkerPreview(registryKey, marker, "click");
+      selectCurrentSearchCity(stableCityKey(city), {
+        city,
+        ensureAnalyticsRow: false,
+        openMapPreview: true,
+        panMap: true,
+        requestOverview: true,
+        scrollAnalyticsRow: true,
+      });
     });
 
     markerContent.addEventListener("mouseenter", () => scheduleHoverOpen(registryKey, marker));
@@ -1223,6 +1385,7 @@
       .join(",");
     const viewportSignature = `${currentCity ? stableCityKey(currentCity) : "none"}|${orderedComparisonKeys}`;
     applyViewportStrategy(viewportSignature);
+    flushPendingCurrentCityPreview();
   }
 
   function loadGoogleMapsApi() {
@@ -1414,6 +1577,11 @@
 
     comparisonCities.forEach((city) => {
       const tr = document.createElement("tr");
+      const rowCityKey = stableCityKey(city);
+      const isActiveRow = !!currentCity && rowCityKey === stableCityKey(currentCity);
+      tr.setAttribute("data-city-key", rowCityKey);
+      tr.className = isActiveRow ? "fire-analytics-row-active" : "";
+      tr.setAttribute("aria-current", isActiveRow ? "true" : "false");
       const cleanedCityName = cityCoreName(cleanDisplayFromCityObject(city));
       const rowValues = [
         cleanedCityName || "—",
@@ -1446,7 +1614,7 @@
         comparisonCities = comparisonCities.filter((item) => stableCityKey(item) !== stableCityKey(city));
         saveComparison();
         renderComparisonTable();
-          renderMapPoints();
+        renderMapPoints();
       });
       actionTd.appendChild(removeButton);
       tr.appendChild(actionTd);
@@ -1613,11 +1781,13 @@
     }
 
     try {
+      setActiveRankingMetric("");
       const payload = await fetchSearchPayload(query);
       const status = payload.status || "error";
 
       if (status === "found") {
         hideSuggestions();
+        setActiveRankingMetric("");
         const foundCity = sanitizeCity(payload.city || {});
         const key = stableCityKey(foundCity);
         const result = appendToCurrentSearchCities([foundCity]);
@@ -1661,6 +1831,12 @@
     const excludedMessages = [];
     const failed = [];
     const foundCities = [];
+    if (queries.length) {
+      setActiveRankingMetric("");
+    }
+    if (queries.length) {
+      setActiveRankingMetric("");
+    }
 
     for (const query of queries) {
       try {

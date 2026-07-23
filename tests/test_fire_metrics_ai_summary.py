@@ -1214,12 +1214,14 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("performRankingShortcut", template)
         self.assertIn("rankingRequestSequence", template)
         self.assertIn("rankingRequestController", template)
+        self.assertIn("setActiveRankingMetric", template)
         self.assertIn("setCurrentSearchCities", template)
         self.assertIn("appendToCurrentSearchCities", template)
         self.assertIn("removeSearchCityByKey", template)
         self.assertIn("selectCurrentSearchCity", template)
         self.assertIn("clearSearchedCitiesWorkspace", template)
-        self.assertIn("mergeCitiesIntoCityAnalytics", template)
+        self.assertIn("ensureCityAnalyticsCity", template)
+        self.assertNotIn("mergeCitiesIntoCityAnalytics", template)
         self.assertIn("city_key", template)
         self.assertIn("Clear City Analytics", template)
         self.assertIn("Add to City Analytics", template)
@@ -1228,7 +1230,16 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("topCitiesUrl", template)
         self.assertIn("Loading", template)
         self.assertIn("aria-current", template)
+        self.assertIn('setAttribute("aria-pressed"', template)
         self.assertIn("Remove", template)
+        self.assertIn("fire-analytics-row-active", template)
+        self.assertIn('data-city-key="', template)
+        self.assertIn("scrollAnalyticsRowIntoView", template)
+        self.assertIn("openCurrentCityPreview", template)
+        self.assertIn("flushPendingCurrentCityPreview", template)
+        stylesheet = Path("static/style.css").read_text(encoding="utf-8")
+        self.assertIn(".quick-ranking-btn.active", stylesheet)
+        self.assertIn('aria-pressed="true"', stylesheet)
 
     def test_frontend_copy_uses_fire_metrics_plural_and_city_analytics(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
@@ -1262,6 +1273,17 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn('aria-live="polite"', template)
         self.assertIn('id="quick-ranking-status"', template)
 
+    def test_frontend_city_chip_click_and_preview_sync_hooks_present(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("ensureAnalyticsRow: true", template)
+        self.assertIn("openMapPreview: true", template)
+        self.assertIn("scrollAnalyticsRow: true", template)
+        self.assertIn("requestOverview: true", template)
+        self.assertIn("selectCurrentSearchCity(key, {", template)
+        self.assertIn("marker.addListener(\"click\", () => {", template)
+        self.assertIn("selectCurrentSearchCity(stableCityKey(city)", template)
+        self.assertIn("setActiveRankingMetric(\"\")", template)
+
     def test_frontend_map_first_layout_order_and_removed_scorecard_grid(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
         self.assertNotIn('id="fire-city-dashboard"', template)
@@ -1281,6 +1303,15 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertLess(rankings_idx, map_idx)
         self.assertLess(map_idx, analytics_idx)
         self.assertLess(analytics_idx, overview_idx)
+
+    def test_frontend_analytics_row_and_scroll_hooks_present(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("scrollIntoView({ behavior, block: \"nearest\", inline: \"nearest\" })", template)
+        self.assertIn("prefersReducedMotion", template)
+        self.assertIn("cssEscapeValue", template)
+        self.assertIn("comparisonWrap.getBoundingClientRect()", template)
+        self.assertIn("aria-current", template)
+        self.assertIn("fire-analytics-row-active", Path("static/style.css").read_text(encoding="utf-8"))
 
     def test_frontend_marker_preview_helpers_and_shared_state_present(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
