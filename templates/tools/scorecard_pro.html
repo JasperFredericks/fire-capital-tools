@@ -416,7 +416,24 @@
         fallbackCodes.join(", "),
       );
     }
-    const hasNotes = warnings.length || missing.length || zero.length || fallbackCodes.length;
+    const overrideMismatches = (analysis.summary && analysis.summary.override_mismatches) || [];
+    if (overrideMismatches.length) {
+      const kinds = [];
+      if (overrideMismatches.some(m => m.kind === "income")) kinds.push("Income");
+      if (overrideMismatches.some(m => m.kind === "expense")) kinds.push("Expense");
+      const monthCount = new Set(overrideMismatches.map(m => m.month)).size;
+      const summaryText =
+        `Using this file's Total Operating ${kinds.join(" / ")} row(s) for ${monthCount} month` +
+        `${monthCount === 1 ? "" : "s"}; ${overrideMismatches.length === 1 ? "it does" : "they do"} not match the sum of the detail rows shown here. ` +
+        "If you edited detail rows, make sure the Total Operating Income/Expense rows are updated too " +
+        "(or are formulas that sum them) — otherwise this report will use the file's stated total, not your edited details.";
+      const detailText = overrideMismatches.map(m =>
+        `${m.month}: Total Operating ${m.kind === "income" ? "Income" : "Expense"} row ` +
+        `${fmtCurrency(m.total)} vs sum of detail ${m.kind} rows ${fmtCurrency(m.detail)}`
+      ).join("\n");
+      addExpandableNote(list, summaryText, "Show month-by-month figures", detailText);
+    }
+    const hasNotes = warnings.length || missing.length || zero.length || fallbackCodes.length || overrideMismatches.length;
     card.style.display = hasNotes ? "block" : "none";
   }
 

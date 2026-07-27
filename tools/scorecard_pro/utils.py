@@ -24,6 +24,7 @@ def summarize_dataframe(df, kpis):
             "missing_gpr_months": [],
             "zero_occupancy_months": [],
             "expense_fallback_codes": kpis.get("expense_fallback_codes", []),
+            "override_mismatches": kpis.get("override_mismatches", []),
         }
     occ_values = df["Occupancy"].dropna()
     ratio_values = df["ExpenseRatio"].dropna()
@@ -36,6 +37,7 @@ def summarize_dataframe(df, kpis):
         "missing_gpr_months": df.loc[df["OccupancyStatus"] == "missing_gpr", "Month"].tolist(),
         "zero_occupancy_months": df.loc[df["OccupancyStatus"] == "zero", "Month"].tolist(),
         "expense_fallback_codes": kpis.get("expense_fallback_codes", []),
+        "override_mismatches": kpis.get("override_mismatches", []),
     }
 
 

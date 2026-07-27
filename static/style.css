@@ -687,6 +687,7 @@ hr.divider {
   font-size: 12px;
   color: #6b7280;
   word-break: break-word;
+  white-space: pre-line;
 }
 
 .month-filter-grid {

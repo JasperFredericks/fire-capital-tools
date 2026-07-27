@@ -11,6 +11,23 @@ from tools.scorecard_pro.utils import (
 )
 
 
+# Diagnostic tolerance for flagging a "Total Operating Income/Expense" override
+# row (9998/9999) that doesn't match the sum of its own detail rows. This is
+# used ONLY to surface a Parsing Notes warning -- it never changes any KPI.
+# A discrepancy is flagged only when it exceeds BOTH an absolute floor ($1, to
+# ignore sub-dollar float/rounding from summing many rows) AND a relative floor
+# (1% of the larger side, to ignore immaterial proportional noise). Real cases
+# (~$1k-15k/month, ~10-50% of the monthly total) clear both by a wide margin;
+# ordinary rounding does not.
+_OVERRIDE_MISMATCH_ABS = 1.0
+_OVERRIDE_MISMATCH_PCT = 0.01
+
+
+def _override_mismatch(total: float, detail: float) -> bool:
+    diff = abs(float(total) - float(detail))
+    return diff > _OVERRIDE_MISMATCH_ABS and diff > _OVERRIDE_MISMATCH_PCT * max(abs(total), abs(detail))
+
+
 class KPICalculator:
     def __init__(self, pnl_data):
         self.accounts = pnl_data["accounts"]
@@ -62,12 +79,18 @@ class KPICalculator:
         if "oxford pointe" in property_name:
             self.below_noi_codes.add("7210")
 
+        # Per-month diagnostics (populated by calculate()): months where the
+        # file's Total Operating Income/Expense override row is used but does
+        # not match the sum of that month's detail rows. Advisory only.
+        self.override_mismatches: list = []
+
     def get_val(self, code, month):
         if code in self.accounts:
             return float(self.accounts[code]["data"].get(month, 0.0) or 0.0)
         return 0.0
 
     def calculate(self):
+        self.override_mismatches = []
         kpis = {
             "income": {},
             "expenses": {},
@@ -79,6 +102,7 @@ class KPICalculator:
             "occupancy_status": {},
             "expense_fallback_codes": self.expense_fallback_codes,
             "income_fallback_codes": self.income_fallback_codes,
+            "override_mismatches": self.override_mismatches,
         }
 
         for month in self.available_months:
@@ -113,6 +137,40 @@ class KPICalculator:
                     for code in self.expense_fallback_codes:
                         controllable += self.get_val(code, month)
                 total_expenses = controllable + non_controllable
+
+            # Diagnostic only (never changes total_income/total_expenses above):
+            # when a Total Operating Income/Expense override row (9998/9999) was
+            # used as the authoritative total, compare it against the sum of the
+            # detail rows for this month and record a mismatch so Parsing Notes
+            # can flag an edited-detail-but-stale-total file. Uses the same
+            # detail-sum logic as the non-override branches above.
+            if override_income != 0:
+                detail_income = nri + other_income + sum(
+                    self.get_val(code, month) for code in self.income_fallback_codes
+                )
+                if _override_mismatch(override_income, detail_income):
+                    self.override_mismatches.append({
+                        "month": month,
+                        "kind": "income",
+                        "total": override_income,
+                        "detail": detail_income,
+                    })
+            if override_expenses != 0:
+                detail_controllable = self.get_val("6000", month)
+                detail_non_controllable = self.get_val("7000", month)
+                for code in self.below_noi_codes:
+                    detail_non_controllable -= self.get_val(code, month)
+                if detail_controllable == 0 and detail_non_controllable == 0:
+                    for code in self.expense_fallback_codes:
+                        detail_controllable += self.get_val(code, month)
+                detail_expenses = detail_controllable + detail_non_controllable
+                if _override_mismatch(override_expenses, detail_expenses):
+                    self.override_mismatches.append({
+                        "month": month,
+                        "kind": "expense",
+                        "total": override_expenses,
+                        "detail": detail_expenses,
+                    })
 
             noi = total_income - total_expenses
 
