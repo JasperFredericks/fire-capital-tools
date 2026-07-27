@@ -9,7 +9,6 @@ source of truth for the algorithm.
 
 from __future__ import annotations
 
-import importlib.util
 import io
 import os
 import secrets
@@ -29,32 +28,26 @@ from flask import (
 from flask_login import login_required
 from werkzeug.utils import secure_filename
 
-# ── Load the standalone generate_summary module ────────────────────────────
-
-def _load_gs():
-    path = Path(__file__).parent.parent / "mmr-summary" / "generate_summary.py"
-    spec = importlib.util.spec_from_file_location("_gs", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-_gs = _load_gs()
-
-# Re-export the functions we use so they're type-checkable
-parse_box_score       = _gs.parse_box_score
-parse_delinquency     = _gs.parse_delinquency
-parse_rent_roll       = _gs.parse_rent_roll
-parse_available_units = _gs.parse_available_units
-parse_expiring_leases = _gs.parse_expiring_leases
-parse_prospect_sources = _gs.parse_prospect_sources
-parse_work_orders     = _gs.parse_work_orders
-build_summary         = _gs.build_summary
-detect_source_system  = _gs.detect_source_system
-default_box_score     = _gs.default_box_score
-extract_appfolio_box_score = _gs.extract_appfolio_box_score
-parse_appfolio           = _gs.parse_appfolio
-make_download_filename   = _gs.make_download_filename
-sheet_by_name            = _gs.sheet_by_name
+# ── Parsing / sheet-building logic (single source of truth) ─────────────────
+# Previously loaded from the standalone CLI script mmr-summary/generate_summary.py
+# via importlib; that logic now lives in the importable package tools/mmr_report/
+# (the CLI script is a thin shim that imports the same package).
+from tools.mmr_report import (
+    build_summary,
+    default_box_score,
+    detect_source_system,
+    extract_appfolio_box_score,
+    make_download_filename,
+    parse_appfolio,
+    parse_available_units,
+    parse_box_score,
+    parse_delinquency,
+    parse_expiring_leases,
+    parse_prospect_sources,
+    parse_rent_roll,
+    parse_work_orders,
+    sheet_by_name,
+)
 
 import openpyxl  # already required by generate_summary
 
