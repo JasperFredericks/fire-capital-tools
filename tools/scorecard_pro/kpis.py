@@ -79,6 +79,17 @@ class KPICalculator:
         if "oxford pointe" in property_name:
             self.below_noi_codes.add("7210")
 
+        # Honest per-month sums of the file's own visible detail rows under
+        # each Total Operating Income/Expense section (from the parser, which
+        # is the only place the raw rows are seen). Used solely by the
+        # override-mismatch diagnostic below; empty for formats that don't
+        # provide it, in which case the diagnostic is skipped rather than
+        # comparing against the keyword-bucketed codes (which mis-classify
+        # some rows -- see calculate()).
+        detail_totals = pnl_data.get("detail_totals") or {}
+        self.detail_income_totals = detail_totals.get("income") or {}
+        self.detail_expense_totals = detail_totals.get("expense") or {}
+
         # Per-month diagnostics (populated by calculate()): months where the
         # file's Total Operating Income/Expense override row is used but does
         # not match the sum of that month's detail rows. Advisory only.
@@ -139,15 +150,17 @@ class KPICalculator:
                 total_expenses = controllable + non_controllable
 
             # Diagnostic only (never changes total_income/total_expenses above):
-            # when a Total Operating Income/Expense override row (9998/9999) was
+            # when a Total Operating Income/Expense override row (9998/9999) is
             # used as the authoritative total, compare it against the sum of the
-            # detail rows for this month and record a mismatch so Parsing Notes
-            # can flag an edited-detail-but-stale-total file. Uses the same
-            # detail-sum logic as the non-override branches above.
-            if override_income != 0:
-                detail_income = nri + other_income + sum(
-                    self.get_val(code, month) for code in self.income_fallback_codes
-                )
+            # file's OWN visible detail rows for this month (self.detail_*_totals,
+            # provided by the parser) and record a mismatch so Parsing Notes can
+            # flag an edited-detail-but-stale-total file. This compares against
+            # the real file rows -- NOT the keyword-bucketed account codes, which
+            # can mis-classify a row (e.g. "Management Fees" into income 4300) and
+            # produce false positives. If the parser didn't supply honest detail
+            # sums for this month, the comparison is skipped rather than guessed.
+            if override_income != 0 and month in self.detail_income_totals:
+                detail_income = self.detail_income_totals[month]
                 if _override_mismatch(override_income, detail_income):
                     self.override_mismatches.append({
                         "month": month,
@@ -155,15 +168,8 @@ class KPICalculator:
                         "total": override_income,
                         "detail": detail_income,
                     })
-            if override_expenses != 0:
-                detail_controllable = self.get_val("6000", month)
-                detail_non_controllable = self.get_val("7000", month)
-                for code in self.below_noi_codes:
-                    detail_non_controllable -= self.get_val(code, month)
-                if detail_controllable == 0 and detail_non_controllable == 0:
-                    for code in self.expense_fallback_codes:
-                        detail_controllable += self.get_val(code, month)
-                detail_expenses = detail_controllable + detail_non_controllable
+            if override_expenses != 0 and month in self.detail_expense_totals:
+                detail_expenses = self.detail_expense_totals[month]
                 if _override_mismatch(override_expenses, detail_expenses):
                     self.override_mismatches.append({
                         "month": month,

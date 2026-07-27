@@ -19,6 +19,15 @@ class PnLParser:
         self.detected_format = "Unknown"
         self.warnings = []
 
+        # Per-month sum of the file's OWN visible detail rows under each
+        # "Total Operating Income/Expense" section -- i.e. what a human adds
+        # up reading the spreadsheet, independent of the keyword-bucketed
+        # `accounts` codes. Populated only by parsers that see a Total
+        # Operating Income/Expense structure (currently parse_cash_flow) and
+        # used solely by the KPICalculator override-mismatch diagnostic; it
+        # never feeds any KPI. Empty for formats that don't provide it.
+        self.detail_totals: dict = {"income": {}, "expense": {}}
+
         if Path(filepath).suffix.lower() in (".xlsx", ".xlsm"):
             self.filepath = self._convert_workbook_to_csv(filepath)
         else:
@@ -563,11 +572,47 @@ class PnLParser:
             monthly_data = {month_std: self._parse_amount(row[col]) for col, month_std in month_cols.items()}
             self._merge_account(code, name_clean, monthly_data)
 
+        # Honest detail-row sums (diagnostic only; never feeds a KPI): sum the
+        # file's own visible leaf rows within each Income / Expense section --
+        # the same rows a human reading the sheet would add up beneath each
+        # "Total Operating Income/Expense" line. This is deliberately independent
+        # of map_keyword_to_code() above, so a row the keyword classifier
+        # mis-buckets (e.g. "Management Fees" landing in income code 4300) is
+        # still counted in its real section here.
+        detail_income = {m: 0.0 for m in month_cols.values()}
+        detail_expense = {m: 0.0 for m in month_cols.values()}
+        section = None
+        for _, row in df.iterrows():
+            label = str(row["Account Name"]).strip()
+            lowered = label.lower()
+            if lowered == "income":
+                section = "income"
+                continue
+            if lowered == "expense":
+                section = "expense"
+                continue
+            if (
+                lowered == "total operating income"
+                or lowered == "total operating expense"
+                or lowered.startswith("noi")
+                or lowered.startswith("total income")
+                or lowered.startswith("total expense")
+                or lowered.startswith("net income")
+            ):
+                section = None
+                continue
+            if section in ("income", "expense") and not lowered.startswith("total "):
+                bucket = detail_income if section == "income" else detail_expense
+                for col, month_std in month_cols.items():
+                    bucket[month_std] += self._parse_amount(row[col])
+        self.detail_totals = {"income": detail_income, "expense": detail_expense}
+
     def get_data(self):
         return {
             "property": str(self.property_name or "Property"),
             "period": str(self.period or "Period"),
             "accounts": self.accounts,
+            "detail_totals": self.detail_totals,
             "meta": {"format": self.detected_format, "warnings": self.warnings},
         }
 
