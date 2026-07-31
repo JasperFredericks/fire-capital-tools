@@ -168,17 +168,36 @@
 
   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
     <div class="scorecard-mini-title">Auto-Pulled Market Data (RentCast / Google Places)</div>
-    <form method="POST" action="{{ url_for('deal_dive.pull_market_data', deal_id=deal.id) }}" style="display:flex; gap:8px;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       {% if auto_market_data %}
-        <input type="hidden" name="force_refresh" value="1">
-        <button type="submit" class="btn btn-ghost">Refresh</button>
-      {% else %}
-        <button type="submit" class="btn btn-ghost">Auto-Pull Market Data</button>
+        <form method="POST" action="{{ url_for('deal_dive.reload_market_data', deal_id=deal.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-ghost">Reload from Cache</button>
+        </form>
       {% endif %}
-    </form>
+      <form method="POST" action="{{ url_for('deal_dive.pull_market_data', deal_id=deal.id) }}"
+            onsubmit="return confirm('This uses 1 RentCast API call ({{ rentcast_quota.used }} of {{ rentcast_quota.threshold }} used this month). Continue?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="force_refresh" value="1">
+        <button type="submit" class="btn btn-ghost" {% if rentcast_quota.at_cap %}disabled title="Monthly RentCast limit reached"{% endif %}>
+          {% if auto_market_data %}Force Refresh{% else %}Auto-Pull Market Data{% endif %}
+        </button>
+      </form>
+    </div>
   </div>
-  <p class="page-subtitle" style="margin-bottom:12px;">Real rent estimates, rental comparables, and ratings pulled from RentCast and Google Places &mdash; separate from the comps you enter below until you explicitly add one.</p>
+  <p class="page-subtitle" style="margin-bottom:8px;">Real rent estimates, rental comparables, and ratings pulled from RentCast and Google Places &mdash; separate from the comps you enter below until you explicitly add one.</p>
+
+  <p class="page-subtitle" style="margin-bottom:12px;">
+    RentCast lookups this month: <strong>{{ rentcast_quota.used }} / {{ rentcast_quota.threshold }}</strong>
+    {% if auto_market_data %}&middot; Reloading from cache is always free.{% endif %}
+  </p>
+  {% if rentcast_quota.at_cap %}
+    <div class="result-note" style="margin-bottom:12px;">
+      Monthly RentCast lookup limit reached ({{ rentcast_quota.used }}/{{ rentcast_quota.limit }} used this month,
+      safety threshold {{ rentcast_quota.threshold }}). Force Refresh is disabled until the counter resets next month.
+      Cached data below is still available.
+    </div>
+  {% endif %}
 
   {% if auto_market_data %}
     <p class="result-note" style="margin-bottom:12px;">Last pulled {{ auto_market_data.fetched_at[:16].replace('T', ' ') }} UTC.</p>

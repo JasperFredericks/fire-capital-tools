@@ -113,6 +113,27 @@ def _promoted_market_addresses(comps) -> set[str]:
     }
 
 
+def _rentcast_quota():
+    """Current month's RentCast usage, for the inline quota readout and the
+    at-cap disabling of Force Refresh. Reads the same counter the service's
+    own pre-request gate uses (market_data_cache.get_rentcast_usage), so the
+    number shown to the user and the number that actually blocks a request
+    can never disagree. Purely a read -- never increments anything.
+
+    at_cap mirrors market_data_service._rentcast_usage_gate()'s condition
+    (>= threshold) rather than re-deriving it, so the button disables at
+    exactly the point a real request would start being refused."""
+    with market_data_cache.get_connection() as conn:
+        used = market_data_cache.get_rentcast_usage(conn)
+    threshold = market_data_cache.RENTCAST_MONTHLY_SAFETY_THRESHOLD
+    return {
+        "used": used,
+        "threshold": threshold,
+        "at_cap": used >= threshold,
+        "limit": market_data_cache.RENTCAST_MONTHLY_FREE_LIMIT,
+    }
+
+
 def get_market_context(city, state):
     """Read-only lookup against FIRE Metrics' own city index, reusing its
     existing fuzzy city_search matching rather than a fragile exact-string
@@ -221,6 +242,7 @@ def detail(deal_id):
         statuses=db.STATUSES,
         auto_market_data=auto_market_data,
         promoted_market_addresses=_promoted_market_addresses(comps),
+        rentcast_quota=_rentcast_quota(),
     )
 
 
@@ -388,6 +410,20 @@ def pull_market_data(deal_id):
             return _deal_not_found()
 
     force_refresh = request.form.get("force_refresh") == "1"
+
+    # Refuse a force refresh that the service would only reject anyway, so
+    # the user gets told *before* a pointless round-trip. The template also
+    # disables the button in this state; this is the server-side half of
+    # that, since a disabled button is a UI convenience, not a guarantee
+    # (stale page, double submit, direct POST).
+    if force_refresh and _rentcast_quota()["at_cap"]:
+        flash(
+            "Monthly RentCast lookup limit reached — showing cached data instead. "
+            "Force Refresh is unavailable until the counter resets.",
+            "warning",
+        )
+        return redirect(url_for("deal_dive.detail", deal_id=deal_id) + "#comps")
+
     result = market_data_service.get_market_data(
         deal["address"], deal["city"], deal["state"], deal.get("zip"), force_refresh=force_refresh
     )
@@ -402,6 +438,37 @@ def pull_market_data(deal_id):
         else:
             flash("Market data pull completed, but neither source returned data for this address.", "warning")
 
+    return redirect(url_for("deal_dive.detail", deal_id=deal_id) + "#comps")
+
+
+@deal_dive_bp.route("/deal/<int:deal_id>/market-data/reload", methods=["POST"])
+@login_required
+def reload_market_data(deal_id):
+    """Re-display whatever is already cached for this address, guaranteed
+    free. Deliberately does *not* go through market_data_service at all --
+    even a non-forced get_market_data() would spend real calls on a cache
+    miss or a stale entry, and the whole point of this action is that it
+    can never cost anything. detail() re-reads the cache on render, so this
+    only needs to report what's there and redirect."""
+    with db.get_connection() as conn:
+        deal = db.get_deal(conn, deal_id)
+        if not deal:
+            return _deal_not_found()
+
+    address_key = market_data_cache.normalize_address_key(
+        deal["address"], deal["city"], deal["state"], deal.get("zip")
+    )
+    with market_data_cache.get_connection() as mconn:
+        cached = market_data_cache.get_cached(mconn, address_key)
+
+    if cached:
+        flash("Reloaded cached market data — no API calls used.", "success")
+    else:
+        flash(
+            "Nothing cached for this address yet (or the cache entry has expired) — "
+            "use Force Refresh to pull fresh data.",
+            "info",
+        )
     return redirect(url_for("deal_dive.detail", deal_id=deal_id) + "#comps")
 
 

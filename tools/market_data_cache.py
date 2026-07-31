@@ -33,11 +33,14 @@ DEFAULT_STALENESS_DAYS = 30
 
 # RentCast's free plan is a hard 50 requests/month with a per-request
 # overage charge beyond that -- there is no "soft" version of this limit.
-# The safety threshold is deliberately below the real limit (not 49) so a
-# single lookup that makes more than one real RentCast call (rent estimate
-# + property details, two separate requests against the same quota) can
-# never push us past 50 even if the check only runs once at the start of
-# that lookup.
+# The safety threshold is deliberately below the real limit (not 49) to
+# leave headroom between the last permitted lookup and the real ceiling.
+# A lookup now costs exactly one request (market_data_service reads
+# subject-property attributes out of the rent-estimate response instead of
+# making a second /properties call), so the gap is wider than strictly
+# needed -- kept as-is deliberately, since the whole point of this cap is
+# to never repeat the surprise-charge experience that already happened
+# once.
 RENTCAST_MONTHLY_FREE_LIMIT = 50
 RENTCAST_MONTHLY_SAFETY_THRESHOLD = 45
 

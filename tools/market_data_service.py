@@ -125,6 +125,11 @@ def get_rentcast_data(address: str, city: str, state: str, zip_code: str | None 
     raising if the key is missing, the monthly safety cap is hit, or either
     call fails.
 
+    Costs exactly one RentCast request per lookup: the rent-estimate call
+    carries subject-property attributes in its own subjectProperty field,
+    so no second /properties request is needed (see the comment at that
+    point below).
+
     Hard usage cap: RentCast's free plan is 50 requests/month with a per-
     request overage fee beyond that -- refuses to make a real call at all
     once this month's count is at/above the safety threshold (see
@@ -174,31 +179,36 @@ def get_rentcast_data(address: str, city: str, state: str, zip_code: str | None 
         for comp in (rent_payload.get("comparables") or [])
     ]
 
+    # Subject-property details come out of the rent-estimate response above
+    # rather than a second /properties request: the rent endpoint's
+    # lookupSubjectAttributes parameter defaults to true, so the same
+    # attributes ride along in subjectProperty for free. This used to be a
+    # separate /properties call, which doubled the cost of every lookup
+    # (2 quota units instead of 1) against a hard 50/month limit.
+    #
+    # Verified against live responses for both a data-rich address (all
+    # five attributes the UI renders come back identically from either
+    # endpoint) and a data-poor one (both endpoints return nothing, so the
+    # second call bought nothing there either).
+    #
+    # One deliberate gap: subjectProperty omits lastSalePrice, which
+    # /properties did return. The key is kept below so the cached dict
+    # shape is unchanged, but it is now always None. Nothing reads it --
+    # no template or route references last_sale_price -- so this drops a
+    # value that was already never displayed. lastSaleDate *is* in
+    # subjectProperty and is preserved.
+    subject = rent_payload.get("subjectProperty") or {}
     property_details = None
-    if not _rentcast_usage_gate():  # re-check -- the rent-estimate call above may have just hit the cap
-        try:
-            prop_resp = requests.get(
-                f"{RENTCAST_BASE_URL}/properties",
-                headers=headers,
-                params={"address": full_address},
-                timeout=REQUEST_TIMEOUT,
-            )
-            _record_rentcast_call()
-            if prop_resp.ok:
-                records = prop_resp.json()
-                if records:
-                    first = records[0]
-                    property_details = {
-                        "property_type": first.get("propertyType"),
-                        "bedrooms": first.get("bedrooms"),
-                        "bathrooms": first.get("bathrooms"),
-                        "square_footage": first.get("squareFootage"),
-                        "year_built": first.get("yearBuilt"),
-                        "last_sale_price": first.get("lastSalePrice"),
-                        "last_sale_date": first.get("lastSaleDate"),
-                    }
-        except requests.RequestException:
-            pass  # property details are a bonus; rent estimate above is the core result
+    if subject:
+        property_details = {
+            "property_type": subject.get("propertyType"),
+            "bedrooms": subject.get("bedrooms"),
+            "bathrooms": subject.get("bathrooms"),
+            "square_footage": subject.get("squareFootage"),
+            "year_built": subject.get("yearBuilt"),
+            "last_sale_price": None,  # not provided by subjectProperty; see above
+            "last_sale_date": subject.get("lastSaleDate"),
+        }
 
     return {
         "available": True,
