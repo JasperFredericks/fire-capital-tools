@@ -32,6 +32,8 @@ from werkzeug.utils import secure_filename
 from tools import deal_dive_db as db
 from tools import market_data_cache
 from tools import market_data_service
+from tools import rent_comps
+from tools import rent_comps_db
 
 deal_dive_bp = Blueprint("deal_dive", __name__)
 
@@ -86,52 +88,17 @@ def _deal_not_found():
     return redirect(url_for("deal_dive.index"))
 
 
-def _split_comps(comps):
+def _recent_sales_comps(comps):
     """"Recent Sales Comps" is deliberately a short preview (Michelle's
     request: up to 3, don't pad with placeholders if fewer exist) --
-    comps is already ordered newest-first by db.list_comps(). Rental
-    comps still exist here (comp_type='rental' is how promote_market_comp
-    already tags a promoted RentCast comparable -- see that route's own
-    docstring; that flow is untouched) and are kept in their own list
-    rather than silently dropped from view now that the main table is
-    sales-only."""
-    sales = [c for c in comps if c.get("comp_type") == "sale"]
-    rentals = [c for c in comps if c.get("comp_type") == "rental"]
-    return sales[:MAX_RECENT_SALES_COMPS], rentals
+    comps is already ordered newest-first by db.list_comps().
 
-
-def _promoted_market_addresses(comps) -> set[str]:
-    """Normalized addresses already promoted from auto-pulled market data
-    into this deal's own comps table -- identifies a promoted RentCast
-    comparable by the same source_notes prefix promote_market_comp() writes,
-    since that's the only marker distinguishing an auto-pulled comp from a
-    manually-entered one once it's in deal_comps."""
-    return {
-        (c.get("address") or "").strip().lower()
-        for c in comps
-        if (c.get("source_notes") or "").startswith(_MARKET_COMP_SOURCE_PREFIX) and c.get("address")
-    }
-
-
-def _rentcast_quota():
-    """Current month's RentCast usage, for the inline quota readout and the
-    at-cap disabling of Force Refresh. Reads the same counter the service's
-    own pre-request gate uses (market_data_cache.get_rentcast_usage), so the
-    number shown to the user and the number that actually blocks a request
-    can never disagree. Purely a read -- never increments anything.
-
-    at_cap mirrors market_data_service._rentcast_usage_gate()'s condition
-    (>= threshold) rather than re-deriving it, so the button disables at
-    exactly the point a real request would start being refused."""
-    with market_data_cache.get_connection() as conn:
-        used = market_data_cache.get_rentcast_usage(conn)
-    threshold = market_data_cache.RENTCAST_MONTHLY_SAFETY_THRESHOLD
-    return {
-        "used": used,
-        "threshold": threshold,
-        "at_cap": used >= threshold,
-        "limit": market_data_cache.RENTCAST_MONTHLY_FREE_LIMIT,
-    }
+    Sales-only. Rental comparables now live in the Rent Comps tool
+    (tools/rent_comps.py) and its own rent_comps table; Deal Dive no longer
+    writes or displays them here. Any pre-existing comp_type='rental' rows
+    in deal_comps are left in place as historical data -- deliberately not
+    migrated and not deleted -- they simply aren't rendered by this filter."""
+    return [c for c in comps if c.get("comp_type") == "sale"][:MAX_RECENT_SALES_COMPS]
 
 
 def get_market_context(city, state):
@@ -228,21 +195,18 @@ def detail(deal_id):
     with market_data_cache.get_connection() as mconn:
         auto_market_data = market_data_cache.get_cached(mconn, address_key)
 
-    sales_comps, rental_comps = _split_comps(comps)
-
     return render_template(
         "tools/deal_dive_detail.html",
         deal=deal,
-        sales_comps=sales_comps,
-        rental_comps=rental_comps,
+        sales_comps=_recent_sales_comps(comps),
         comp_source_options=COMP_SOURCE_OPTIONS,
         financial_files=financial_files,
         condition_files=condition_files,
         market=market,
         statuses=db.STATUSES,
         auto_market_data=auto_market_data,
-        promoted_market_addresses=_promoted_market_addresses(comps),
-        rentcast_quota=_rentcast_quota(),
+        rent_comp_count=rent_comps.count_for_deal(deal_id),
+        rentcast_quota=market_data_service.rentcast_quota(),
     )
 
 
@@ -287,6 +251,13 @@ def delete_deal(deal_id):
         if not db.get_deal(conn, deal_id):
             return _deal_not_found()
         db.delete_deal(conn, deal_id)
+
+    # Rent comps live in their own database, so db.delete_deal()'s cascade
+    # (deal_comps/deal_files, unchanged) can't reach them -- clean them up
+    # explicitly rather than leaving rows pointing at a deal that no longer
+    # exists. Standalone comps (deal_id NULL) are never touched.
+    with rent_comps_db.get_connection() as rconn:
+        rent_comps_db.delete_comps_for_deal(rconn, deal_id)
 
     upload_dir = _upload_dir(deal_id)
     shutil.rmtree(upload_dir, ignore_errors=True)
@@ -416,7 +387,7 @@ def pull_market_data(deal_id):
     # disables the button in this state; this is the server-side half of
     # that, since a disabled button is a UI convenience, not a guarantee
     # (stale page, double submit, direct POST).
-    if force_refresh and _rentcast_quota()["at_cap"]:
+    if force_refresh and market_data_service.rentcast_quota()["at_cap"]:
         flash(
             "Monthly RentCast lookup limit reached — showing cached data instead. "
             "Force Refresh is unavailable until the counter resets.",
@@ -472,45 +443,14 @@ def reload_market_data(deal_id):
     return redirect(url_for("deal_dive.detail", deal_id=deal_id) + "#comps")
 
 
-@deal_dive_bp.route("/deal/<int:deal_id>/market-data/promote", methods=["POST"])
-@login_required
-def promote_market_comp(deal_id):
-    """Copy one auto-pulled RentCast comparable into the deal's own manual
-    deal_comps table. Auto-pulled data supplements manual entry -- it never
-    gets silently merged in on its own, only via this explicit action."""
-    address = (request.form.get("address") or "").strip()
-    with db.get_connection() as conn:
-        if not db.get_deal(conn, deal_id):
-            return _deal_not_found()
-
-        if address and address.lower() in _promoted_market_addresses(db.list_comps(conn, deal_id)):
-            flash("That comp has already been added.", "info")
-            return redirect(url_for("deal_dive.detail", deal_id=deal_id) + "#comps")
-
-        note_parts = []
-        for label, key in (("bd", "bedrooms"), ("ba", "bathrooms"), ("sqft", "square_footage")):
-            value = request.form.get(key)
-            if value:
-                note_parts.append(f"{value}{label}")
-        distance = request.form.get("distance_miles")
-        if distance:
-            note_parts.append(f"{distance} mi away")
-        source_notes = _MARKET_COMP_SOURCE_PREFIX + (f" ({', '.join(note_parts)})" if note_parts else "")
-
-        db.add_comp(
-            conn,
-            deal_id,
-            {
-                "comp_type": "rental",
-                "address": address or None,
-                "price": _to_float(request.form.get("price")),
-                "unit_count": None,
-                "comp_date": None,
-                "source_notes": source_notes,
-            },
-        )
-    flash("Added to comps.", "success")
-    return redirect(url_for("deal_dive.detail", deal_id=deal_id) + "#comps")
+# promote_market_comp() used to live here: it copied one auto-pulled
+# RentCast comparable into deal_comps as comp_type='rental'. Rental
+# comparables now belong to the Rent Comps tool, which saves them to its
+# own rent_comps table with the full field set (correlation, days-on-market,
+# listing status) instead of flattening them into a source_notes string.
+# The route is gone rather than left unreachable, since the candidates
+# table that was its only caller has moved with it. Existing rental rows in
+# deal_comps stay put as historical data.
 
 
 @deal_dive_bp.route("/deal/<int:deal_id>/files", methods=["POST"])

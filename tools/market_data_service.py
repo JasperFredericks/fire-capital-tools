@@ -119,6 +119,28 @@ def _record_rentcast_call() -> None:
         cache.increment_rentcast_usage(conn)
 
 
+def rentcast_quota() -> dict[str, Any]:
+    """This month's RentCast usage, for callers that need to *show* the
+    quota and pre-emptively disable a paid action (Deal Dive's and Rent
+    Comps' Force Refresh buttons both do).
+
+    Lives here rather than in each blueprint so there is exactly one
+    definition of "at cap": at_cap mirrors _rentcast_usage_gate()'s own
+    >= threshold condition, so a button can never stay enabled past the
+    point a real request would be refused, and the number shown to the
+    user is the number that actually blocks the call. Purely a read --
+    never increments anything."""
+    with cache.get_connection() as conn:
+        used = cache.get_rentcast_usage(conn)
+    threshold = cache.RENTCAST_MONTHLY_SAFETY_THRESHOLD
+    return {
+        "used": used,
+        "threshold": threshold,
+        "at_cap": used >= threshold,
+        "limit": cache.RENTCAST_MONTHLY_FREE_LIMIT,
+    }
+
+
 def get_rentcast_data(address: str, city: str, state: str, zip_code: str | None = None) -> dict[str, Any]:
     """Rent estimate + rental comparables + basic property details for one
     address. Returns {"available": False, "message": ...} rather than
@@ -167,6 +189,17 @@ def get_rentcast_data(address: str, city: str, state: str, zip_code: str | None 
         }
 
     rent_payload = rent_resp.json()
+    # correlation/days_old/listing_status were previously dropped on the
+    # floor even though RentCast sends them with every comparable at no
+    # extra cost. correlation in particular is what RentCast itself sorts
+    # the list by, so without it a caller inherits the ordering but can't
+    # show *why* one comp outranks another. Kept now that Rent Comps
+    # surfaces them as Match % / Last Seen / Status.
+    #
+    # Cache entries written before these keys existed simply won't have
+    # them; callers read via .get()/Jinja's undefined-is-falsy and render
+    # a dash, so an old cached row degrades to the previous display rather
+    # than erroring.
     comparables = [
         {
             "address": comp.get("formattedAddress"),
@@ -175,6 +208,9 @@ def get_rentcast_data(address: str, city: str, state: str, zip_code: str | None 
             "bathrooms": comp.get("bathrooms"),
             "square_footage": comp.get("squareFootage"),
             "distance_miles": comp.get("distance"),
+            "correlation": comp.get("correlation"),
+            "days_old": comp.get("daysOld"),
+            "listing_status": comp.get("status"),
         }
         for comp in (rent_payload.get("comparables") or [])
     ]

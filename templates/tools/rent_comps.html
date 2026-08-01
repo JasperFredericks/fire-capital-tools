@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+{% block title %}Rent Comps - FIRE Capital Tools{% endblock %}
+
+{#
+  Shared row macros so the candidates table and the saved table can't drift
+  apart -- they show the same columns by design (saved swaps Add for
+  Remove), and duplicating the formatting in two places is how that
+  promise quietly breaks.
+
+  Formatting rules, applied consistently: money as '${:,.0f}', a dash for
+  anything null, and $/sqft only when both operands are present so a
+  missing sqft never renders as a divide-by-zero or a fake $0.
+#}
+{#
+  Every POST has to say which scope it belongs to, since the page is
+  stateless between requests: either a deal_id (deal-scoped) or the address
+  parts (standalone). Emitted as hidden inputs from one macro so a new form
+  can't accidentally omit them and drop the user back to a blank search.
+#}
+{% macro scope_fields() %}
+  {%- if ctx.deal_id -%}
+    <input type="hidden" name="deal_id" value="{{ ctx.deal_id }}">
+  {%- else -%}
+    <input type="hidden" name="address" value="{{ ctx.address or '' }}">
+    <input type="hidden" name="city" value="{{ ctx.city or '' }}">
+    <input type="hidden" name="state" value="{{ ctx.state or '' }}">
+    <input type="hidden" name="zip" value="{{ ctx.zip or '' }}">
+  {%- endif -%}
+{% endmacro %}
+
+{% macro money(v) %}{{ '${:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
+
+{% macro per_sqft(rent, sqft) %}
+  {%- if rent is not none and sqft -%}
+    {{ '${:,.2f}'.format(rent / sqft) }}
+  {%- else -%}
+    —
+  {%- endif -%}
+{% endmacro %}
+
+{% macro match_pct(correlation) %}
+  {%- if correlation is not none and correlation != '' -%}
+    {{ '%.0f%%'|format(correlation * 100) }}
+  {%- else -%}
+    —
+  {%- endif -%}
+{% endmacro %}
+
+{#
+  Beds/baths come back as ints from the live RentCast JSON but as REALs
+  from SQLite, so the same comp would read "3/2" as a candidate and
+  "3.0/2.0" once saved. Render whole numbers without the decimal tail
+  while preserving genuine halves (2.5 baths is a real value).
+#}
+{% macro num(v) %}
+  {%- if v is none -%}—
+  {%- elif v == v|int -%}{{ v|int }}
+  {%- else -%}{{ v }}
+  {%- endif -%}
+{% endmacro %}
+
+{% macro sqft(v) %}{{ '{:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
+
+{% macro last_seen(days_old) %}
+  {%- if days_old is not none and days_old != '' -%}
+    {{ days_old|int }}d ago
+  {%- else -%}
+    —
+  {%- endif -%}
+{% endmacro %}
+
+{#
+  Read every field with .get() rather than attribute access. Two reasons,
+  both real:
+
+  * Saved rows call the rent column "rent"; live candidates call it
+    "price". One macro serves both.
+  * correlation / days_old / listing_status were added to the market-data
+    projection after some cache entries had already been written, so an
+    older cached row simply has no such key. Jinja's Undefined passes an
+    "is not none" test and then explodes on arithmetic, so attribute
+    access would 500 on exactly those rows. .get() yields None and the
+    cell renders a dash, which is the intended degradation.
+#}
+{% macro comp_cells(c) %}
+  {% set rent = c.get('rent') if c.get('rent') is not none else c.get('price') %}
+  <td>{{ c.get('address') or '—' }}</td>
+  <td>{{ money(rent) }}</td>
+  <td>{{ num(c.get('bedrooms')) }}/{{ num(c.get('bathrooms')) }}</td>
+  <td>{{ sqft(c.get('square_footage')) }}</td>
+  <td>{{ per_sqft(rent, c.get('square_footage')) }}</td>
+  <td>{{ '%.1f mi'|format(c.get('distance_miles')) if c.get('distance_miles') is not none else '—' }}</td>
+  <td>{{ match_pct(c.get('correlation')) }}</td>
+  <td>{{ last_seen(c.get('days_old')) }}</td>
+  <td>{{ c.get('listing_status') or '—' }}</td>
+{% endmacro %}
+
+{% set columns = ['Address', 'Rent', 'Bd/Ba', 'Sqft', '$/Sqft', 'Distance', 'Match %', 'Last Seen', 'Status'] %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <h1 class="page-title">Rent Comps</h1>
+  <p class="page-subtitle">Pull and compare market rent data for comparable properties in target submarkets. Look up any address, or open this from a deal to keep its comps together.</p>
+</div>
+
+<!-- ── Subject address ────────────────────────────────────────────────── -->
+<div class="card">
+  {% if ctx.deal_id %}
+    <div class="scorecard-section-title">Subject Property</div>
+    <p class="page-subtitle" style="margin:10px 0 12px;">
+      Scoped to a Deal Dive property &mdash; comps you save here belong to this deal. The address comes from the deal record and is edited there, not here.
+    </p>
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+      <div>
+        <div class="stat-box-value" style="font-size:15px;">{{ ctx.address }}</div>
+        <div class="stat-box-sub">{{ ctx.city }}, {{ ctx.state }} {{ ctx.zip or '' }}</div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <a href="{{ url_for('deal_dive.detail', deal_id=ctx.deal_id) }}" class="btn btn-ghost">Back to Deal</a>
+        <a href="{{ url_for('rent_comps.index') }}" class="btn btn-ghost">Standalone Search</a>
+      </div>
+    </div>
+  {% else %}
+    <div class="scorecard-section-title">Search an Address</div>
+    <p class="page-subtitle" style="margin:10px 0 12px;">
+      Standalone lookup &mdash; comps you save here aren't tied to any deal. Searching costs nothing; pulling data is a separate, explicit step.
+    </p>
+    <form method="POST" action="{{ url_for('rent_comps.search') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div style="display:grid; grid-template-columns: 2fr 1fr 0.6fr 0.8fr auto; gap:10px; align-items:end;">
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="rc_address">Address</label>
+          <input class="form-input" type="text" id="rc_address" name="address" value="{{ ctx.address or '' }}" placeholder="1200 Peachtree St NE">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="rc_city">City</label>
+          <input class="form-input" type="text" id="rc_city" name="city" value="{{ ctx.city or '' }}" placeholder="Atlanta">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="rc_state">State</label>
+          <input class="form-input" type="text" id="rc_state" name="state" value="{{ ctx.state or '' }}" placeholder="GA" maxlength="2">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="rc_zip">ZIP</label>
+          <input class="form-input" type="text" id="rc_zip" name="zip" value="{{ ctx.zip or '' }}" placeholder="30309">
+        </div>
+        <button type="submit" class="btn btn-primary">Search</button>
+      </div>
+    </form>
+  {% endif %}
+</div>
+
+<!-- ── Rent data ──────────────────────────────────────────────────────── -->
+<div class="card" id="rent-data">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
+    <div class="scorecard-section-title">Rent Estimate &amp; Comparables (RentCast)</div>
+    {% if has_address %}
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        {% if cached %}
+          <form method="POST" action="{{ url_for('rent_comps.reload_from_cache') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            {{ scope_fields() }}
+            <button type="submit" class="btn btn-ghost">Reload from Cache</button>
+          </form>
+        {% endif %}
+        <form method="POST" action="{{ url_for('rent_comps.pull') }}"
+              onsubmit="return confirm('This uses 1 RentCast API call ({{ rentcast_quota.used }} of {{ rentcast_quota.threshold }} used this month). Continue?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          {{ scope_fields() }}
+          <button type="submit" class="btn btn-ghost" {% if rentcast_quota.at_cap %}disabled title="Monthly RentCast limit reached"{% endif %}>
+            {% if cached %}Force Refresh{% else %}Pull Rent Data{% endif %}
+          </button>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+
+  <p class="page-subtitle" style="margin-bottom:12px;">
+    RentCast lookups this month: <strong>{{ rentcast_quota.used }} / {{ rentcast_quota.threshold }}</strong>
+    {% if cached %}&middot; Reloading from cache is always free.{% endif %}
+  </p>
+
+  {% if rentcast_quota.at_cap %}
+    <div class="result-note" style="margin-bottom:12px;">
+      Monthly RentCast lookup limit reached ({{ rentcast_quota.used }}/{{ rentcast_quota.limit }} used this month,
+      safety threshold {{ rentcast_quota.threshold }}). Pulling fresh data is disabled until the counter resets next month.
+      Anything already cached is still shown below.
+    </div>
+  {% endif %}
+
+  {# State 1 of 4 -- nothing to search for yet. #}
+  {% if not has_address %}
+    <div class="result-note">
+      {% if ctx.deal_id %}
+        This deal has no address on file yet — add one in Deal Dive first.
+      {% else %}
+        Enter an address, city, and state above to get started. Nothing is pulled until you ask for it.
+      {% endif %}
+    </div>
+
+  {# State 2 of 4 -- valid address, never pulled. #}
+  {% elif not cached %}
+    <div class="result-note">
+      No rent data pulled yet for {{ ctx.address }} — use “{{ 'Force Refresh' if cached else 'Pull Rent Data' }}” above.
+      {% if rentcast_quota.at_cap %} That's unavailable until the monthly counter resets.{% endif %}
+    </div>
+
+  {# State 3 of 4 -- pulled, but RentCast had nothing (or errored). Stale
+     cached data stays visible with its own as-of note rather than blanking. #}
+  {% elif not (rentcast and rentcast.available) %}
+    <div class="result-note" style="margin-bottom:10px;">
+      {{ rentcast.message if rentcast and rentcast.message else 'RentCast returned no rent data for this address.' }}
+    </div>
+    <p class="page-subtitle">Showing the last successful pull, as of {{ cached.fetched_at[:16].replace('T', ' ') }} UTC.</p>
+
+  {% else %}
+    <p class="result-note" style="margin-bottom:12px;">Last pulled {{ cached.fetched_at[:16].replace('T', ' ') }} UTC.</p>
+
+    <div class="stats-grid" style="margin-bottom:18px;">
+      <div class="stat-box">
+        <div class="stat-box-label">Rent Estimate</div>
+        <div class="stat-box-value">{{ money(rentcast.rent_estimate) }}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Estimate Range</div>
+        <div class="stat-box-value" style="font-size:15px;">
+          {% if rentcast.rent_range_low is not none and rentcast.rent_range_high is not none %}
+            {{ money(rentcast.rent_range_low) }} &ndash; {{ money(rentcast.rent_range_high) }}
+          {% else %}—{% endif %}
+        </div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Estimate Confidence</div>
+        <div class="stat-box-value" style="font-size:15px;">{{ confidence.label if confidence else '—' }}</div>
+        {% if confidence %}
+          <div class="stat-box-sub">Range spans {{ '%.0f%%'|format(confidence.spread_pct) }} of the estimate</div>
+        {% endif %}
+      </div>
+      {% if rentcast.property %}
+        <div class="stat-box">
+          <div class="stat-box-label">Subject Property</div>
+          <div class="stat-box-value" style="font-size:14px;">{{ rentcast.property.property_type or '—' }}</div>
+          <div class="stat-box-sub">
+            {{ rentcast.property.bedrooms or '—' }}bd / {{ rentcast.property.bathrooms or '—' }}ba,
+            {{ rentcast.property.square_footage or '—' }} sqft{% if rentcast.property.year_built %}, built {{ rentcast.property.year_built }}{% endif %}
+          </div>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="scorecard-mini-title" style="margin-bottom:8px;">
+      Comparable Rentals{% if candidates %} ({{ candidates|length }}){% endif %}
+    </div>
+    <div class="table-wrap" style="margin-bottom:10px;">
+      <table class="rent-comps-table">
+        <thead>
+          <tr>
+            {% for col in columns %}<th>{{ col }}</th>{% endfor %}
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {# State 4 of 4 -- pulled successfully but zero comparables. An
+             explicit row, never a vanished table. #}
+          {% if not candidates %}
+            <tr><td colspan="{{ columns|length + 1 }}">RentCast found no comparable rentals near this address.</td></tr>
+          {% else %}
+            {% for c in candidates %}
+              {% set addr_key = (c.get('address') or '')|trim|lower %}
+              {% set is_saved = addr_key and addr_key in already_saved %}
+              <tr {% if loop.index0 >= candidate_preview %}class="rc-extra" hidden{% endif %}>
+                {{ comp_cells(c) }}
+                <td>
+                  {% if is_saved %}
+                    <span class="btn btn-ghost" style="padding:4px 10px; font-size:12px; opacity:0.65; cursor:default;">Saved &#10003;</span>
+                  {% else %}
+                    <form method="POST" action="{{ url_for('rent_comps.save_comp') }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      {{ scope_fields() }}
+                      {# comp_address, not address -- scope_fields() already
+                         emits an "address" input for the subject property in
+                         standalone mode, and two same-named inputs would make
+                         request.form.get("address") ambiguous. #}
+                      <input type="hidden" name="comp_address" value="{{ c.get('address') or '' }}">
+                      <input type="hidden" name="rent" value="{{ c.get('price') if c.get('price') is not none else '' }}">
+                      <input type="hidden" name="bedrooms" value="{{ c.get('bedrooms') if c.get('bedrooms') is not none else '' }}">
+                      <input type="hidden" name="bathrooms" value="{{ c.get('bathrooms') if c.get('bathrooms') is not none else '' }}">
+                      <input type="hidden" name="square_footage" value="{{ c.get('square_footage') if c.get('square_footage') is not none else '' }}">
+                      <input type="hidden" name="distance_miles" value="{{ c.get('distance_miles') if c.get('distance_miles') is not none else '' }}">
+                      <input type="hidden" name="correlation" value="{{ c.get('correlation') if c.get('correlation') is not none else '' }}">
+                      <input type="hidden" name="days_old" value="{{ c.get('days_old') if c.get('days_old') is not none else '' }}">
+                      <input type="hidden" name="listing_status" value="{{ c.get('listing_status') or '' }}">
+                      <button type="submit" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Add</button>
+                    </form>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    {% if candidates|length > candidate_preview %}
+      <button type="button" class="btn btn-ghost" data-expand="rc-extra"
+              data-more="Show all {{ candidates|length }}" data-less="Show top {{ candidate_preview }}">
+        Show all {{ candidates|length }}
+      </button>
+    {% endif %}
+  {% endif %}
+</div>
+
+<!-- ── Saved comps ────────────────────────────────────────────────────── -->
+<div class="card" id="saved-comps">
+  <div class="scorecard-section-title">
+    Saved Rent Comps{% if saved %} ({{ saved|length }}){% endif %}
+  </div>
+  <p class="page-subtitle" style="margin:10px 0 12px;">
+    {% if ctx.deal_id %}
+      Saved against this deal &mdash; these are what Deal Dive counts on its Rent Comps card.
+    {% else %}
+      Saved to the standalone list &mdash; not attached to any deal.
+    {% endif %}
+    Ordered by match strength.
+  </p>
+
+  <div class="table-wrap">
+    <table class="rent-comps-table">
+      <thead>
+        <tr>
+          {% for col in columns %}<th>{{ col }}</th>{% endfor %}
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if not saved %}
+          <tr><td colspan="{{ columns|length + 1 }}">No rent comps saved yet — add one from the comparables above.</td></tr>
+        {% else %}
+          {% for c in saved %}
+            <tr {% if loop.index0 >= saved_preview %}class="rc-saved-extra" hidden{% endif %}>
+              {{ comp_cells(c) }}
+              <td>
+                <form method="POST" action="{{ url_for('rent_comps.delete_comp', comp_id=c.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  {{ scope_fields() }}
+                  <button type="submit" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  {% if saved|length > saved_preview %}
+    <button type="button" class="btn btn-ghost" style="margin-top:10px;" data-expand="rc-saved-extra"
+            data-more="Show all {{ saved|length }}" data-less="Show top {{ saved_preview }}">
+      Show all {{ saved|length }}
+    </button>
+  {% endif %}
+</div>
+
+<script>
+// Expand/collapse for both tables. Rows past the preview count are rendered
+// with [hidden] and toggled here, so the full set is present in the DOM (and
+// in view-source / find-in-page) rather than requiring another request.
+(function () {
+  document.querySelectorAll("[data-expand]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var rows = document.querySelectorAll("." + button.dataset.expand);
+      var expanding = rows.length > 0 && rows[0].hasAttribute("hidden");
+      rows.forEach(function (row) {
+        if (expanding) { row.removeAttribute("hidden"); }
+        else { row.setAttribute("hidden", ""); }
+      });
+      button.textContent = expanding ? button.dataset.less : button.dataset.more;
+    });
+  });
+})();
+</script>
+{% endblock %}

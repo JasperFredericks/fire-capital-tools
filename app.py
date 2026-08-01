@@ -66,6 +66,7 @@ def create_app(config_class: type = Config) -> Flask:
     from tools.deal_dive import deal_dive_bp
     from tools.fire_metrics import fire_metrics_bp
     from tools.mmr_summary import mmr_bp
+    from tools.rent_comps import rent_comps_bp
     from tools.scorecard_pro import scorecard_bp
 
     app.register_blueprint(auth_bp)
@@ -73,6 +74,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(fire_metrics_bp, url_prefix="/tools/fire-metrics")
     app.register_blueprint(scorecard_bp, url_prefix="/tools/scorecard-pro")
     app.register_blueprint(deal_dive_bp, url_prefix="/tools/deal-dive")
+    app.register_blueprint(rent_comps_bp, url_prefix="/tools/rent-comps")
 
     # ── Security headers ───────────────────────────────────────────────────
     @app.after_request

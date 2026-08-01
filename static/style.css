@@ -1571,20 +1571,28 @@ hr.divider {
 }
 
 /* ── Deal Dive ────────────────────────────────────────────────────────────── */
-.deal-dive-table {
+/* .rent-comps-table shares this styling rather than redefining it -- same
+   dense table, different tool (Rent Comps, under Markets). Aliased instead
+   of reused under the deal-dive name so the Markets tool isn't carrying a
+   Deal Dive class in its markup. */
+.deal-dive-table,
+.rent-comps-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
 }
 
 .deal-dive-table th,
-.deal-dive-table td {
+.deal-dive-table td,
+.rent-comps-table th,
+.rent-comps-table td {
   border-bottom: 1px solid #f3f4f6;
   padding: 10px 12px;
   text-align: left;
 }
 
-.deal-dive-table th {
+.deal-dive-table th,
+.rent-comps-table th {
   color: #6b7280;
   font-size: 10.5px;
   text-transform: uppercase;
