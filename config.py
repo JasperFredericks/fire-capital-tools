@@ -27,8 +27,16 @@ class Config:
     FIRE_METRICS_AI_SUMMARIES_ENABLED: bool = os.environ.get("FIRE_METRICS_AI_SUMMARIES_ENABLED", "false").lower() == "true"
 
     # ── File uploads ───────────────────────────────────────────────────────
-    UPLOAD_FOLDER: str = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "uploads"
+    # Env-var-overridable with a repo-relative fallback, the same shape as
+    # USER_STORE_PATH below and every *_DB_PATH in tools/. On Railway this
+    # must point at the persistent volume: the container filesystem is
+    # ephemeral, so anything written under the repo is destroyed on each
+    # deploy. Deal Dive is the reason this matters -- its uploads are
+    # tracked in deal_files and downloadable indefinitely, unlike Scorecard
+    # Pro's and MMR's, which are session scratch on a 4-hour TTL.
+    UPLOAD_FOLDER: str = os.environ.get(
+        "UPLOAD_FOLDER_PATH",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads"),
     )
     MAX_CONTENT_LENGTH: int = 20 * 1024 * 1024   # 20 MB
 

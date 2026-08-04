@@ -79,12 +79,14 @@ Tested against:
 	- `GOOGLE_MAPS_API_KEY` (required for FIRE Metric map rendering)
 	- `GOOGLE_MAPS_MAP_ID` (required for FIRE Metric map styling)
 	- `MARKET_DATA_DB_PATH` (optional; defaults to `market_data_cache.db`)
+	- `UPLOAD_FOLDER_PATH` (optional; defaults to `uploads/` at the repo root)
 	- `CENSUS_API_KEY`
 - Required for the FIRE Metric updater to pull ACS/Census data: `CENSUS_API_KEY`
 - Required for Scorecard Pro's upload history/trend to persist across Railway deploys: `SCORECARD_PRO_DB_PATH`
 - Required for Deal Dive's deals/comps/condition data to persist across Railway deploys: `DEAL_DIVE_DB_PATH`
 - Required for Deal Dive's "Auto-Pull Market Data" (RentCast rent estimates/comps + Google Places ratings): `RENTCAST_API_KEY`, `GOOGLE_PLACES_API_KEY`
 - Required for the RentCast/Google Places lookup cache to persist across Railway deploys: `MARKET_DATA_DB_PATH`
+- Required for Deal Dive's uploaded supporting documents to persist across Railway deploys: `UPLOAD_FOLDER_PATH`
 - Required for FIRE Metric Google Maps display: `GOOGLE_MAPS_API_KEY`, `GOOGLE_MAPS_MAP_ID`
 
 ### Google Maps API key restrictions
