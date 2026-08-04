@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block title %}Deal Analyzer - FIRE Capital Tools{% endblock %}
+
+{# Money to the nearest dollar, percentages to one decimal, an em dash for
+   anything undefined -- same formatting discipline as Deal Dive and Rent
+   Comps so figures read consistently across tools. #}
+{% macro money(v) %}{{ '${:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
+{% macro pct(v, dp=1) %}{{ ('{:,.%df}%%' % dp).format(v * 100) if v is not none else '—' }}{% endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <h1 class="page-title">Deal Analyzer <span class="tool-tag tag-soon" style="vertical-align:middle; font-size:11px;">Beta</span></h1>
+  <p class="page-subtitle">
+    A quick levered-returns read on one set of assumptions &mdash; not a full pro forma.
+    Unit-level rent rolls, itemized expenses and sensitivity tables belong in the Underwriting tool.
+  </p>
+</div>
+
+{% if deal %}
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+      <div>
+        <div class="scorecard-mini-title" style="margin-bottom:4px;">Prefilled from Deal Dive</div>
+        <div class="stat-box-value" style="font-size:15px;">{{ deal.address }}</div>
+        <div class="stat-box-sub">
+          {{ deal.city }}, {{ deal.state }} {{ deal.zip or '' }}
+          {%- if deal.unit_count %} &middot; {{ deal.unit_count }} units{% endif %}
+        </div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <a href="{{ url_for('deal_dive.detail', deal_id=deal.id) }}" class="btn btn-ghost">Back to Deal</a>
+        <a href="{{ url_for('deal_analyzer.index') }}" class="btn btn-ghost">Blank Analysis</a>
+      </div>
+    </div>
+    <p class="page-subtitle" style="margin:12px 0 0;">
+      These are starting values, not fixed &mdash; edit anything below to test a different scenario.
+      Nothing here writes back to the deal record.
+    </p>
+  </div>
+{% endif %}
+
+<!-- ── Assumptions ────────────────────────────────────────────────────── -->
+<div class="card" id="assumptions">
+  <div class="scorecard-section-title">Assumptions</div>
+
+  {% if error %}
+    <div class="result-note" style="margin:12px 0; border-left:3px solid #dc2626;">{{ error }}</div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('deal_analyzer.index') }}{% if deal_id %}?deal_id={{ deal_id }}{% endif %}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if deal_id %}<input type="hidden" name="deal_id" value="{{ deal_id }}">{% endif %}
+
+    <div class="scorecard-mini-title" style="margin:14px 0 8px;">Purchase</div>
+    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
+      <div class="form-group">
+        <label class="form-label" for="purchase_price">Purchase Price ($)</label>
+        <input class="form-input" type="text" id="purchase_price" name="purchase_price" value="{{ form.purchase_price }}" placeholder="1,000,000" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="closing_costs_pct">Closing Costs (% of price)</label>
+        <input class="form-input" type="text" id="closing_costs_pct" name="closing_costs_pct" value="{{ form.closing_costs_pct }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="noi_year1">Year-1 NOI ($)</label>
+        <input class="form-input" type="text" id="noi_year1" name="noi_year1" value="{{ form.noi_year1 }}" placeholder="70,000" required>
+      </div>
+    </div>
+
+    <div class="scorecard-mini-title" style="margin:8px 0;">Financing</div>
+    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
+      <div class="form-group">
+        <label class="form-label" for="ltv_pct">LTV (%)</label>
+        <input class="form-input" type="text" id="ltv_pct" name="ltv_pct" value="{{ form.ltv_pct }}">
+        <span class="stat-box-sub">0 for an all-cash purchase.</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="interest_rate_pct">Interest Rate (%)</label>
+        <input class="form-input" type="text" id="interest_rate_pct" name="interest_rate_pct" value="{{ form.interest_rate_pct }}" placeholder="6.5" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="amort_years">Amortization (years)</label>
+        <input class="form-input" type="text" id="amort_years" name="amort_years" value="{{ form.amort_years }}">
+      </div>
+    </div>
+
+    <div class="scorecard-mini-title" style="margin:8px 0;">Growth &amp; Exit</div>
+    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:14px;">
+      <div class="form-group">
+        <label class="form-label" for="noi_growth_pct">NOI Growth (%/yr)</label>
+        <input class="form-input" type="text" id="noi_growth_pct" name="noi_growth_pct" value="{{ form.noi_growth_pct }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="hold_years">Hold Period (years)</label>
+        <input class="form-input" type="text" id="hold_years" name="hold_years" value="{{ form.hold_years }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="exit_cap_pct">Exit Cap Rate (%)</label>
+        <input class="form-input" type="text" id="exit_cap_pct" name="exit_cap_pct" value="{{ form.exit_cap_pct }}" placeholder="6.0" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="selling_costs_pct">Selling Costs (%)</label>
+        <input class="form-input" type="text" id="selling_costs_pct" name="selling_costs_pct" value="{{ form.selling_costs_pct }}">
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Analyze</button>
+  </form>
+</div>
+
+{% if result %}
+<!-- ── Results ────────────────────────────────────────────────────────── -->
+<div class="card" id="results">
+  <div class="scorecard-section-title">Returns</div>
+
+  <div class="stats-grid" style="margin:14px 0 20px;">
+    <div class="stat-box">
+      <div class="stat-box-label">Going-In Cap Rate</div>
+      <div class="stat-box-value">{{ pct(result.going_in_cap_rate, 2) }}</div>
+      <div class="stat-box-sub">Year-1 NOI &divide; purchase price</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Cash-on-Cash (Yr 1)</div>
+      <div class="stat-box-value">{{ pct(result.cash_on_cash, 2) }}</div>
+      <div class="stat-box-sub">Year-1 cash flow &divide; cash invested</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">DSCR (Yr 1)</div>
+      <div class="stat-box-value">{{ '{:,.2f}x'.format(result.dscr) if result.dscr is not none else '—' }}</div>
+      <div class="stat-box-sub">
+        {%- if result.dscr_reason %}{{ result.dscr_reason }}{% else %}Year-1 NOI &divide; annual debt service{% endif -%}
+      </div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Levered IRR</div>
+      <div class="stat-box-value">{{ pct(result.levered_irr, 2) }}</div>
+      <div class="stat-box-sub">
+        {%- if result.levered_irr_reason %}Not computable — {{ result.levered_irr_reason }}
+        {%- else %}Over a {{ result.inputs.hold_years }}-year hold{% endif -%}
+      </div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Equity Multiple</div>
+      <div class="stat-box-value">{{ '{:,.2f}x'.format(result.equity_multiple) }}</div>
+      <div class="stat-box-sub">Total distributions &divide; cash invested</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Unlevered IRR</div>
+      <div class="stat-box-value">{{ pct(result.unlevered_irr, 2) }}</div>
+      <div class="stat-box-sub">
+        {%- if result.unlevered_irr_reason %}Not computable — {{ result.unlevered_irr_reason }}
+        {%- else %}The asset without financing{% endif -%}
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider" style="margin:20px 0;">
+
+  <div class="scorecard-mini-title" style="margin-bottom:10px;">Capital Stack &amp; Exit</div>
+  <div class="table-wrap" style="margin-bottom:20px;">
+    <table class="rent-comps-table">
+      <tbody>
+        <tr><th style="width:38%;">Loan amount</th><td>{{ money(result.loan_amount) }}</td>
+            <th style="width:38%;">Gross sale price</th><td>{{ money(result.gross_sale_price) }}</td></tr>
+        <tr><th>Closing costs</th><td>{{ money(result.closing_costs) }}</td>
+            <th>Selling costs</th><td>{{ money(result.selling_costs) }}</td></tr>
+        <tr><th>Total cash invested</th><td><strong>{{ money(result.equity_invested) }}</strong></td>
+            <th>Loan balance at exit</th><td>{{ money(result.loan_balance_at_exit) }}</td></tr>
+        <tr><th>Annual debt service</th><td>{{ money(result.annual_debt_service) }}</td>
+            <th>Net sale proceeds</th><td><strong>{{ money(result.net_sale_proceeds) }}</strong></td></tr>
+        <tr><th>Monthly debt service</th><td>{{ money(result.monthly_debt_service) }}</td>
+            <th>Exit-year NOI (Yr {{ result.inputs.hold_years + 1 }})</th><td>{{ money(result.noi_exit_year) }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="page-subtitle" style="margin-bottom:20px;">
+    Exit value capitalizes the <em>forward</em> NOI (year {{ result.inputs.hold_years + 1 }}) at the exit cap rate &mdash;
+    what a buyer at the end of the hold would be underwriting.
+  </p>
+
+  <div class="scorecard-mini-title" style="margin-bottom:10px;">Annual Cash Flow</div>
+  <div class="table-wrap">
+    <table class="rent-comps-table">
+      <thead>
+        <tr><th>Year</th><th>NOI</th><th>Debt Service</th><th>Cash Flow</th><th>Cumulative</th></tr>
+      </thead>
+      <tbody>
+        {% for y in result.years %}
+          <tr>
+            <td>{{ y.year }}</td>
+            <td>{{ money(y.noi) }}</td>
+            <td>{{ money(y.debt_service) }}</td>
+            <td{% if y.cash_flow < 0 %} style="color:#b91c1c;"{% endif %}>{{ money(y.cash_flow) }}</td>
+            <td{% if y.cumulative_cash_flow < 0 %} style="color:#b91c1c;"{% endif %}>{{ money(y.cumulative_cash_flow) }}</td>
+          </tr>
+        {% endfor %}
+        <tr>
+          <td colspan="3"><strong>Sale at end of year {{ result.inputs.hold_years }}</strong></td>
+          <td colspan="2"><strong>{{ money(result.net_sale_proceeds) }}</strong> net proceeds</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="page-subtitle" style="margin-top:12px;">
+    Cash flows are annual and end-of-year. Debt service is derived from a monthly amortization schedule
+    and annualized. Total distributions over the hold: <strong>{{ money(result.total_distributions) }}</strong>.
+  </p>
+</div>
+{% endif %}
+
+{% include "_feedback.html" %}
+{% endblock %}

@@ -1,0 +1,35 @@
+{#
+  Shared beta-feedback affordance. Drop into any tool with one line:
+
+      {% set feedback_tool = "Deal Analyzer" %}
+      {% include "_feedback.html" %}
+
+  Collapsed by default via <details> so it never competes with the tool
+  itself -- no JS, no layout shift, works with the keyboard, and degrades
+  to an always-open block if scripting or styling fails.
+
+  page_url is captured from the current path so a note can be traced back
+  to the exact screen it was written on, including any query string that
+  set up the scenario.
+#}
+<div class="card" style="margin-top:18px;">
+  <details>
+    <summary style="cursor:pointer; font-size:13px; font-weight:650; color:#2563eb; list-style:revert;">
+      Send feedback on {{ feedback_tool|default('this tool') }}
+    </summary>
+    <p class="page-subtitle" style="margin:10px 0;">
+      This is a beta &mdash; tell me what's wrong, missing, or confusing and it'll shape the next iteration.
+    </p>
+    <form method="POST" action="{{ url_for('feedback.submit') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="tool" value="{{ feedback_tool|default('Unknown') }}">
+      <input type="hidden" name="page_url" value="{{ request.full_path }}">
+      <div class="form-group">
+        <label class="form-label" for="feedback_message">Your feedback</label>
+        <textarea class="form-input" id="feedback_message" name="message" rows="4"
+                  placeholder="e.g. the exit cap default is too low for our markets; add a vacancy assumption; IRR should show monthly"></textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Send Feedback</button>
+    </form>
+  </details>
+</div>

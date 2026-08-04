@@ -72,7 +72,7 @@
     {% endif %}
   </div>
 
-  <p class="page-subtitle" style="margin-bottom:10px;">Summary-level figures for a go/no-go read &mdash; not a full pro forma. A detailed underwriting model belongs in the Underwriting tool.</p>
+  <p class="page-subtitle" style="margin-bottom:10px;">Summary-level figures for reference &mdash; for a returns analysis with leverage and IRR, see <a href="{{ url_for('deal_analyzer.index', deal_id=deal.id) }}">Deal Analyzer</a>. A detailed underwriting model belongs in the Underwriting tool.</p>
 
   <form method="POST" action="{{ url_for('deal_dive.update_financials', deal_id=deal.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

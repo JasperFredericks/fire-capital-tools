@@ -30,6 +30,7 @@ from flask_login import login_required
 from werkzeug.utils import secure_filename
 
 from tools import deal_dive_db as db
+from tools.form_utils import to_float as _to_float, to_int as _to_int
 from tools import market_data_cache
 from tools import market_data_service
 from tools import rent_comps
@@ -50,26 +51,6 @@ def _upload_dir(deal_id: int) -> Path:
     path = Path(current_app.config["UPLOAD_FOLDER"]) / "deal-dive" / str(deal_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def _to_float(value):
-    value = (value or "").strip()
-    if not value:
-        return None
-    try:
-        return float(value.replace(",", "").replace("$", "").replace("%", ""))
-    except ValueError:
-        return None
-
-
-def _to_int(value):
-    value = (value or "").strip()
-    if not value:
-        return None
-    try:
-        return int(float(value.replace(",", "")))
-    except ValueError:
-        return None
 
 
 _MARKET_COMP_SOURCE_PREFIX = "Auto-pulled from RentCast"

@@ -36,6 +36,7 @@ from flask import (
 from flask_login import login_required
 
 from tools import deal_dive_db
+from tools.form_utils import to_float as _to_float, to_int as _to_int
 from tools import market_data_cache
 from tools import market_data_service
 from tools import rent_comps_db as db
@@ -52,26 +53,6 @@ MAX_COMP_ADDRESS_LEN = 255
 # opposite of what a cap is for.
 CANDIDATE_PREVIEW_COUNT = 5
 SAVED_PREVIEW_COUNT = 5
-
-
-def _to_float(value):
-    value = (value or "").strip()
-    if not value:
-        return None
-    try:
-        return float(value.replace(",", "").replace("$", "").replace("%", ""))
-    except ValueError:
-        return None
-
-
-def _to_int(value):
-    value = (value or "").strip()
-    if not value:
-        return None
-    try:
-        return int(float(value.replace(",", "")))
-    except ValueError:
-        return None
 
 
 def _estimate_confidence(rent, low, high):
