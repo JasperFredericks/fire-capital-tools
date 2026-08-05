@@ -469,26 +469,90 @@ class PnLParser:
             }
             self._merge_account(code, name, monthly_values, depth=account_depth)
 
+    # Values that appear on a "Properties:" line but identify no single
+    # property -- a multi-property or unfiltered export. Treated as no name
+    # at all rather than as a name, so they take the fail-loud path instead
+    # of becoming a shared key (which is the bug this whole change fixes).
+    _NON_SPECIFIC_PROPERTY_VALUES = {"", "all", "all properties", "various", "multiple"}
+
+    @staticmethod
+    def _first_csv_cell(line):
+        """First field of a raw CSV header line.
+
+        Parsed as CSV rather than string-stripped because these lines are
+        quoted and contain commas -- "Properties: 1120 Jackson Street - 1120
+        Jackson Street San Francisco, CA 94133" would otherwise be truncated
+        at the comma before the state."""
+        try:
+            row = next(csv.reader([line]))
+        except Exception:
+            return line.strip().strip(",").strip('"')
+        return row[0].strip() if row else ""
+
+    @classmethod
+    def _property_from_properties_line(cls, cell):
+        """Property name out of a "Properties:" header line.
+
+        Observed shape, consistent across every real export checked:
+
+            Properties: 1120 Jackson Street - 1120 Jackson Street San Francisco, CA 94133
+                        ^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        short label           full postal address
+
+        The portion before the first " - " is the label the reporting system
+        uses for the property, which is what belongs in the history key: it
+        is stable across months and does not carry the city/state/ZIP that
+        would make two exports of the same building look different if the
+        address were ever reformatted.
+
+        Falls back to the whole value when there is no " - " separator, since
+        a bare label is still a real identity. Returns None for anything that
+        names no single property, so the caller can fail loudly."""
+        value = cell.split(":", 1)[-1].strip().strip('"').strip()
+        if " - " in value:
+            value = value.split(" - ", 1)[0].strip()
+        value = " ".join(value.split())
+        if value.lower() in cls._NON_SPECIFIC_PROPERTY_VALUES:
+            return None
+        # A comma-separated list is several properties, not one.
+        if "," in value and not re.search(r",\s*[A-Z]{2}\b", value):
+            return None
+        return value or None
+
     def parse_cash_flow(self):
         header_row_idx = 0
         header_lines = self._read_head_lines(15)
         for line in header_lines:
-            line_clean = line.strip().strip(",")
-            if not line_clean:
+            first_cell = self._first_csv_cell(line)
+            if not first_cell:
                 continue
-            if line_clean.lower().startswith("exported on"):
+            lowered = first_cell.lower()
+            if lowered.startswith("period range:"):
+                self.period = first_cell.split(":", 1)[-1].strip()
                 continue
-            if line_clean.lower().startswith("period range:"):
-                self.period = line_clean.split(":", 1)[-1].strip()
+            if lowered.startswith(("properties:", "property:")):
+                name = self._property_from_properties_line(first_cell)
+                if name:
+                    self.property_name = name
                 continue
-            if self.property_name == "Unknown Property":
-                self.property_name = line_clean
 
         header_row_idx = self._find_line_index("Account Name")
         df = self._clean_columns(self._read_csv_robust(header=0, skiprows=header_row_idx))
 
+        # No silent fallback to a document title. This parser used to take the
+        # first non-blank header line as the property name, which in these
+        # exports is the report heading ("Income Statement - 12 Month") --
+        # identical for every property the system exports, so every property
+        # collapsed onto one history key and each upload silently overwrote
+        # the last one's months. The identity is on the "Properties:" line;
+        # if that line is absent the format is not one we understand, and
+        # guessing is exactly what caused the bug. Leaving the name as
+        # "Unknown Property" lets process_scorecard() stop the upload and ask.
         if self.property_name == "Unknown Property":
-            self.property_name = "Property"
+            self.warnings.append(
+                "Cash Flow parser: no 'Properties:' line found, so the property "
+                "could not be identified from the file."
+            )
         if self.period == "Unknown Period":
             self.period = "Cash Flow"
 

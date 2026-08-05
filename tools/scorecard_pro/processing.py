@@ -130,12 +130,36 @@ def save_history_and_build_comparison(pnl_data, kpis):
     return full_history, comparison, None
 
 
+# Names that identify no actual property. "Unknown Property" is the parser's
+# initial state; "Property" was the old cash-flow fallback and is listed so
+# any file still carrying it is caught rather than trusted.
+_PLACEHOLDER_PROPERTY_NAMES = {"", "unknown property", "property", "unknown"}
+
+
+def _has_real_property_name(name) -> bool:
+    return " ".join(str(name or "").strip().lower().split()) not in _PLACEHOLDER_PROPERTY_NAMES
+
+
 def process_scorecard(token, pnl_path, pnl_name, scorecard_path=None, scorecard_name=""):
     parser = PnLParser(pnl_path)
     parser.parse()
     pnl_data = parser.get_data()
     if not pnl_data["accounts"]:
         raise ValueError("No recognizable accounts were parsed from the P&L CSV.")
+
+    # Refuse to proceed without a real property identity rather than filing
+    # the upload under a placeholder. The history table is keyed on
+    # (property_key, month), so a placeholder name is not a cosmetic problem:
+    # two different properties sharing one would overwrite each other's
+    # months silently, and the trend comparison would measure one building
+    # against another. Better to stop and ask than to guess.
+    if not _has_real_property_name(parser.property_name):
+        raise ValueError(
+            "Could not identify which property this file is for — the export "
+            "has no recognizable property name in its header. Re-export it with "
+            "a single property selected, or rename the file's 'Properties:' line, "
+            "so the trend history is filed against the right property."
+        )
 
     calc = KPICalculator(pnl_data)
     kpis = calc.calculate()

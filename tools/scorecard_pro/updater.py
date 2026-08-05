@@ -43,6 +43,32 @@ def _safe_set_cell_value(sheet, row, col, value):
     cell.value = value
 
 
+# Property-specific handling below is keyed on these exact names rather than
+# on substrings. It used to test `"canyon" in property_name`, which was safe
+# only because the property name could never be anything unexpected: the
+# cash-flow parser always produced the literal "Income Statement - 12 Month".
+# Now that cash-flow exports carry their real property label, a substring
+# test is actively dangerous -- "Canyonville Commons", "Red Canyon Villas" or
+# "1500 Canyon Street" would all silently inherit Canyon's excluded GL codes
+# and produce a quietly wrong scorecard for an unrelated building.
+#
+# Exact matching removes that, at the cost of the opposite failure: if one of
+# these properties is ever re-exported under a slightly different name, its
+# special handling would stop applying just as silently. _is_property()
+# therefore records a warning on a near-miss -- a name that would have
+# matched the old substring test but is not on the list -- so name drift
+# surfaces in the diagnostics instead of changing the numbers unnoticed.
+_OXPT_NAMES = frozenset({"oxford pointe", "oxford pointe apartments"})
+_EAGLE_ROCK_NAMES = frozenset({"eagle rock", "eagle rock apartments"})
+_CANYON_NAMES = frozenset({"canyon apartments", "the canyon apartments"})
+
+_NEAR_MISS_TOKENS = {
+    "oxford pointe": _OXPT_NAMES,
+    "eagle rock": _EAGLE_ROCK_NAMES,
+    "canyon": _CANYON_NAMES,
+}
+
+
 class ScorecardUpdater:
     def __init__(self, scorecard_path, data):
         self.scorecard_path = scorecard_path
@@ -50,6 +76,26 @@ class ScorecardUpdater:
         self.wb = None
         self.sheet = None
         self.diagnostics = {"updated_cells": 0, "warnings": []}
+
+    def _property_name(self):
+        return " ".join(str(self.data.get("property") or "").strip().lower().split())
+
+    def _is_property(self, known_names):
+        """Exact (normalized) match against a known property's names. Flags a
+        near-miss so a renamed property is visible rather than silent -- see
+        the comment above _OXPT_NAMES."""
+        name = self._property_name()
+        if name in known_names:
+            return True
+        for token, names in _NEAR_MISS_TOKENS.items():
+            if names is known_names and token in name:
+                self.diagnostics["warnings"].append(
+                    f"Property name {self.data.get('property')!r} contains '{token}' but is not a "
+                    f"recognized name for that property, so its specific account mapping was NOT "
+                    f"applied. If this is the same property under a new name, add it to the list "
+                    f"in updater.py; if it is a different property, no action is needed."
+                )
+        return False
 
     def update(self, output_path):
         try:
@@ -178,7 +224,7 @@ class ScorecardUpdater:
         # name so Eagle Rock/Canyon's matching is never affected.
         excluded_codes = set()
         oxpt_ambiguous_groups = []
-        is_oxpt = "oxford pointe" in str(self.data.get("property") or "").strip().lower()
+        is_oxpt = self._is_property(_OXPT_NAMES)
         if is_oxpt:
             excluded_codes |= _OXPT_EXCLUDED_CODES
             for label, codes in _OXPT_ROW_GROUPS.items():
@@ -210,8 +256,8 @@ class ScorecardUpdater:
         # _EAGLE_ROCK_EXCLUDED_CODES / _CANYON_EXCLUDED_CODES above) — their
         # Scorecard T12 sheets already code-prefix-match every rollup
         # directly, so this only excludes already-captured leaf children.
-        is_eagle_rock = "eagle rock" in str(self.data.get("property") or "").strip().lower()
-        is_canyon = "canyon" in str(self.data.get("property") or "").strip().lower()
+        is_eagle_rock = self._is_property(_EAGLE_ROCK_NAMES)
+        is_canyon = self._is_property(_CANYON_NAMES)
         if is_eagle_rock:
             excluded_codes |= _EAGLE_ROCK_EXCLUDED_CODES
         if is_canyon:
