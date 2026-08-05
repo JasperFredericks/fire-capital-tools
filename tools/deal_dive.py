@@ -35,6 +35,7 @@ from tools import market_data_cache
 from tools import market_data_service
 from tools import rent_comps
 from tools import rent_comps_db
+from tools import site_dd
 
 deal_dive_bp = Blueprint("deal_dive", __name__)
 
@@ -183,6 +184,7 @@ def detail(deal_id):
         comp_source_options=COMP_SOURCE_OPTIONS,
         financial_files=financial_files,
         condition_files=condition_files,
+        site_dd_summary=site_dd.summary_for_deal(deal_id),
         market=market,
         statuses=db.STATUSES,
         auto_market_data=auto_market_data,
@@ -240,6 +242,12 @@ def delete_deal(deal_id):
     with rent_comps_db.get_connection() as rconn:
         rent_comps_db.delete_comps_for_deal(rconn, deal_id)
 
+    # Site DD assessments live in their own database too, and additionally
+    # own files on disk under <UPLOAD_FOLDER>/site-dd/<assessment_id>/, so
+    # purging them needs both the rows and the directories -- purge_for_deal
+    # returns the ids it removed and clears the directories itself.
+    site_dd.purge_for_deal(deal_id, Path(current_app.config["UPLOAD_FOLDER"]))
+
     upload_dir = _upload_dir(deal_id)
     shutil.rmtree(upload_dir, ignore_errors=True)
 
@@ -284,22 +292,13 @@ def update_financials(deal_id):
     return redirect(url_for("deal_dive.detail", deal_id=deal_id) + "#financials")
 
 
-@deal_dive_bp.route("/deal/<int:deal_id>/condition", methods=["POST"])
-@login_required
-def update_condition(deal_id):
-    with db.get_connection() as conn:
-        if not db.get_deal(conn, deal_id):
-            return _deal_not_found()
-        db.update_condition(
-            conn,
-            deal_id,
-            {
-                "condition_rating": (request.form.get("condition_rating") or "").strip() or None,
-                "condition_notes": (request.form.get("condition_notes") or "").strip() or None,
-            },
-        )
-    flash("Condition assessment updated.", "success")
-    return redirect(url_for("deal_dive.detail", deal_id=deal_id) + "#condition")
+# update_condition() used to live here: it wrote deals.condition_rating and
+# deals.condition_notes, a single subjective rating plus a notes blob. That
+# is now Site DD's job, at a depth those two columns cannot carry, and Deal
+# Dive shows a summary card linking there instead. The route is removed
+# rather than left unreachable since the form that called it is gone. The
+# two columns stay in the schema as inert legacy, the same treatment given
+# to comp_type='rental' rows in deal_comps.
 
 
 @deal_dive_bp.route("/deal/<int:deal_id>/comps", methods=["POST"])

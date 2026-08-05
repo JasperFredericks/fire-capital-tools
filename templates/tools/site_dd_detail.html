@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block title %}{{ assessment.property_label }} - Site DD{% endblock %}
+
+{% set band_colours = {'Low':'#059669','Moderate':'#2563eb','Elevated':'#f59e0b','High':'#b91c1c'} %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('site_dd.index') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Site DD
+  </a>
+  <h1 class="page-title">{{ assessment.property_label }}</h1>
+  <p class="page-subtitle">
+    Site assessment &middot; checklist v{{ assessment.checklist_version }}
+    {%- if assessment.assessed_on %} &middot; inspected {{ assessment.assessed_on }}{% endif %}
+    {%- if deal %} &middot; <a href="{{ url_for('deal_dive.detail', deal_id=deal.id) }}">linked to {{ deal.address }}</a>{% endif %}
+  </p>
+</div>
+
+<!-- ── Scores ─────────────────────────────────────────────────────────── -->
+<div class="card" id="scores">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+    <div class="scorecard-section-title">Risk Summary</div>
+    <div style="display:flex; gap:8px;">
+      <a href="{{ url_for('site_dd.download_report', assessment_id=assessment.id) }}" class="btn btn-primary">Download PDF Report</a>
+      <form method="POST" action="{{ url_for('site_dd.delete', assessment_id=assessment.id) }}"
+            onsubmit="return confirm('Delete this assessment permanently? This removes its checklist responses and all uploaded photos.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-danger">Delete</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="stats-grid" style="margin:14px 0 8px;">
+    <div class="stat-box">
+      <div class="stat-box-label">Overall Score</div>
+      <div class="stat-box-value">{{ '%.2f'|format(scores.overall) if scores.overall is not none else '—' }}{% if scores.overall is not none %} <span class="stat-box-sub">/ 5</span>{% endif %}</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Risk Band</div>
+      <div class="stat-box-value" style="color:{{ band_colours.get(scores.risk_band, '#6b7280') }};">{{ scores.risk_band }}</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Critical Findings</div>
+      <div class="stat-box-value"{% if scores.critical_count %} style="color:#b91c1c;"{% endif %}>{{ scores.critical_count }}</div>
+      <div class="stat-box-sub">Items scored 1 or 2</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Completion</div>
+      <div class="stat-box-value">{{ '%.0f%%'|format(scores.completion_pct) }}</div>
+      <div class="stat-box-sub">{{ scores.scored_count }} of {{ scores.total_items }} scored &middot; {{ scores.na_count }} N/A</div>
+    </div>
+  </div>
+
+  <p class="page-subtitle" style="margin-bottom:12px;">
+    Overall is the plain average of every item you scored &mdash; N/A items are excluded entirely.
+    Critical findings are counted separately rather than weighted into the average, so a healthy
+    average with a serious problem behind it stays visible.
+  </p>
+
+  <div class="table-wrap">
+    <table class="rent-comps-table">
+      <thead><tr><th>Category</th><th>Score</th><th>Scored</th><th>Critical</th></tr></thead>
+      <tbody>
+        {% for c in scores.categories %}
+          <tr>
+            <td>{{ c.name }}</td>
+            <td>{{ '%.2f'|format(c.score) if c.score is not none else '—' }}</td>
+            <td>{{ c.scored_count }} / {{ c.item_count }}</td>
+            <td{% if c.critical_count %} style="color:#b91c1c; font-weight:700;"{% endif %}>{{ c.critical_count }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Checklist ──────────────────────────────────────────────────────── -->
+<form method="POST" action="{{ url_for('site_dd.save', assessment_id=assessment.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="card">
+    <div class="scorecard-section-title">Assessment Details</div>
+    <div style="display:grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap:12px; margin-top:14px;">
+      <div class="form-group">
+        <label class="form-label" for="property_label">Property</label>
+        <input class="form-input" type="text" id="property_label" name="property_label" value="{{ assessment.property_label }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="assessed_on">Inspection date</label>
+        <input class="form-input" type="date" id="assessed_on" name="assessed_on" value="{{ assessment.assessed_on or '' }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="inspector">Inspector</label>
+        <input class="form-input" type="text" id="inspector" name="inspector" value="{{ assessment.inspector or '' }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="status">Status</label>
+        <select class="form-input" id="status" name="status">
+          {% for s in statuses %}<option value="{{ s }}" {% if assessment.status == s %}selected{% endif %}>{{ s|title }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="overall_notes">Overall notes</label>
+      <textarea class="form-input" id="overall_notes" name="overall_notes" rows="3">{{ assessment.overall_notes or '' }}</textarea>
+    </div>
+  </div>
+
+  {% for cat in categories %}
+    <div class="card">
+      <div class="scorecard-section-title">{{ cat.name }}</div>
+      <p class="page-subtitle" style="margin:8px 0 12px;">
+        Score 5 (excellent) to 1 (critical), or N/A if it doesn't apply.
+        Notes over {{ note_truncate_at }} characters are shortened with an ellipsis in the exported PDF.
+      </p>
+      <div class="table-wrap">
+        <table class="rent-comps-table">
+          <thead><tr><th style="width:26%;">Item</th><th style="width:20%;">Score</th><th>Note</th><th style="width:14%;">Photos</th></tr></thead>
+          <tbody>
+            {% for key, label in cat['items'] %}
+              {% set row = items.get(key) %}
+              {% set current = row.score if row else none %}
+              <tr>
+                <td>{{ label }}</td>
+                <td>
+                  <select class="form-input" name="score_{{ key }}" style="padding:5px 8px; font-size:12px;">
+                    <option value="" {% if current is none %}selected{% endif %}>N/A</option>
+                    {% for n in [5,4,3,2,1] %}
+                      <option value="{{ n }}" {% if current == n %}selected{% endif %}>{{ n }} — {{ score_labels[n] }}</option>
+                    {% endfor %}
+                  </select>
+                </td>
+                <td>
+                  <input class="form-input" type="text" name="note_{{ key }}" value="{{ row.note if row and row.note else '' }}"
+                         placeholder="Optional" style="padding:5px 8px; font-size:12px;">
+                </td>
+                <td class="stat-box-sub">
+                  {%- set ph = photos_by_item.get(key, []) -%}
+                  {{ ph|length if ph else '—' }}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endfor %}
+
+  <div class="card">
+    <button type="submit" class="btn btn-primary">Save Assessment</button>
+    <span class="page-subtitle" style="margin-left:10px;">Scores recalculate on save.</span>
+  </div>
+</form>
+
+<!-- ── Photos ─────────────────────────────────────────────────────────── -->
+<div class="card" id="photos">
+  <div class="scorecard-section-title">Photos &amp; Attachments{% if photos %} ({{ photos|length }}){% endif %}</div>
+  <p class="page-subtitle" style="margin:8px 0 12px;">
+    Up to 12 images appear as a contact sheet in the PDF; everything stays downloadable here.
+  </p>
+
+  {% if photos %}
+    <div class="table-wrap" style="margin-bottom:14px;">
+      <table class="rent-comps-table">
+        <thead><tr><th>File</th><th>Attached to</th><th>Caption</th><th>Uploaded</th><th></th></tr></thead>
+        <tbody>
+          {% for p in photos %}
+            <tr>
+              <td><a href="{{ url_for('site_dd.download_photo', assessment_id=assessment.id, photo_id=p.id) }}">{{ p.original_name }}</a></td>
+              <td>{{ item_labels.get(p.item_key, p.item_key) if p.item_key else 'General' }}</td>
+              <td>{{ p.caption or '—' }}</td>
+              <td>{{ p.uploaded_at[:10] }}</td>
+              <td>
+                <form method="POST" action="{{ url_for('site_dd.delete_photo', assessment_id=assessment.id, photo_id=p.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('site_dd.upload_photo', assessment_id=assessment.id) }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid; grid-template-columns: 1.2fr 1fr 1.4fr auto; gap:12px; align-items:end;">
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="photo">File</label>
+        <input class="form-input" type="file" id="photo" name="photo" required>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="item_key">Attach to item</label>
+        <select class="form-input" id="item_key" name="item_key">
+          <option value="">General (whole site)</option>
+          {% for cat in categories %}
+            <optgroup label="{{ cat.name }}">
+              {% for key, label in cat['items'] %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+            </optgroup>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="caption">Caption</label>
+        <input class="form-input" type="text" id="caption" name="caption" placeholder="Optional">
+      </div>
+      <button type="submit" class="btn btn-ghost">Upload</button>
+    </div>
+  </form>
+</div>
+
+{% include "_feedback.html" %}
+{% endblock %}

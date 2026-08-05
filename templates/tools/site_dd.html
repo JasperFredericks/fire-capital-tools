@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Site DD - FIRE Capital Tools{% endblock %}
+
+{% macro band_chip(band) %}
+  {%- set colours = {'Low':'#059669','Moderate':'#2563eb','Elevated':'#f59e0b','High':'#b91c1c'} -%}
+  <span class="source-badge" style="color:{{ colours.get(band, '#6b7280') }};">{{ band }}</span>
+{% endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <h1 class="page-title">Site DD <span class="tool-tag tag-soon" style="vertical-align:middle; font-size:11px;">Beta</span></h1>
+  <p class="page-subtitle">
+    A structured site walkthrough &mdash; 32 inspection points across six categories, scored and rolled up
+    into category and overall risk, with photos and an exportable report.
+  </p>
+</div>
+
+<div class="card">
+  {% if deal %}
+    <div class="scorecard-section-title">Assessments for this property</div>
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-top:10px;">
+      <div>
+        <div class="stat-box-value" style="font-size:15px;">{{ deal.address }}</div>
+        <div class="stat-box-sub">{{ deal.city }}, {{ deal.state }} {{ deal.zip or '' }}</div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <a href="{{ url_for('deal_dive.detail', deal_id=deal.id) }}" class="btn btn-ghost">Back to Deal</a>
+        <a href="{{ url_for('site_dd.index') }}" class="btn btn-ghost">All Assessments</a>
+      </div>
+    </div>
+    <hr class="divider" style="margin:18px 0;">
+  {% else %}
+    <div class="scorecard-section-title">New Assessment</div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('site_dd.new_assessment') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if deal %}<input type="hidden" name="deal_id" value="{{ deal.id }}">{% endif %}
+    <div style="display:grid; grid-template-columns: {% if deal %}1fr 1fr auto{% else %}2fr 1fr 1fr auto{% endif %}; gap:12px; align-items:end;">
+      {% if not deal %}
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="property_label">Property name or address</label>
+          <input class="form-input" type="text" id="property_label" name="property_label"
+                 placeholder="1200 Peachtree St NE, Atlanta GA" required>
+        </div>
+      {% endif %}
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="assessed_on">Inspection date</label>
+        <input class="form-input" type="date" id="assessed_on" name="assessed_on" value="{{ today }}">
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="inspector">Inspector</label>
+        <input class="form-input" type="text" id="inspector" name="inspector" placeholder="Name">
+      </div>
+      <button type="submit" class="btn btn-primary">Start Assessment</button>
+    </div>
+  </form>
+  {% if not deal %}
+    <p class="page-subtitle" style="margin:12px 0 0;">
+      Standalone assessments aren't tied to a deal. To attach one to a property,
+      open Site DD from that deal's page in Deal Dive.
+    </p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="scorecard-section-title">
+    {% if deal %}This Property's Assessments{% else %}All Assessments{% endif %}{% if assessments %} ({{ assessments|length }}){% endif %}
+  </div>
+  <div class="table-wrap" style="margin-top:12px;">
+    <table class="rent-comps-table">
+      <thead>
+        <tr>
+          <th>Property</th><th>Date</th><th>Inspector</th><th>Overall</th>
+          <th>Risk</th><th>Critical</th><th>Complete</th><th>Status</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if not assessments %}
+          <tr><td colspan="9">No assessments yet — start one above.</td></tr>
+        {% else %}
+          {% for a in assessments %}
+            {% set s = a.scores %}
+            <tr>
+              <td>
+                {{ a.property_label }}
+                {%- if a.deal_id %} <span class="stat-box-sub">· linked to deal #{{ a.deal_id }}</span>{% endif %}
+              </td>
+              <td>{{ a.assessed_on or '—' }}</td>
+              <td>{{ a.inspector or '—' }}</td>
+              <td>{{ '%.2f'|format(s.overall) if s.overall is not none else '—' }}</td>
+              <td>{{ band_chip(s.risk_band) }}</td>
+              <td{% if s.critical_count %} style="color:#b91c1c; font-weight:700;"{% endif %}>{{ s.critical_count }}</td>
+              <td>{{ '%.0f%%'|format(s.completion_pct) }}</td>
+              <td>{{ a.status|title }}</td>
+              <td><a href="{{ url_for('site_dd.detail', assessment_id=a.id) }}" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Open</a></td>
+            </tr>
+          {% endfor %}
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% include "_feedback.html" %}
+{% endblock %}

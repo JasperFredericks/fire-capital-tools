@@ -336,30 +336,44 @@
 </script>
 
 <!-- ── Condition ──────────────────────────────────────────────────── -->
+<!-- The rating + notes form that used to live here is superseded by Site DD,
+     which asks the same question as a scored 32-item checklist. Deal Dive
+     keeps only this summary and a link, the same shape as the Rent Comps
+     card above. Uploaded inspection files stay here -- they predate Site DD
+     and are still attached to the deal, not to any one assessment. -->
 <div class="card" id="condition">
   <div class="scorecard-section-title">Condition</div>
 
-  <form method="POST" action="{{ url_for('deal_dive.update_condition', deal_id=deal.id) }}" style="margin-top:14px;">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div class="form-group" style="max-width:280px;">
-      <label class="form-label" for="condition_rating">Overall Rating</label>
-      <select class="form-input" id="condition_rating" name="condition_rating">
-        <option value="">Not rated</option>
-        {% for rating in ["Excellent", "Good", "Fair", "Poor", "Needs Major Work"] %}
-          <option value="{{ rating }}" {% if deal.condition_rating == rating %}selected{% endif %}>{{ rating }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="form-group">
-      <label class="form-label" for="condition_notes">Notes</label>
-      <textarea class="form-input" id="condition_notes" name="condition_notes" rows="5">{{ deal.condition_notes or '' }}</textarea>
-    </div>
-    <button type="submit" class="btn btn-primary">Save Condition</button>
-  </form>
+  {% set s = site_dd_summary %}
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-top:12px;">
+    <p class="page-subtitle" style="margin:0;">
+      {% if s %}
+        {% set sc = s.scores %}
+        {% set band_colours = {'Low':'#059669','Moderate':'#2563eb','Elevated':'#f59e0b','High':'#b91c1c'} %}
+        Overall
+        <strong>{{ '%.2f'|format(sc.overall) if sc.overall is not none else '—' }}{% if sc.overall is not none %} / 5{% endif %}</strong>
+        &middot; <strong style="color:{{ band_colours.get(sc.risk_band, '#6b7280') }};">{{ sc.risk_band }}</strong>
+        &middot; <strong{% if sc.critical_count %} style="color:#b91c1c;"{% endif %}>{{ sc.critical_count }}</strong>
+        critical finding{{ '' if sc.critical_count == 1 else 's' }}
+        &middot; {{ '%.0f%%'|format(sc.completion_pct) }} complete
+        {%- if s.assessed_on %} &middot; inspected {{ s.assessed_on }}{% endif %}
+        {%- if s.total_count > 1 %} &middot; {{ s.total_count }} assessments on file{% endif %}
+      {% else %}
+        No site assessment yet for this property.
+      {% endif %}
+      Inspections are scored in the Site DD tool.
+    </p>
+    <a href="{{ url_for('site_dd.index', deal_id=deal.id) }}" class="btn btn-ghost">
+      {% if s %}View / Manage &rarr;{% else %}Start Assessment &rarr;{% endif %}
+    </a>
+  </div>
 
   <hr class="divider" style="margin:22px 0;">
 
-  <div class="scorecard-mini-title" style="margin-bottom:10px;">Inspection Reports & Photos</div>
+  <div class="scorecard-mini-title" style="margin-bottom:10px;">Inspection Reports &amp; Photos</div>
+  <p class="page-subtitle" style="margin-bottom:10px;">
+    Documents attached to the deal itself. Photos taken during a specific walkthrough belong on that assessment in Site DD.
+  </p>
   {% if condition_files %}
     <ul class="scorecard-note-list" style="margin-bottom:14px;">
       {% for f in condition_files %}

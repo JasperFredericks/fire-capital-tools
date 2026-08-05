@@ -81,6 +81,7 @@ Tested against:
 	- `MARKET_DATA_DB_PATH` (optional; defaults to `market_data_cache.db`)
 	- `UPLOAD_FOLDER_PATH` (optional; defaults to `uploads/` at the repo root)
 	- `FEEDBACK_DB_PATH` (optional; defaults to `feedback.db`)
+	- `SITE_DD_DB_PATH` (optional; defaults to `site_dd.db`)
 	- `CENSUS_API_KEY`
 - Required for the FIRE Metric updater to pull ACS/Census data: `CENSUS_API_KEY`
 - Required for Scorecard Pro's upload history/trend to persist across Railway deploys: `SCORECARD_PRO_DB_PATH`
@@ -89,6 +90,7 @@ Tested against:
 - Required for the RentCast/Google Places lookup cache to persist across Railway deploys: `MARKET_DATA_DB_PATH`
 - Required for Deal Dive's uploaded supporting documents to persist across Railway deploys: `UPLOAD_FOLDER_PATH`
 - Required for beta feedback notes to persist across Railway deploys: `FEEDBACK_DB_PATH`
+- Required for Site DD assessments to persist across Railway deploys: `SITE_DD_DB_PATH`
 - Required for FIRE Metric Google Maps display: `GOOGLE_MAPS_API_KEY`, `GOOGLE_MAPS_MAP_ID`
 
 ### Google Maps API key restrictions
