@@ -12,6 +12,7 @@ from flask import current_app
 from matplotlib.backends.backend_pdf import PdfPages
 from openpyxl.styles import Font, PatternFill
 
+from tools import branding
 from tools.scorecard_pro.utils import (
     format_currency,
     format_percent,
@@ -147,5 +148,8 @@ def add_pdf_header(fig, pnl_data):
 
 
 def _logo_png_path():
-    path = Path(current_app.root_path) / "static" / "fire_logo.png"
-    return path if path.exists() else None
+    """Delegates to tools.branding so every surface that prints the logo --
+    PDF exports here, Site DD's report, the templates -- resolves the same
+    asset. Kept as a wrapper rather than inlined at the call site so the
+    existing signature and name stay valid."""
+    return branding.logo_png_path(Path(current_app.root_path) / "static")

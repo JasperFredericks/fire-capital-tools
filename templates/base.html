@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{% block title %}FIRE Capital Tools{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-mark.svg') }}">
+  <link rel="icon" type="image/png" sizes="512x512" href="{{ url_for('static', filename='img/logo-mark.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/logo-mark.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -12,10 +15,13 @@
 
   <!-- ── Sidebar ─────────────────────────────────────────── -->
   <aside class="sidebar">
-    <div class="sidebar-brand">
-      <div class="brand-name">FIRE Capital</div>
-      <span class="brand-tag">Tools Platform</span>
-    </div>
+    <a class="sidebar-brand" href="{{ url_for('dashboard') }}">
+      <img class="brand-mark" src="{{ url_for('static', filename='img/logo-mark.svg') }}" alt="">
+      <span class="brand-text">
+        <span class="brand-name">FIRE Capital</span>
+        <span class="brand-tag">Tools Platform</span>
+      </span>
+    </a>
 
     <nav class="sidebar-nav">
 
