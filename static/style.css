@@ -1429,6 +1429,18 @@ hr.divider {
   margin-bottom: 8px;
 }
 
+.fire-map-preview-fire {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.fire-map-preview-fire-sub {
+  font-size: 11px;
+  color: #4b5563;
+  margin-bottom: 2px;
+}
+
 .fire-map-preview-grid {
   display: grid;
   gap: 5px;

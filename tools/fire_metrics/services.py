@@ -11,6 +11,7 @@ from flask import current_app
 
 from fire_metrics.fire_metrics_updater import db as db_module
 from tools import fire_metrics_ai_summary as ai_summary
+from tools import fire_metrics_score
 from tools.fire_metrics.constants import (
     REFRESH_STALE_AFTER_SECONDS,
     REPO_ROOT,
@@ -40,37 +41,74 @@ def _fetch_top_cities(
     if not spec:
         raise KeyError(metric_key)
 
-    column = spec["column"]
-    primary_dir = "ASC" if spec["direction"] == "asc" else "DESC"
+    all_included = db_module.fetch_all_included_cities(conn)
+    score_index = fire_metrics_score.build_fire_score_index(all_included)
 
-    rows = conn.execute(
-        f"""
-        SELECT *
-        FROM cities
-        WHERE include_flag = 1
-          AND {column} IS NOT NULL
-        ORDER BY
-          {column} {primary_dir},
-          population_current DESC,
-          state ASC,
-          city ASC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
+    if metric_key == "fire_score" or spec.get("computed") == "fire_score":
+        sort_values = score_index.get("sort_score_by_city_key", {})
+        scored = fire_metrics_score.enrich_cities_with_fire_score(all_included, score_index)
+        ranked = [city for city in scored if city.get("fire_score") is not None]
+        ranked.sort(
+            key=lambda city: (
+                -(sort_values.get(city.get("city_key")) or 0.0),
+                -(float(city.get("fire_score_coverage") or 0.0)),
+                -(float(city.get("population_current") or 0.0)),
+                str(city.get("state") or ""),
+                str(city.get("city") or ""),
+            )
+        )
+        cities = ranked[:limit]
+    else:
+        column = spec["column"]
+        primary_dir = "ASC" if spec["direction"] == "asc" else "DESC"
 
-    cities = []
-    for row in rows:
-        city = db_module.city_row_to_dict(row)
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM cities
+            WHERE include_flag = 1
+              AND {column} IS NOT NULL
+            ORDER BY
+              {column} {primary_dir},
+              population_current DESC,
+              state ASC,
+              city ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        cities = [
+            fire_metrics_score.enrich_city_with_fire_score(
+                db_module.city_row_to_dict(row),
+                score_index,
+            )
+            for row in rows
+        ]
+
+    for city in cities:
         aliases = conn.execute(
             "SELECT search_key FROM search_aliases WHERE city = ? AND state = ?",
             (city["city"], city["state"]),
         ).fetchall()
         city["search_keys"] = [item["search_key"] for item in aliases]
         city["warnings"] = list(city.get("warnings") or [])
-        cities.append(city)
 
     return spec, cities
+
+
+def _build_fire_score_index(conn) -> dict[str, Any]:
+    all_included = db_module.fetch_all_included_cities(conn)
+    return fire_metrics_score.build_fire_score_index(all_included)
+
+
+def _enrich_search_payload_with_fire_score(payload: dict[str, Any], score_index: dict[str, Any]) -> dict[str, Any]:
+    status = str(payload.get("status") or "")
+    if status != "found" or not isinstance(payload.get("city"), dict):
+        return payload
+    enriched = dict(payload)
+    enriched["city"] = fire_metrics_score.enrich_city_with_fire_score(payload["city"], score_index)
+    return enriched
 
 
 def _utc_now() -> str:

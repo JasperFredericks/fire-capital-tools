@@ -55,6 +55,12 @@ TOP_CITY_METRICS: dict[str, dict[str, str]] = {
         "direction": "asc",
         "label": "Lowest Climate Risk",
     },
+    "fire_score": {
+        "column": "",
+        "direction": "desc",
+        "label": "Highest FIRE Score",
+        "computed": "fire_score",
+    },
 }
 
 

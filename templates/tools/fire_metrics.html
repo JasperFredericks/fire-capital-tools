@@ -50,6 +50,7 @@
     </div>
   </div>
   <div id="quick-ranking-controls" class="quick-ranking-controls" role="group" aria-label="Quick city rankings">
+    <button type="button" class="btn btn-ghost quick-ranking-btn" data-metric="fire_score" data-loading-label="highest-fire-score">Highest FIRE Score</button>
     <button type="button" class="btn btn-ghost quick-ranking-btn" data-metric="crime_index_score" data-loading-label="lowest-crime">Lowest Crime</button>
     <button type="button" class="btn btn-ghost quick-ranking-btn" data-metric="density_adjusted_crime_score" data-loading-label="lowest-density-adjusted-crime">Lowest Density-Adjusted Crime</button>
     <button type="button" class="btn btn-ghost quick-ranking-btn" data-metric="employment_growth_recent" data-loading-label="highest-job-growth">Highest Job Growth</button>
@@ -113,12 +114,28 @@
 
   <div id="comparison-empty-message" class="result-note">Search and add cities to build City Analytics.</div>
 
+  <details style="margin:10px 0 12px 0;">
+    <summary class="dashboard-section-title" style="cursor:pointer; font-size:14px;">How FIRE Score works</summary>
+    <div style="margin-top:10px; display:grid; gap:6px;">
+      <div class="result-note">Preliminary market-screening score (0-100), percentile-based and relative to the current eligible tracked city universe.</div>
+      <div class="result-note">Weights: Population growth 17%, Income growth 15%, Home-value growth 15%, Crime 11%, Employment growth 20%, Landlord friendliness 12%, Climate risk 10%.</div>
+      <div class="result-note">Favorable direction: higher is better for population, income, home-value, and employment growth; lower is better for crime and climate risk.</div>
+      <div class="result-note">Landlord friendliness maps directly: landlord-friendly = 100, neutral/mixed = 50, tenant-friendly = 0.</div>
+      <div class="result-note">Missing-data rule: score publishes only with at least 70% weighted coverage, at least four components, at least one economic component, and at least one risk/operating component.</div>
+      <div class="result-note">Coverage label reflects data coverage only (not statistical confidence). Rankings can change as source data or the comparison universe changes.</div>
+      <div class="result-note">Crime metric used for v1: <span id="fire-score-crime-source">Not available</span>.</div>
+      <div class="result-note">This is a preliminary market-screening tool, not a property-level investment recommendation.</div>
+    </div>
+  </details>
+
   <div id="comparison-table-wrap" class="comparison-table-wrap" style="display:none;">
     <table class="comparison-table">
       <thead>
         <tr>
           <th>City</th>
           <th>State</th>
+          <th>FIRE Score</th>
+          <th>Data Coverage</th>
           <th>Population</th>
           <th>Population Growth</th>
           <th>Median Income</th>
@@ -255,6 +272,7 @@
   const comparisonEmptyMessage = document.getElementById("comparison-empty-message");
   const comparisonWrap = document.getElementById("comparison-table-wrap");
   const comparisonBody = document.getElementById("comparison-table-body");
+  const fireScoreCrimeSourceEl = document.getElementById("fire-score-crime-source");
   const aiOverviewBody = document.getElementById("fire-ai-overview-body");
   const aiOverviewMeta = document.getElementById("fire-ai-overview-meta");
   const mapContainer = document.getElementById("fire-google-map");
@@ -437,6 +455,50 @@
     const num = Number(value) * 100;
     if (Number.isNaN(num)) return String(value);
     return `${num.toFixed(2)}%`;
+  }
+
+  function fireScoreForCity(city) {
+    const num = asNumber(city.fire_score);
+    return num === null ? null : num;
+  }
+
+  function fireScoreCoverageForCity(city) {
+    const num = asNumber(city.fire_score_coverage);
+    return num === null ? 0 : Math.max(0, Math.min(100, num));
+  }
+
+  function fireScoreLabelForCity(city) {
+    return String(city.fire_score_label || "Insufficient data").trim() || "Insufficient data";
+  }
+
+  function fireScoreCoverageLabelForCity(city) {
+    return String(city.fire_score_coverage_label || "Insufficient data").trim() || "Insufficient data";
+  }
+
+  function fireScoreCrimeSourceForCity(city) {
+    return String(city?.fire_score_methodology?.crime_source || "").trim();
+  }
+
+  function formatFireScore(city) {
+    const score = fireScoreForCity(city);
+    if (score === null) return "Insufficient data";
+    return score.toFixed(1);
+  }
+
+  function formatFireCoverage(city) {
+    const coverage = fireScoreCoverageForCity(city);
+    const label = fireScoreCoverageLabelForCity(city);
+    return `${coverage.toFixed(1)}% (${label})`;
+  }
+
+  function updateFireScoreCrimeSource(city) {
+    if (!fireScoreCrimeSourceEl) return;
+    const source = fireScoreCrimeSourceForCity(city);
+    if (!source) {
+      fireScoreCrimeSourceEl.textContent = "Not available";
+      return;
+    }
+    fireScoreCrimeSourceEl.textContent = source.replace(/_/g, " ");
   }
 
   function cleanCityDisplayName(value) {
@@ -666,6 +728,35 @@
       activeSearchCityKey = "";
     }
     renderCityChips();
+    enrichComparisonFromSearchCities();
+  }
+
+  function enrichComparisonFromSearchCities() {
+    if (!comparisonCities.length || !currentSearchCities.length) return;
+    const byKey = new Map();
+    currentSearchCities.forEach((city) => {
+      byKey.set(stableCityKey(city), sanitizeCity(city));
+    });
+
+    let changed = false;
+    comparisonCities = comparisonCities.map((city) => {
+      const key = stableCityKey(city);
+      const replacement = byKey.get(key);
+      if (!replacement) return city;
+      const currentScore = String(city.fire_score ?? "");
+      const nextScore = String(replacement.fire_score ?? "");
+      const currentCoverage = String(city.fire_score_coverage ?? "");
+      const nextCoverage = String(replacement.fire_score_coverage ?? "");
+      if (currentScore !== nextScore || currentCoverage !== nextCoverage) {
+        changed = true;
+      }
+      return sanitizeCity({ ...city, ...replacement });
+    });
+
+    if (changed) {
+      saveComparison();
+      renderComparisonTable();
+    }
   }
 
   function clearSearchedCitiesWorkspace(options = {}) {
@@ -1106,6 +1197,10 @@
 
   function markerInfoContent(city) {
     const title = markerTitleForCity(city);
+    const fireScore = formatFireScore(city);
+    const fireLabel = fireScoreLabelForCity(city);
+    const fireCoverage = fireScoreCoverageForCity(city).toFixed(1);
+    const fireCoverageLabel = fireScoreCoverageLabelForCity(city);
     const population = previewNum(city.population_current);
     const populationGrowth = `Growth: ${previewPct(city.population_growth_recent)}`;
     const income = previewMoney(city.median_income_current);
@@ -1122,6 +1217,9 @@
     return `
       <div class="fire-map-infowindow">
         <div class="fire-map-preview-title">${escapeHtml(title)}</div>
+        <div class="fire-map-preview-fire">FIRE Score: ${escapeHtml(fireScore)}</div>
+        <div class="fire-map-preview-fire-sub">${escapeHtml(fireLabel)}</div>
+        <div class="fire-map-preview-fire-sub">Data coverage: ${escapeHtml(fireCoverage)}% (${escapeHtml(fireCoverageLabel)})</div>
         <div class="fire-map-preview-grid">
           ${previewMetricRow("Population", escapeHtml(population), populationGrowth)}
           ${previewMetricRow("Median Income", escapeHtml(income), incomeGrowth)}
@@ -1531,6 +1629,13 @@
       density_adjusted_crime_rating: city.density_adjusted_crime_rating || "",
       landlord_friendliness_score: city.landlord_friendliness_score ?? null,
       landlord_friendliness_label: city.landlord_friendliness_label || "",
+      fire_score: city.fire_score ?? null,
+      fire_score_label: city.fire_score_label || "Insufficient data",
+      fire_score_version: city.fire_score_version || "",
+      fire_score_coverage: city.fire_score_coverage ?? null,
+      fire_score_coverage_label: city.fire_score_coverage_label || "Insufficient data",
+      fire_score_components: city.fire_score_components || {},
+      fire_score_methodology: city.fire_score_methodology || {},
       population_rank: city.population_rank ?? null,
       warnings: Array.isArray(city.warnings) ? city.warnings : [],
       latitude: city.latitude ?? city.lat ?? null,
@@ -1544,6 +1649,7 @@
     if (!activeCitySubline) return;
     if (!city) {
       activeCitySubline.textContent = "Active city: none selected";
+      updateFireScoreCrimeSource(null);
       if (cityWarningBadges) cityWarningBadges.innerHTML = "";
       return;
     }
@@ -1551,7 +1657,11 @@
     const displayName = cleanDisplayFromCityObject(city);
     const rank = previewNum(city.population_rank);
     const population = previewNum(city.population_current);
-    activeCitySubline.textContent = `Active city: ${displayName} | Population rank: ${rank} | Population: ${population}`;
+    const fireText = formatFireScore(city);
+    const fireLabel = fireScoreLabelForCity(city);
+    const coverageLabel = fireScoreCoverageLabelForCity(city);
+    activeCitySubline.textContent = `Active city: ${displayName} | FIRE Score ${fireText} · ${fireLabel} | Data coverage: ${coverageLabel} (${fireScoreCoverageForCity(city).toFixed(1)}%) | Population rank: ${rank} | Population: ${population}`;
+    updateFireScoreCrimeSource(city);
 
     if (!cityWarningBadges) return;
     cityWarningBadges.innerHTML = "";
@@ -1586,6 +1696,8 @@
       const rowValues = [
         cleanedCityName || "—",
         getStateField(city) || "—",
+        formatFireScore(city),
+        formatFireCoverage(city),
         cmpFmtNum(city.population_current),
         cmpFmtPct(city.population_growth_recent),
         cmpFmtMoney(city.median_income_current),
@@ -1599,9 +1711,13 @@
         city.landlord_friendliness_label || cmpFmtNum(city.landlord_friendliness_score),
       ];
 
-      rowValues.forEach((value) => {
+      rowValues.forEach((value, index) => {
         const td = document.createElement("td");
         td.textContent = value;
+        if (index === 2) {
+          td.title = fireScoreLabelForCity(city);
+          td.setAttribute("aria-label", `FIRE score ${value}. ${fireScoreLabelForCity(city)}.`);
+        }
         tr.appendChild(td);
       });
 

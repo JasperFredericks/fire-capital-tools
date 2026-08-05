@@ -21,6 +21,8 @@ from tools.fire_metrics.crime_workbook import (
     _validate_crime_workbook_bytes,
 )
 from tools.fire_metrics.services import (
+    _build_fire_score_index,
+    _enrich_search_payload_with_fire_score,
     _export_workbook,
     _fetch_top_cities,
     _parse_top_cities_limit,
@@ -91,7 +93,11 @@ def index():
                 with db_module.get_connection() as conn:
                     city_index = db_module.build_city_index_payload(conn)
                     excluded_index = db_module.build_excluded_index_payload(conn)
-                context["search_payload"] = find_city_match(query, city_index, excluded_index)
+                    score_index = _build_fire_score_index(conn)
+                context["search_payload"] = _enrich_search_payload_with_fire_score(
+                    find_city_match(query, city_index, excluded_index),
+                    score_index,
+                )
             return render_template("tools/fire_metrics.html", **context)
 
         action = request.form.get("action", "")
@@ -179,7 +185,9 @@ def search():
         with db_module.get_connection() as conn:
             city_index = db_module.build_city_index_payload(conn)
             excluded_index = db_module.build_excluded_index_payload(conn)
+            score_index = _build_fire_score_index(conn)
         payload = find_city_match(query, city_index, excluded_index)
+        payload = _enrich_search_payload_with_fire_score(payload, score_index)
         payload["query"] = query
         payload["status_meta"] = _refresh_status()
         return jsonify(payload)
