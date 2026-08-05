@@ -48,6 +48,7 @@ from flask import (
 from flask_login import login_required
 from werkzeug.utils import secure_filename
 
+from tools import branding
 from tools import deal_dive_db
 from tools import site_dd_checklist as cl
 from tools import site_dd_db as db
@@ -317,11 +318,10 @@ def download_report(assessment_id):
     # sheet, so it is filtered out here rather than failing per-image.
     thumbable = [p for p in photos if Path(p["stored_name"]).suffix.lower() in RASTER_EXT]
 
-    logo = Path(current_app.root_path) / "static" / "fire_logo.png"
     out_path = upload_dir / report.report_filename(assessment)
     report.build_report(
-        out_path, assessment, items, scores, thumbable,
-        photo_dir=upload_dir, logo_path=logo if logo.exists() else None,
+        out_path, assessment, items, scores, thumbable, photo_dir=upload_dir,
+        logo_path=branding.logo_png_path(Path(current_app.root_path) / "static"),
     )
     return send_file(str(out_path), as_attachment=True,
                      download_name=report.report_filename(assessment),
