@@ -1038,14 +1038,33 @@
     pendingCurrentCityPreview = { cityKey: "", panMap: false };
   }
 
-  function ensureCityAnalyticsCity(city) {
+  function ensureCityAnalyticsCity(city, options = {}) {
     const sanitized = sanitizeCity(city);
     const key = stableCityKey(sanitized);
     if (!key) return false;
     if (comparisonCities.some((item) => stableCityKey(item) === key)) return false;
     comparisonCities = [...comparisonCities, sanitized];
-    saveComparison();
+    if (options.persist !== false) {
+      saveComparison();
+    }
     return true;
+  }
+
+  function addResolvedCitiesToAnalytics(cities) {
+    const incoming = dedupeCitiesByStableKey(cities || []);
+    const added = [];
+    incoming.forEach((city) => {
+      if (ensureCityAnalyticsCity(city, { persist: false })) {
+        added.push(cleanDisplayFromCityObject(city));
+      }
+    });
+    if (added.length) {
+      saveComparison();
+    }
+    return {
+      addedCount: added.length,
+      addedLabels: added,
+    };
   }
 
   function openCurrentCityPreview(panMap = false) {
@@ -1907,12 +1926,16 @@
         const foundCity = sanitizeCity(payload.city || {});
         const key = stableCityKey(foundCity);
         const result = appendToCurrentSearchCities([foundCity]);
+        const analyticsResult = addResolvedCitiesToAnalytics([foundCity]);
         if (result.added.length) {
           setCityPickerStatus(`Added ${cityLabel(foundCity)}.`);
           showMessage(payload.user_message || "City added.", "success");
         } else {
           setCityPickerStatus(`${cityLabel(foundCity)} is already in searched cities.`);
           showMessage(payload.user_message || "City already present. Activated it.", "info");
+        }
+        if (analyticsResult.addedCount) {
+          showMessage(`Added ${analyticsResult.addedCount} city to City Analytics: ${summarizeCities(analyticsResult.addedLabels)}.`, "success");
         }
         selectCurrentSearchCity(key);
         input.value = "";
@@ -1961,12 +1984,7 @@
 
         if (status === "found" && payload.city) {
           const city = sanitizeCity(payload.city);
-          const key = stableCityKey(city);
           foundCities.push(city);
-          if (!comparisonCities.some((item) => stableCityKey(item) === key)) {
-            comparisonCities.push(city);
-            added.push(cleanDisplayFromCityObject(city));
-          }
           continue;
         }
 
@@ -1984,8 +2002,8 @@
       }
     }
 
-    saveComparison();
-    renderComparisonTable();
+    const analyticsResult = addResolvedCitiesToAnalytics(foundCities);
+    added.push(...analyticsResult.addedLabels);
 
     hideSuggestions();
     if (foundCities.length) {

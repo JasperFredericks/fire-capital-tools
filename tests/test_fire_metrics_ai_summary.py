@@ -1357,6 +1357,41 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("summaryRequestSequence", template)
         self.assertIn("_strip_trailing_census_suffix", Path("fire_metrics/fire_metrics_updater/db.py").read_text(encoding="utf-8"))
 
+    def test_frontend_successful_searches_auto_add_to_city_analytics(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("function addResolvedCitiesToAnalytics(cities)", template)
+        self.assertIn("ensureCityAnalyticsCity(city, { persist: false })", template)
+        self.assertIn("const analyticsResult = addResolvedCitiesToAnalytics([foundCity]);", template)
+        self.assertIn("const analyticsResult = addResolvedCitiesToAnalytics(foundCities);", template)
+        self.assertIn("if (added.length)", template)
+        self.assertIn("saveComparison();", template)
+        self.assertIn("selectCurrentSearchCity(key);", template)
+        self.assertIn("const firstCity = appendResult.firstAdded || foundCities[0];", template)
+
+    def test_frontend_ambiguous_excluded_failed_searches_do_not_auto_add(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn('if (status === "suggestions")', template)
+        self.assertIn('if (status === "excluded" || status === "not_found")', template)
+        self.assertIn('setCityPickerStatus("No city chip was added for that search.");', template)
+        self.assertIn('setCityPickerStatus("Select one of the suggested cities to add it.");', template)
+
+    def test_frontend_manual_search_preserves_or_appends_analytics_while_ranking_replaces(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("comparisonCities = rankedCities;", template)
+        self.assertIn("setRankedSearchCities(rankedCities);", template)
+        self.assertIn("addResolvedCitiesToAnalytics(foundCities)", template)
+        self.assertIn("appendToCurrentSearchCities(foundCities)", template)
+
+    def test_frontend_analytics_insertion_keeps_identity_payload_and_marker_dedup_hooks(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("const key = stableCityKey(sanitized);", template)
+        self.assertIn("if (comparisonCities.some((item) => stableCityKey(item) === key)) return false;", template)
+        self.assertIn("fire_score: city.fire_score ?? null", template)
+        self.assertIn("fire_score_coverage: city.fire_score_coverage ?? null", template)
+        self.assertIn("latitude: city.latitude ?? city.lat ?? null", template)
+        self.assertIn("warnings: Array.isArray(city.warnings) ? city.warnings : []", template)
+        self.assertIn("const markerKey = `${comparisonMarkerPrefix}${stableCityKey(city)}`;", template)
+
     def test_frontend_old_searched_city_tabs_and_dropdown_are_removed(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
         self.assertNotIn("Searched Cities", template)
