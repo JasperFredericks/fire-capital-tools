@@ -36,6 +36,7 @@ from tools import market_data_service
 from tools import rent_comps
 from tools import rent_comps_db
 from tools import site_dd
+from tools import underwriting
 
 deal_dive_bp = Blueprint("deal_dive", __name__)
 
@@ -185,6 +186,7 @@ def detail(deal_id):
         financial_files=financial_files,
         condition_files=condition_files,
         site_dd_summary=site_dd.summary_for_deal(deal_id),
+        underwriting_summary=underwriting.summary_for_deal(deal_id),
         market=market,
         statuses=db.STATUSES,
         auto_market_data=auto_market_data,
@@ -247,6 +249,7 @@ def delete_deal(deal_id):
     # purging them needs both the rows and the directories -- purge_for_deal
     # returns the ids it removed and clears the directories itself.
     site_dd.purge_for_deal(deal_id, Path(current_app.config["UPLOAD_FOLDER"]))
+    underwriting.purge_for_deal(deal_id, Path(current_app.config["UPLOAD_FOLDER"]))
 
     upload_dir = _upload_dir(deal_id)
     shutil.rmtree(upload_dir, ignore_errors=True)

@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+{% block title %}{{ scenario.property_label }} - Underwriting{% endblock %}
+
+{% macro money(v) %}{{ '${:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
+{% macro money2(v) %}{{ '${:,.2f}'.format(v) if v is not none else '—' }}{% endmacro %}
+{% macro pct(v, dp=2) %}{{ ('{:,.%df}%%' % dp).format(v * 100) if v is not none else '—' }}{% endmacro %}
+{% macro num(v) %}{{ '{:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
+
+{# Colour scale for the sensitivity grid: red below zero, amber to 10%,
+   blue to 20%, green above. Deliberately coarse -- a continuous gradient
+   invites reading precision into a table of assumptions. #}
+{% macro cell_bg(v, metric) %}
+  {%- if v is none -%}#f3f4f6
+  {%- elif metric == 'equity_multiple' -%}
+    {%- if v < 1.0 -%}#fee2e2{% elif v < 1.5 %}#fef3c7{% elif v < 2.0 %}#dbeafe{% else %}#dcfce7{% endif -%}
+  {%- else -%}
+    {%- if v < 0 -%}#fee2e2{% elif v < 0.10 %}#fef3c7{% elif v < 0.20 %}#dbeafe{% else %}#dcfce7{% endif -%}
+  {%- endif -%}
+{% endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('underwriting.index') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Underwriting
+  </a>
+  <h1 class="page-title">{{ scenario.property_label }}</h1>
+  <p class="page-subtitle">
+    {{ scenario.name }}
+    {%- if deal %} &middot; <a href="{{ url_for('deal_dive.detail', deal_id=deal.id) }}">linked to {{ deal.address }}</a>{% endif %}
+    {%- if scenario.rentroll_source %} &middot; rent roll: {{ scenario.rentroll_source }}{% endif %}
+    {%- if scenario.t12_source %} &middot; T12: {{ scenario.t12_source }}{% endif %}
+  </p>
+</div>
+
+{% if error %}
+  <div class="card"><div class="result-note" style="border-left:3px solid #dc2626;">{{ error }}</div></div>
+{% endif %}
+
+{% if result %}
+{% set r = result.returns %}{% set e = result.egi %}{% set p = result.projection %}
+<!-- ── Returns ────────────────────────────────────────────────────────── -->
+<div class="card" id="returns">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+    <div class="scorecard-section-title">Returns</div>
+    <form method="POST" action="{{ url_for('underwriting.delete', scenario_id=scenario.id) }}"
+          onsubmit="return confirm('Delete this scenario permanently? Its assumptions, expense lines, rent roll and uploads are removed.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-danger">Delete Scenario</button>
+    </form>
+  </div>
+  <div class="stats-grid" style="margin:14px 0 8px;">
+    <div class="stat-box"><div class="stat-box-label">Going-In Cap</div>
+      <div class="stat-box-value">{{ pct(r.going_in_cap_rate) }}</div>
+      <div class="stat-box-sub">Year-1 NOI &divide; price</div></div>
+    <div class="stat-box"><div class="stat-box-label">Cash-on-Cash (Yr 1)</div>
+      <div class="stat-box-value">{{ pct(r.cash_on_cash) }}</div></div>
+    <div class="stat-box"><div class="stat-box-label">DSCR (Yr 1)</div>
+      <div class="stat-box-value">{{ '{:,.2f}x'.format(r.dscr) if r.dscr is not none else '—' }}</div>
+      <div class="stat-box-sub">{{ r.dscr_reason or 'Year-1 NOI ÷ debt service' }}</div></div>
+    <div class="stat-box"><div class="stat-box-label">Levered IRR</div>
+      <div class="stat-box-value">{{ pct(r.levered_irr) }}</div>
+      <div class="stat-box-sub">{% if r.levered_irr_reason %}Not computable — {{ r.levered_irr_reason }}{% else %}Over {{ scenario.hold_years }} years{% endif %}</div></div>
+    <div class="stat-box"><div class="stat-box-label">Equity Multiple</div>
+      <div class="stat-box-value">{{ '{:,.2f}x'.format(r.equity_multiple) }}</div></div>
+    <div class="stat-box"><div class="stat-box-label">Unlevered IRR</div>
+      <div class="stat-box-value">{{ pct(r.unlevered_irr) }}</div></div>
+  </div>
+  <p class="page-subtitle">
+    Equity {{ money(r.equity_invested) }} &middot; loan {{ money(r.loan_amount) }} &middot;
+    annual debt service {{ money(r.annual_debt_service) }}.
+    Computed by the same engine as Deal Analyzer, so the two tools cannot disagree about this deal.
+  </p>
+</div>
+
+<!-- ── Income build-up ────────────────────────────────────────────────── -->
+<div class="card" id="income">
+  <div class="scorecard-section-title">Year-1 Income Build-Up</div>
+  <div class="table-wrap" style="margin-top:12px;">
+    <table class="rent-comps-table">
+      <tbody>
+        <tr><th style="width:60%;">Gross Potential Rent ({{ e.unit_count }} units at market)</th><td>{{ money2(e.gross_potential_rent) }}</td></tr>
+        <tr><th>less Loss to Lease ({{ e.occupied_units }} occupied units below market)</th><td>{{ money2(-e.loss_to_lease) }}</td></tr>
+        <tr><th>less Vacancy ({{ scenario.vacancy_pct }}%)</th><td>{{ money2(-e.vacancy) }}</td></tr>
+        <tr><th>less Concessions ({{ scenario.concessions_pct }}%)</th><td>{{ money2(-e.concessions) }}</td></tr>
+        <tr><th>less Bad Debt ({{ scenario.bad_debt_pct }}%)</th><td>{{ money2(-e.bad_debt) }}</td></tr>
+        <tr><th>plus Other Income</th><td>{{ money2(e.other_income) }}</td></tr>
+        <tr><th><strong>Effective Gross Income</strong></th><td><strong>{{ money2(e.effective_gross_income) }}</strong></td></tr>
+        <tr><th>less Operating Expenses</th><td>{{ money2(-result.operating_expenses_year1) }}</td></tr>
+        <tr><th><strong>Year-1 NOI</strong></th><td><strong>{{ money2(p.noi_series[0]) }}</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Cash flow ──────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">NOI Projection</div>
+  <div class="table-wrap" style="margin-top:12px;">
+    <table class="rent-comps-table">
+      <thead><tr><th>Year</th><th>Income</th><th>Expenses</th><th>NOI</th></tr></thead>
+      <tbody>
+        {% for y in p.years %}
+          <tr><td>{{ y.year }}</td><td>{{ money(y.income) }}</td><td>{{ money(y.expenses) }}</td><td>{{ money(y.noi) }}</td></tr>
+        {% endfor %}
+        <tr><td colspan="3"><strong>Exit &mdash; forward NOI (year {{ scenario.hold_years + 1 }}) capitalized at {{ scenario.exit_cap_pct }}%</strong></td>
+            <td><strong>{{ money(p.noi_exit) }}</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Sensitivity ────────────────────────────────────────────────────── -->
+{% if grid %}
+<div class="card" id="sensitivity">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+    <div class="scorecard-section-title">Sensitivity</div>
+    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+      {% for m, lbl in [('levered_irr','Levered IRR'), ('equity_multiple','Equity Multiple')] %}
+        <a class="btn {{ 'btn-primary' if grid_metric == m else 'btn-ghost' }}"
+           href="{{ url_for('underwriting.detail', scenario_id=scenario.id, metric=m, variable=grid_variable) }}#sensitivity">{{ lbl }}</a>
+      {% endfor %}
+      {% for v, lbl in [('rent_growth','vs Rent Growth'), ('price','vs Purchase Price')] %}
+        <a class="btn {{ 'btn-primary' if grid_variable == v else 'btn-ghost' }}"
+           href="{{ url_for('underwriting.detail', scenario_id=scenario.id, metric=grid_metric, variable=v) }}#sensitivity">{{ lbl }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  <p class="page-subtitle" style="margin:10px 0 12px;">
+    Every cell is a full re-run through the same engine as the headline figures &mdash; not an
+    approximation. The base case is outlined.
+  </p>
+  <div class="table-wrap">
+    <table class="rent-comps-table" style="font-size:12px;">
+      <thead>
+        <tr><th>{{ grid.row_label }} \ {{ grid.col_label }}</th>
+          {% for c in grid.col_values %}
+            <th>{% if grid.variable == 'price' %}{{ money(c) }}{% else %}{{ '{:,.1f}%'.format(c) }}{% endif %}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in grid.rows %}
+          <tr>
+            <th>{{ '{:,.2f}%'.format(row.exit_cap_pct) }}</th>
+            {% for cell in row.cells %}
+              <td style="background:{{ cell_bg(cell.value, grid.metric) }};{% if cell.is_base %}outline:2px solid #1a2744; font-weight:700;{% endif %}"
+                  {% if cell.reason %}title="{{ cell.reason }}"{% endif %}>
+                {%- if cell.value is none -%}—
+                {%- elif grid.metric == 'equity_multiple' -%}{{ '{:,.2f}x'.format(cell.value) }}
+                {%- else -%}{{ '{:,.1f}%'.format(cell.value * 100) }}{%- endif -%}
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- ── Assumptions ────────────────────────────────────────────────────── -->
+<div class="card" id="assumptions">
+  <div class="scorecard-section-title">Assumptions</div>
+  <form method="POST" action="{{ url_for('underwriting.save', scenario_id=scenario.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-top:14px;">
+      <div class="form-group"><label class="form-label" for="name">Scenario name</label>
+        <input class="form-input" type="text" id="name" name="name" value="{{ scenario.name }}"></div>
+      <div class="form-group"><label class="form-label" for="property_label">Property</label>
+        <input class="form-input" type="text" id="property_label" name="property_label" value="{{ scenario.property_label }}"></div>
+      {% for key, label in [
+          ('purchase_price','Purchase Price ($)'), ('closing_costs_pct','Closing Costs (%)'),
+          ('ltv_pct','LTV (%)'), ('interest_rate_pct','Interest Rate (%)'),
+          ('amort_years','Amortization (yrs)'), ('hold_years','Hold Period (yrs)'),
+          ('exit_cap_pct','Exit Cap Rate (%)'), ('selling_costs_pct','Selling Costs (%)'),
+          ('vacancy_pct','Vacancy (%)'), ('concessions_pct','Concessions (%)'),
+          ('bad_debt_pct','Bad Debt (%)'), ('other_income_annual','Other Income ($/yr)'),
+          ('rent_growth_pct','Rent Growth (%/yr)'), ('expense_growth_pct','Expense Growth (%/yr)')] %}
+        <div class="form-group">
+          <label class="form-label" for="{{ key }}">{{ label }}</label>
+          <input class="form-input" type="text" id="{{ key }}" name="{{ key }}"
+                 value="{{ scenario[key] if scenario[key] is not none else '' }}">
+        </div>
+      {% endfor %}
+    </div>
+    <button type="submit" class="btn btn-primary">Save Assumptions</button>
+  </form>
+</div>
+
+<!-- ── Rent roll ──────────────────────────────────────────────────────── -->
+<div class="card" id="rentroll">
+  <div class="scorecard-section-title">Rent Roll{% if units %} ({{ units|length }} units){% endif %}</div>
+  <p class="page-subtitle" style="margin:8px 0 12px;">
+    ResMan rent roll exports only in this beta. An unrecognized layout is rejected rather than
+    guessed at, since a mis-read rent roll would quietly mis-state income for the whole model.
+  </p>
+  <form method="POST" action="{{ url_for('underwriting.upload_rentroll', scenario_id=scenario.id) }}"
+        enctype="multipart/form-data" class="admin-upload-row" style="margin-bottom:14px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="file" name="rentroll" required>
+    <button type="submit" class="btn btn-ghost">Import Rent Roll</button>
+  </form>
+
+  {% if unit_mix %}
+    <div class="scorecard-mini-title" style="margin-bottom:8px;">Unit Mix</div>
+    <div class="table-wrap">
+      <table class="rent-comps-table">
+        <thead><tr><th>Type</th><th>Units</th><th>Avg Sqft</th><th>Avg In-Place</th><th>Avg Market</th><th>Loss to Lease</th></tr></thead>
+        <tbody>
+          {% for m in unit_mix %}
+            <tr><td>{{ m.unit_type }}</td><td>{{ m.count }}</td>
+              <td>{{ num(m.avg_sqft) }}</td>
+              <td>{{ money2(m.avg_in_place_rent) }}</td>
+              <td>{{ money2(m.avg_market_rent) }}</td>
+              <td>{% if m.avg_market_rent is not none and m.avg_in_place_rent is not none %}{{ money2(m.avg_market_rent - m.avg_in_place_rent) }}{% else %}—{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="result-note">No rent roll imported yet — income cannot be built until one is.</div>
+  {% endif %}
+</div>
+
+<!-- ── Expenses ───────────────────────────────────────────────────────── -->
+<div class="card" id="expenses">
+  <div class="scorecard-section-title">Operating Expenses{% if expense_lines %} ({{ expense_lines|length }} lines){% endif %}</div>
+  <p class="page-subtitle" style="margin:8px 0 12px;">
+    Import a T12 to seed itemized lines, then adjust individually. Only leaf accounts are listed:
+    a tree-format P&amp;L carries rollup parents as well as their children, and summing both would
+    overstate expenses several times over. Debt service and capital items are excluded by default
+    &mdash; shown, not dropped, so you can put them back.
+  </p>
+  <form method="POST" action="{{ url_for('underwriting.upload_t12', scenario_id=scenario.id) }}"
+        enctype="multipart/form-data" class="admin-upload-row" style="margin-bottom:14px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="file" name="t12" required>
+    <button type="submit" class="btn btn-ghost">Import T12</button>
+  </form>
+
+  <form method="POST" action="{{ url_for('underwriting.save_expenses', scenario_id=scenario.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if expense_lines %}
+      <div class="table-wrap" style="margin-bottom:14px;">
+        <table class="rent-comps-table">
+          <thead><tr><th>Include</th><th>Category</th><th>Line</th><th>Annual Amount</th><th>Growth %/yr</th><th>Kind</th></tr></thead>
+          <tbody>
+            {% for l in expense_lines %}
+              <tr{% if not l.is_included %} style="opacity:0.55;"{% endif %}>
+                <td><input type="checkbox" name="included_{{ l.id }}" value="1" {% if l.is_included %}checked{% endif %}></td>
+                <td>{{ l.category_name or '—' }}</td>
+                <td>{{ l.label }}{% if l.gl_code %} <span class="stat-box-sub">{{ l.gl_code }}</span>{% endif %}</td>
+                <td><input class="form-input" type="text" name="amount_{{ l.id }}" style="padding:4px 8px; font-size:12px;"
+                           value="{{ '%.2f'|format(l.annual_amount) if l.annual_amount is not none else '' }}"></td>
+                <td><input class="form-input" type="text" name="growth_{{ l.id }}" style="padding:4px 8px; font-size:12px;"
+                           placeholder="default" value="{{ l.growth_pct if l.growth_pct is not none else '' }}"></td>
+                <td class="stat-box-sub">{{ l.line_kind or 'operating' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="result-note" style="margin-bottom:14px;">
+        No T12 imported. Enter standard categories below instead — same model either way.
+      </div>
+      <div class="table-wrap" style="margin-bottom:14px;">
+        <table class="rent-comps-table">
+          <thead><tr><th>Category</th><th>Annual Amount</th><th>Growth %/yr</th></tr></thead>
+          <tbody>
+            {% for key, label in default_categories %}
+              <tr><td>{{ label }}</td>
+                <td><input class="form-input" type="text" name="new_amount_{{ key }}" style="padding:4px 8px; font-size:12px;"></td>
+                <td><input class="form-input" type="text" name="new_growth_{{ key }}" placeholder="default" style="padding:4px 8px; font-size:12px;"></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+    <button type="submit" class="btn btn-primary">Save Expense Lines</button>
+  </form>
+</div>
+
+{% include "_feedback.html" %}
+{% endblock %}

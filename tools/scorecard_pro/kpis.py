@@ -95,6 +95,157 @@ class KPICalculator:
         # not match the sum of that month's detail rows. Advisory only.
         self.override_mismatches: list = []
 
+    # ── Itemized category breakdown (used by Underwriting) ───────────────
+    #
+    # Added for the Underwriting tool, which needs the *line items* behind
+    # income/expense rather than the monthly totals calculate() produces.
+    # Deliberately a separate method on this class rather than a parallel
+    # aggregation elsewhere: a second implementation of "which accounts roll
+    # into what" would eventually disagree with Scorecard Pro about the same
+    # T12, and the disagreement would be silent.
+    #
+    # The hard part is that a tree-format P&L contains BOTH rollup parents
+    # and their children. Summing every account double-counts massively --
+    # on a real Eagle Rock T12 a naive sum of all 6xxx+7xxx gives 3,414,662
+    # against true controllable opex of ~436,000, roughly 8x. So only leaves
+    # are summed.
+
+    # Non-operating lines that must not land in an operating expense total.
+    # Debt service is modeled separately by the loan, so counting it here
+    # too would double-charge it; capital items are not operating expense.
+    # Matched on the account NAME rather than a code range because code
+    # ranges differ between charts of accounts, while these labels do not.
+    _NON_OPERATING_NAME_PATTERNS = (
+        "debt service", "mortgage", "interest payment", "principal payment",
+        "loan payment", "escrow",
+    )
+    _CAPEX_NAME_PATTERNS = (
+        "rehab", "replacement", "capital", "capex", "improvement",
+        "renovation", "reserve",
+    )
+
+    @staticmethod
+    def _classify_line(name: str) -> str:
+        low = " ".join(str(name or "").strip().lower().split())
+        for pat in KPICalculator._NON_OPERATING_NAME_PATTERNS:
+            if pat in low:
+                return "non_operating"
+        for pat in KPICalculator._CAPEX_NAME_PATTERNS:
+            if pat in low:
+                return "capex"
+        return "operating"
+
+    def _leaf_codes(self):
+        """Codes with no children, plus the category each belongs to.
+
+        Hierarchy comes from `depth` (the column the account was found in)
+        read in document order: an account is a parent when the account
+        immediately after it sits deeper. A leaf's category is its nearest
+        ancestor one level below the shallowest expense/income grouping --
+        i.e. the row a human would read as the category heading ("Utilities",
+        "Salaries & Payroll Related", "Property Taxes"), taken from the file
+        itself rather than a hardcoded prefix table that would have to be
+        re-guessed for every new chart of accounts.
+
+        Flat formats carry no depth at all (the cash-flow parser), in which
+        case every account is its own leaf and its own category -- which is
+        correct for a file with no rollup rows to double-count.
+        """
+        ordered = list(self.accounts.items())
+        depths = [a.get("depth") for _, a in ordered]
+        has_depth = any(d is not None for d in depths)
+
+        if not has_depth:
+            return [
+                {"code": c, "name": a["name"], "depth": None,
+                 "category_code": c, "category_name": a["name"]}
+                for c, a in ordered
+            ]
+
+        known = [d for d in depths if d is not None]
+        category_depth = min(known) + 1 if known else 0
+
+        leaves = []
+        for idx, (code, acc) in enumerate(ordered):
+            d = acc.get("depth")
+            if d is None:
+                continue
+            nxt = next((depths[j] for j in range(idx + 1, len(ordered))
+                        if depths[j] is not None), None)
+            if nxt is not None and nxt > d:
+                continue  # has children -- a rollup row, not a line item
+            # nearest preceding account at exactly category_depth
+            cat_code, cat_name = code, acc["name"]
+            if d > category_depth:
+                for j in range(idx - 1, -1, -1):
+                    jd = ordered[j][1].get("depth")
+                    if jd is not None and jd == category_depth:
+                        cat_code, cat_name = ordered[j][0], ordered[j][1]["name"]
+                        break
+            leaves.append({"code": code, "name": acc["name"], "depth": d,
+                           "category_code": cat_code, "category_name": cat_name})
+        return leaves
+
+    def category_breakdown(self, code_pattern=r"[67]\d{3}"):
+        """Leaf line items grouped by category, with rollup diagnostics.
+
+        Returns line items (12-month totals plus monthly detail), category
+        subtotals, and -- where the file also carries a rollup parent for a
+        category -- the difference between that parent and the sum of its
+        own leaves. On a real Eagle Rock T12 those disagree by about 4,339,
+        so the discrepancy is reported rather than silently resolved: the
+        leaves are authoritative (they are what the user edits, and they must
+        add up to what is displayed), and the parent is shown alongside as a
+        check.
+        """
+        rx = re.compile(code_pattern)
+        leaves = [l for l in self._leaf_codes() if rx.fullmatch(str(l["code"]))]
+
+        def total(code):
+            return sum(v or 0.0 for v in self.accounts[code]["data"].values())
+
+        lines = []
+        for l in leaves:
+            kind = self._classify_line(l["name"])
+            lines.append({
+                **l,
+                "annual_total": total(l["code"]),
+                "monthly": dict(self.accounts[l["code"]]["data"]),
+                "line_kind": kind,
+                "is_included_default": kind == "operating",
+            })
+
+        cats: dict = {}
+        for ln in lines:
+            c = cats.setdefault(ln["category_code"], {
+                "category_code": ln["category_code"],
+                "category_name": ln["category_name"],
+                "lines": [], "leaf_total": 0.0, "operating_total": 0.0,
+            })
+            c["lines"].append(ln)
+            c["leaf_total"] += ln["annual_total"]
+            if ln["is_included_default"]:
+                c["operating_total"] += ln["annual_total"]
+
+        discrepancies = []
+        for code, c in cats.items():
+            if code in self.accounts and not any(l["code"] == code for l in leaves):
+                parent = total(code)
+                if abs(parent - c["leaf_total"]) > 1.0:
+                    discrepancies.append({
+                        "category_code": code, "category_name": c["category_name"],
+                        "parent_total": parent, "leaf_total": c["leaf_total"],
+                        "difference": parent - c["leaf_total"],
+                    })
+
+        return {
+            "lines": lines,
+            "categories": sorted(cats.values(), key=lambda c: c["category_code"]),
+            "discrepancies": discrepancies,
+            "operating_total": sum(l["annual_total"] for l in lines if l["is_included_default"]),
+            "excluded_total": sum(l["annual_total"] for l in lines if not l["is_included_default"]),
+        }
+
     def get_val(self, code, month):
         if code in self.accounts:
             return float(self.accounts[code]["data"].get(month, 0.0) or 0.0)

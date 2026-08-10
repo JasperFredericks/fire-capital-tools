@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Underwriting - FIRE Capital Tools{% endblock %}
+
+{% macro money(v) %}{{ '${:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
+{% macro pct(v) %}{{ '{:,.2f}%'.format(v * 100) if v is not none else '—' }}{% endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <h1 class="page-title">Underwriting <span class="tool-tag tag-soon" style="vertical-align:middle; font-size:11px;">Beta</span></h1>
+  <p class="page-subtitle">
+    A full pro forma &mdash; rent roll builds income, an itemized T12 builds expenses, and the
+    resulting NOI runs through the same returns engine as Deal Analyzer, with sensitivity tables.
+    Already know the NOI? <a href="{{ url_for('deal_analyzer.index') }}">Deal Analyzer</a> is the quicker read.
+  </p>
+</div>
+
+<div class="card">
+  {% if deal %}
+    <div class="scorecard-section-title">Scenarios for this property</div>
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-top:10px;">
+      <div>
+        <div class="stat-box-value" style="font-size:15px;">{{ deal.address }}</div>
+        <div class="stat-box-sub">{{ deal.city }}, {{ deal.state }} {{ deal.zip or '' }}</div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <a href="{{ url_for('deal_dive.detail', deal_id=deal.id) }}" class="btn btn-ghost">Back to Deal</a>
+        <a href="{{ url_for('underwriting.index') }}" class="btn btn-ghost">All Scenarios</a>
+      </div>
+    </div>
+    <hr class="divider" style="margin:18px 0;">
+  {% else %}
+    <div class="scorecard-section-title">New Scenario</div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('underwriting.new_scenario') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if deal %}<input type="hidden" name="deal_id" value="{{ deal.id }}">{% endif %}
+    <div style="display:grid; grid-template-columns: {% if deal %}1fr 1fr auto{% else %}2fr 1fr 1fr auto{% endif %}; gap:12px; align-items:end;">
+      {% if not deal %}
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="property_label">Property name or address</label>
+          <input class="form-input" type="text" id="property_label" name="property_label"
+                 placeholder="Eagle Rock Apartments" required>
+        </div>
+      {% endif %}
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="name">Scenario name</label>
+        <input class="form-input" type="text" id="name" name="name" value="Base case">
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="purchase_price">Purchase price ($)</label>
+        <input class="form-input" type="text" id="purchase_price" name="purchase_price" placeholder="7,000,000">
+      </div>
+      <button type="submit" class="btn btn-primary">Create Scenario</button>
+    </div>
+  </form>
+  <p class="page-subtitle" style="margin:12px 0 0;">
+    Multiple scenarios per property are expected &mdash; re-underwriting at a different price or exit
+    is the normal case, and comparing Base against Downside is most of the point.
+  </p>
+</div>
+
+<div class="card">
+  <div class="scorecard-section-title">
+    {% if deal %}This Property's Scenarios{% else %}All Scenarios{% endif %}{% if scenarios %} ({{ scenarios|length }}){% endif %}
+  </div>
+  <div class="table-wrap" style="margin-top:12px;">
+    <table class="rent-comps-table">
+      <thead>
+        <tr><th>Scenario</th><th>Property</th><th>Units</th><th>Purchase</th>
+            <th>Year-1 NOI</th><th>Levered IRR</th><th>Updated</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% if not scenarios %}
+          <tr><td colspan="8">No scenarios yet — create one above.</td></tr>
+        {% else %}
+          {% for s in scenarios %}
+            <tr>
+              <td>{{ s.name }}</td>
+              <td>{{ s.property_label }}{% if s.deal_id %} <span class="stat-box-sub">· deal #{{ s.deal_id }}</span>{% endif %}</td>
+              <td>{{ s.summary.units if s.summary else '—' }}</td>
+              <td>{{ money(s.purchase_price) }}</td>
+              <td>{{ money(s.summary.noi) if s.summary else '—' }}</td>
+              <td>{{ pct(s.summary.irr) if s.summary and s.summary.irr is not none else '—' }}</td>
+              <td>{{ s.updated_at[:10] }}</td>
+              <td><a href="{{ url_for('underwriting.detail', scenario_id=s.id) }}" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Open</a></td>
+            </tr>
+          {% endfor %}
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% include "_feedback.html" %}
+{% endblock %}

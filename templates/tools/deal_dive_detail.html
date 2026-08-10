@@ -72,7 +72,21 @@
     {% endif %}
   </div>
 
-  <p class="page-subtitle" style="margin-bottom:10px;">Summary-level figures for reference &mdash; for a returns analysis with leverage and IRR, see <a href="{{ url_for('deal_analyzer.index', deal_id=deal.id) }}">Deal Analyzer</a>. A detailed underwriting model belongs in the Underwriting tool.</p>
+  <p class="page-subtitle" style="margin-bottom:10px;">Summary-level figures for reference &mdash; for a returns analysis with leverage and IRR, see <a href="{{ url_for('deal_analyzer.index', deal_id=deal.id) }}">Deal Analyzer</a>; to build the NOI from a rent roll and itemized expenses, see <a href="{{ url_for('underwriting.index', deal_id=deal.id) }}">Underwriting</a>.</p>
+  {% set uw = underwriting_summary %}
+  <p class="page-subtitle" style="margin-bottom:10px;">
+    {% if uw %}
+      <strong>{{ uw.total_count }}</strong> underwriting scenario{{ '' if uw.total_count == 1 else 's' }} on file
+      {%- if uw.summary and uw.summary.noi is not none %} &middot; latest &ldquo;{{ uw.name }}&rdquo;: Year-1 NOI
+        <strong>{{ '${:,.0f}'.format(uw.summary.noi) }}</strong>
+        {%- if uw.summary.irr is not none %}, levered IRR <strong>{{ '{:,.2f}%'.format(uw.summary.irr * 100) }}</strong>{% endif %}
+      {%- endif %} &middot;
+      <a href="{{ url_for('underwriting.index', deal_id=deal.id) }}">View / Manage &rarr;</a>
+    {% else %}
+      No underwriting scenarios yet &middot;
+      <a href="{{ url_for('underwriting.index', deal_id=deal.id) }}">Build a model &rarr;</a>
+    {% endif %}
+  </p>
 
   <form method="POST" action="{{ url_for('deal_dive.update_financials', deal_id=deal.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

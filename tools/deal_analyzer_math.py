@@ -170,19 +170,51 @@ def _validate(i: dict[str, Any]) -> None:
 # ── Main entry point ─────────────────────────────────────────────────────
 
 def analyze(inputs: dict[str, Any]) -> dict[str, Any]:
-    """Run the full projection. Raises ValidationError for unusable input;
-    otherwise always returns a complete result dict, with None (plus a
-    reason) for any individual metric that is genuinely undefined."""
+    """Single-growth-rate projection: the Deal Analyzer entry point.
+
+    A thin wrapper over analyze_noi_series() -- it derives the NOI series
+    from one growth rate and hands off. Underwriting builds its series line
+    by line from a rent roll and itemized expenses and calls the core
+    directly, so both tools compute returns with the same engine rather
+    than two implementations that can drift apart on the same deal."""
     _validate(inputs)
+    noi1 = float(inputs["noi_year1"])
+    g = float(inputs["noi_growth_pct"]) / 100.0
+    H = int(inputs["hold_years"])
+    return analyze_noi_series(
+        inputs,
+        noi_series=[noi1 * (1 + g) ** (t - 1) for t in range(1, H + 1)],
+        noi_exit=noi1 * (1 + g) ** H,
+    )
+
+
+def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
+                       noi_exit: float) -> dict[str, Any]:
+    """The engine. Capital stack, debt service, cash flows, returns.
+
+    `noi_series` is NOI for operating years 1..H, one entry per year, in
+    order. `noi_exit` is the *forward* NOI (year H+1) that a buyer at the
+    end of the hold would capitalize -- passed explicitly rather than
+    inferred, because a caller that builds NOI from itemized line items has
+    no single growth rate to extrapolate from, and guessing one here would
+    silently disagree with the model the user actually entered.
+
+    Everything downstream of the NOI series -- financing, exit, IRR,
+    multiples -- is identical for both callers by construction."""
+    _validate(inputs)
+
+    H = int(inputs["hold_years"])
+    if len(noi_series) != H:
+        raise ValidationError(
+            f"Internal error: {len(noi_series)} NOI years supplied for a "
+            f"{H}-year hold."
+        )
 
     P = float(inputs["purchase_price"])
     cc_pct = float(inputs["closing_costs_pct"]) / 100.0
     ltv = float(inputs["ltv_pct"]) / 100.0
     rate = float(inputs["interest_rate_pct"]) / 100.0
     amort_years = int(inputs["amort_years"])
-    noi1 = float(inputs["noi_year1"])
-    g = float(inputs["noi_growth_pct"]) / 100.0
-    H = int(inputs["hold_years"])
     exit_cap = float(inputs["exit_cap_pct"]) / 100.0
     sc_pct = float(inputs["selling_costs_pct"]) / 100.0
 
@@ -197,11 +229,11 @@ def analyze(inputs: dict[str, Any]) -> dict[str, Any]:
 
     debt_service = monthly_payment(loan, rate, amort_years) * 12 if loan > 0 else 0.0
 
-    # Year-by-year operations. NOI_t = NOI1 * (1+g)^(t-1).
+    # Year-by-year operations, from the supplied NOI series.
     years = []
     cumulative = 0.0
     for t in range(1, H + 1):
-        noi_t = noi1 * (1 + g) ** (t - 1)
+        noi_t = float(noi_series[t - 1])
         cf_t = noi_t - debt_service
         cumulative += cf_t
         years.append({
@@ -214,9 +246,9 @@ def analyze(inputs: dict[str, Any]) -> dict[str, Any]:
 
     operating_cf = [y["cash_flow"] for y in years]
 
-    # Exit. Capitalize the *forward* NOI -- what a buyer at the end of the
-    # hold would underwrite -- not the final year's own NOI.
-    noi_exit = noi1 * (1 + g) ** H
+    # Exit. Capitalize the *forward* NOI (year H+1) -- what a buyer at the
+    # end of the hold would underwrite -- not the final year's own NOI.
+    noi_exit = float(noi_exit)
     gross_sale = noi_exit / exit_cap
     selling_costs = gross_sale * sc_pct
     balance_at_exit = remaining_balance(loan, rate, amort_years, H * 12)
@@ -239,6 +271,7 @@ def analyze(inputs: dict[str, Any]) -> dict[str, Any]:
     total_distributions = sum(operating_cf) + net_sale_levered
     equity_multiple = total_distributions / equity
 
+    noi1 = float(noi_series[0])
     going_in_cap = noi1 / P
 
     # DSCR and cash-on-cash are ratios against things that can legitimately

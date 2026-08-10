@@ -71,6 +71,7 @@ def create_app(config_class: type = Config) -> Flask:
     from tools.rent_comps import rent_comps_bp
     from tools.scorecard_pro import scorecard_bp
     from tools.site_dd import site_dd_bp
+    from tools.underwriting import underwriting_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(mmr_bp, url_prefix="/tools/mmr-summary")
@@ -80,6 +81,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(rent_comps_bp, url_prefix="/tools/rent-comps")
     app.register_blueprint(deal_analyzer_bp, url_prefix="/tools/deal-analyzer")
     app.register_blueprint(site_dd_bp, url_prefix="/tools/site-dd")
+    app.register_blueprint(underwriting_bp, url_prefix="/tools/underwriting")
     app.register_blueprint(feedback_bp, url_prefix="/feedback")
 
     # ── Security headers ───────────────────────────────────────────────────
