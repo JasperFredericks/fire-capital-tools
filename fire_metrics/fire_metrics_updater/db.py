@@ -145,6 +145,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE cities ADD COLUMN latitude REAL")
     if "longitude" not in existing:
         conn.execute("ALTER TABLE cities ADD COLUMN longitude REAL")
+    # Backward-compatible migration for CRE research columns (v5 summary).
+    summaries_existing = {row[1] for row in conn.execute("PRAGMA table_info(fire_metrics_city_summaries)").fetchall()}
+    if "cre_sentences_text" not in summaries_existing:
+        conn.execute("ALTER TABLE fire_metrics_city_summaries ADD COLUMN cre_sentences_text TEXT NOT NULL DEFAULT ''")
+    if "research_sources_json" not in summaries_existing:
+        conn.execute("ALTER TABLE fire_metrics_city_summaries ADD COLUMN research_sources_json TEXT NOT NULL DEFAULT '[]'")
+    if "cre_generated_at" not in summaries_existing:
+        conn.execute("ALTER TABLE fire_metrics_city_summaries ADD COLUMN cre_generated_at TEXT")
     conn.commit()
 
 
@@ -455,11 +463,11 @@ def upsert_city_summary_cache(conn: sqlite3.Connection, row: dict[str, Any]) -> 
         INSERT INTO fire_metrics_city_summaries (
             city, state, city_key, data_fingerprint, model_name, prompt_version,
             summary_text, strength_sentence, weakness_sentence, comparison_sentence,
-            generated_at
+            generated_at, cre_sentences_text, research_sources_json, cre_generated_at
         ) VALUES (
             :city, :state, :city_key, :data_fingerprint, :model_name, :prompt_version,
             :summary_text, :strength_sentence, :weakness_sentence, :comparison_sentence,
-            :generated_at
+            :generated_at, :cre_sentences_text, :research_sources_json, :cre_generated_at
         )
         ON CONFLICT(city, state, data_fingerprint, model_name, prompt_version)
         DO UPDATE SET
@@ -468,9 +476,49 @@ def upsert_city_summary_cache(conn: sqlite3.Connection, row: dict[str, Any]) -> 
             strength_sentence = excluded.strength_sentence,
             weakness_sentence = excluded.weakness_sentence,
             comparison_sentence = excluded.comparison_sentence,
-            generated_at = excluded.generated_at
+            generated_at = excluded.generated_at,
+            cre_sentences_text = excluded.cre_sentences_text,
+            research_sources_json = excluded.research_sources_json,
+            cre_generated_at = excluded.cre_generated_at
         """,
-        row,
+        {
+            **row,
+            "cre_sentences_text": row.get("cre_sentences_text") or "",
+            "research_sources_json": row.get("research_sources_json") or "[]",
+            "cre_generated_at": row.get("cre_generated_at"),
+        },
+    )
+    conn.commit()
+
+
+def update_city_summary_cre_fields(
+    conn: sqlite3.Connection,
+    *,
+    city: str,
+    state: str,
+    data_fingerprint: str,
+    model_name: str,
+    prompt_version: str,
+    cre_sentences_text: str,
+    research_sources_json: str,
+    cre_generated_at: str,
+) -> None:
+    """Refresh only the CRE fields of an existing cached summary row."""
+    conn.execute(
+        """
+        UPDATE fire_metrics_city_summaries
+        SET cre_sentences_text = ?,
+            research_sources_json = ?,
+            cre_generated_at = ?
+        WHERE city = ? AND state = ?
+          AND data_fingerprint = ?
+          AND model_name = ?
+          AND prompt_version = ?
+        """,
+        (
+            cre_sentences_text, research_sources_json, cre_generated_at,
+            city, state, data_fingerprint, model_name, prompt_version,
+        ),
     )
     conn.commit()
 

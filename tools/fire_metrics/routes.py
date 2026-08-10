@@ -22,6 +22,7 @@ from tools.fire_metrics.crime_workbook import (
 )
 from tools.fire_metrics.services import (
     _build_fire_score_index,
+    _cre_research_model_name,
     _enrich_search_payload_with_fire_score,
     _export_workbook,
     _fetch_top_cities,
@@ -304,14 +305,52 @@ def city_summary():
                 )
                 cache_row = None
             if cache_row:
+                cre_fresh = ai_summary.is_cre_fresh(cache_row.get("cre_generated_at"))
+                cre_sentences = str(cache_row.get("cre_sentences_text") or "").strip()
+                research_sources: list[dict] = []
+                try:
+                    research_sources = json.loads(cache_row.get("research_sources_json") or "[]") or []
+                except (json.JSONDecodeError, ValueError):
+                    research_sources = []
+
+                if not cre_fresh and _summary_enabled() and _summary_api_key():
+                    try:
+                        cre_result = ai_summary.openai_cre_research(
+                            api_key=_summary_api_key(),
+                            model_name=_cre_research_model_name(),
+                            city=selected_city["city"],
+                            state=selected_city["state"],
+                            display_name=str(selected_city.get("display_name") or ""),
+                        )
+                        cre_sentences = cre_result.get("cre_sentences") or ""
+                        research_sources = cre_result.get("research_sources") or []
+                        db_module.update_city_summary_cre_fields(
+                            conn,
+                            city=selected_city["city"],
+                            state=selected_city["state"],
+                            data_fingerprint=data_fingerprint,
+                            model_name=model_name,
+                            prompt_version=ai_summary.PROMPT_VERSION,
+                            cre_sentences_text=cre_sentences,
+                            research_sources_json=json.dumps(research_sources),
+                            cre_generated_at=cre_result.get("cre_generated_at") or ai_summary.utc_now_iso(),
+                        )
+                    except Exception:
+                        pass  # stale CRE is acceptable; return existing data
+
+                full_summary = cache_row["summary_text"]
+                if cre_sentences:
+                    full_summary = f"{full_summary} {cre_sentences}"
+
                 return jsonify({
                     "status": "ready",
-                    "summary": cache_row["summary_text"],
+                    "summary": full_summary,
                     "summary_structured": {
                         "strength_sentence": cache_row["strength_sentence"],
                         "weakness_sentence": cache_row["weakness_sentence"],
                         "comparison_sentence": cache_row["comparison_sentence"],
                     },
+                    "research_sources": research_sources,
                     "generated_at": cache_row["generated_at"],
                     "data_refreshed_at": metadata.get("last_refresh_at"),
                     "cached": True,
@@ -358,7 +397,26 @@ def city_summary():
             except Exception:
                 structured = ai_summary.fallback_summary(selected_city, benchmarks)
 
+            # CRE research: attempted after FIRE Metrics summary; failure is non-fatal
+            cre_sentences = ""
+            research_sources: list[dict] = []
+            cre_generated_at = ai_summary.utc_now_iso()
+            try:
+                cre_result = ai_summary.openai_cre_research(
+                    api_key=api_key,
+                    model_name=_cre_research_model_name(),
+                    city=selected_city["city"],
+                    state=selected_city["state"],
+                    display_name=str(selected_city.get("display_name") or ""),
+                )
+                cre_sentences = cre_result.get("cre_sentences") or ""
+                research_sources = cre_result.get("research_sources") or []
+                cre_generated_at = cre_result.get("cre_generated_at") or cre_generated_at
+            except Exception:
+                pass  # CRE failure never blocks the FIRE Metrics summary
+
             summary_text = ai_summary.combined_summary(structured)
+            full_summary = f"{summary_text} {cre_sentences}".strip() if cre_sentences else summary_text
             cache_payload = {
                 "city": selected_city["city"],
                 "state": selected_city["state"],
@@ -371,6 +429,9 @@ def city_summary():
                 "weakness_sentence": structured["weakness_sentence"],
                 "comparison_sentence": structured["comparison_sentence"],
                 "generated_at": generated_at,
+                "cre_sentences_text": cre_sentences,
+                "research_sources_json": json.dumps(research_sources),
+                "cre_generated_at": cre_generated_at,
             }
 
             try:
@@ -383,8 +444,9 @@ def city_summary():
 
             return jsonify({
                 "status": "ready",
-                "summary": summary_text,
+                "summary": full_summary,
                 "summary_structured": structured,
+                "research_sources": research_sources,
                 "generated_at": generated_at,
                 "data_refreshed_at": metadata.get("last_refresh_at"),
                 "cached": False,

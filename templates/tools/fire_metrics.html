@@ -159,6 +159,7 @@
   <div id="fire-ai-overview" class="fire-ai-overview" aria-live="polite">
     <div class="fire-ai-overview-title">AI Market Overview</div>
     <div id="fire-ai-overview-body" class="fire-ai-overview-body">Search a city to generate a screening overview.</div>
+    <div id="fire-ai-overview-sources" class="fire-ai-overview-sources" style="display:none;"></div>
     <div id="fire-ai-overview-meta" class="fire-ai-overview-meta">AI-generated screening overview based on current FIRE Metrics data.</div>
   </div>
 </div>
@@ -274,6 +275,7 @@
   const comparisonBody = document.getElementById("comparison-table-body");
   const fireScoreCrimeSourceEl = document.getElementById("fire-score-crime-source");
   const aiOverviewBody = document.getElementById("fire-ai-overview-body");
+  const aiOverviewSources = document.getElementById("fire-ai-overview-sources");
   const aiOverviewMeta = document.getElementById("fire-ai-overview-meta");
   const mapContainer = document.getElementById("fire-google-map");
   const mapFallback = document.getElementById("fire-map-fallback");
@@ -1079,9 +1081,9 @@
     clearPendingCurrentCityPreview();
     if (panMap && entry.marker.position) {
       googleMap.panTo(entry.marker.position);
-      const zoom = googleMap.getZoom() || 4;
-      if (zoom < 5) googleMap.setZoom(5);
-      if (zoom > 7) googleMap.setZoom(7);
+      const zoom = googleMap.getZoom() || 3;
+      if (zoom < 4) googleMap.setZoom(4);
+      if (zoom > 6) googleMap.setZoom(6);
     }
 
     openMarkerPreview(selectedMarkerRegistryKey, entry.marker, "click");
@@ -1424,28 +1426,28 @@
 
     if (!positions.length) {
       const usBounds = new google.maps.LatLngBounds(contiguousUsBounds);
-      googleMap.fitBounds(usBounds, 24);
+      googleMap.fitBounds(usBounds, 40);
       google.maps.event.addListenerOnce(googleMap, "idle", () => {
-        if ((googleMap.getZoom() || 0) > 5) googleMap.setZoom(5);
+        if ((googleMap.getZoom() || 0) > 4) googleMap.setZoom(4);
       });
       return;
     }
 
     if (positions.length === 1 && currentCity && comparisonCount === 0) {
       googleMap.panTo(positions[0]);
-      const zoom = googleMap.getZoom() || 4;
-      if (zoom < 5) googleMap.setZoom(5);
-      if (zoom > 7) googleMap.setZoom(7);
+      const zoom = googleMap.getZoom() || 3;
+      if (zoom < 4) googleMap.setZoom(4);
+      if (zoom > 6) googleMap.setZoom(6);
       return;
     }
 
     const bounds = new google.maps.LatLngBounds();
     positions.forEach((pos) => bounds.extend(pos));
-    googleMap.fitBounds(bounds, 72);
+    googleMap.fitBounds(bounds, 100);
     google.maps.event.addListenerOnce(googleMap, "idle", () => {
-      const zoom = googleMap.getZoom() || 4;
-      if (zoom > 7) googleMap.setZoom(7);
-      if (zoom < 4) googleMap.setZoom(4);
+      const zoom = googleMap.getZoom() || 3;
+      if (zoom > 6) googleMap.setZoom(6);
+      if (zoom < 3) googleMap.setZoom(3);
     });
   }
 
@@ -1559,7 +1561,7 @@
       googleInfoWindow = new InfoWindow();
       googleMap = new Map(mapContainer, {
         center: { lat: 39.5, lng: -98.35 },
-        zoom: 4,
+        zoom: 3,
         minZoom: 3,
         maxZoom: 9,
         mapId: googleMapsMapId,
@@ -1711,6 +1713,34 @@
       tr.setAttribute("data-city-key", rowCityKey);
       tr.className = isActiveRow ? "fire-analytics-row-active" : "";
       tr.setAttribute("aria-current", isActiveRow ? "true" : "false");
+      tr.setAttribute("role", "row");
+      tr.style.cursor = "pointer";
+      tr.setAttribute("tabindex", "0");
+      tr.setAttribute("title", `Activate ${cityLabel(city)}`);
+
+      // Row click selects the city without altering comparisonCities membership
+      function activateRowCity() {
+        selectCurrentSearchCity(rowCityKey, {
+          city,
+          ensureAnalyticsRow: false,
+          openMapPreview: true,
+          panMap: true,
+          requestOverview: true,
+          scrollAnalyticsRow: false,
+        });
+      }
+      tr.addEventListener("click", (event) => {
+        // Don't trigger row selection when a button inside the row is clicked
+        if (event.target.closest("button")) return;
+        activateRowCity();
+      });
+      tr.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          activateRowCity();
+        }
+      });
+
       const cleanedCityName = cityCoreName(cleanDisplayFromCityObject(city));
       const rowValues = [
         cleanedCityName || "—",
@@ -1821,11 +1851,19 @@
 
   function clearOverview() {
     setOverviewBody("Search a city to generate a screening overview.");
+    if (aiOverviewSources) {
+      aiOverviewSources.innerHTML = "";
+      aiOverviewSources.style.display = "none";
+    }
     setOverviewMeta("AI-generated screening overview based on current FIRE Metrics data.");
   }
 
   function setOverviewLoading() {
     setOverviewBody("Generating market overview...");
+    if (aiOverviewSources) {
+      aiOverviewSources.innerHTML = "";
+      aiOverviewSources.style.display = "none";
+    }
     setOverviewMeta("AI-generated screening overview based on current FIRE Metrics data.");
   }
 
@@ -1839,10 +1877,51 @@
   function renderOverviewPayload(payload) {
     if (!payload || !payload.summary) {
       setOverviewBody("Overview unavailable for this city right now.");
+      if (aiOverviewSources) {
+        aiOverviewSources.innerHTML = "";
+        aiOverviewSources.style.display = "none";
+      }
       setOverviewMeta("AI-generated screening overview based on current FIRE Metrics data.");
       return;
     }
     setOverviewBody(payload.summary);
+
+    // CRE research sources
+    const sources = Array.isArray(payload.research_sources) ? payload.research_sources : [];
+    if (aiOverviewSources) {
+      if (sources.length) {
+        const validSources = sources.filter((s) => s && s.url && s.publisher);
+        if (validSources.length) {
+          const label = document.createElement("div");
+          label.className = "fire-ai-sources-label";
+          label.textContent = "CRE research:";
+          const list = document.createElement("ul");
+          list.className = "fire-ai-sources-list";
+          validSources.forEach((src) => {
+            const li = document.createElement("li");
+            const a = document.createElement("a");
+            a.href = escapeHtml(src.url);
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";
+            const dateText = src.published_date ? ` — ${escapeHtml(src.published_date)}` : "";
+            a.textContent = `${escapeHtml(src.publisher)}${dateText}`;
+            li.appendChild(a);
+            list.appendChild(li);
+          });
+          aiOverviewSources.innerHTML = "";
+          aiOverviewSources.appendChild(label);
+          aiOverviewSources.appendChild(list);
+          aiOverviewSources.style.display = "block";
+        } else {
+          aiOverviewSources.innerHTML = "";
+          aiOverviewSources.style.display = "none";
+        }
+      } else {
+        aiOverviewSources.innerHTML = "";
+        aiOverviewSources.style.display = "none";
+      }
+    }
+
     const cacheLabel = payload.cached ? "Cached" : "Fresh";
     const stamp = timestampLabel(payload.generated_at);
     const refreshStamp = payload.data_refreshed_at ? `Data refreshed ${payload.data_refreshed_at}` : "";

@@ -164,6 +164,10 @@ def _summary_api_key() -> str:
     return str(current_app.config.get("OPENAI_API_KEY") or "").strip()
 
 
+def _cre_research_model_name() -> str:
+    return str(current_app.config.get("FIRE_METRICS_CRE_MODEL") or "gpt-4o-mini-search-preview").strip()
+
+
 def _summary_unavailable_response(
     *,
     selected_city: dict[str, Any] | None,
@@ -178,6 +182,7 @@ def _summary_unavailable_response(
             "status": "ready",
             "summary": combined,
             "summary_structured": structured,
+            "research_sources": [],
             "generated_at": ai_summary.utc_now_iso(),
             "data_refreshed_at": data_refreshed_at,
             "cached": False,

@@ -600,7 +600,7 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertNotIn("relative_market_profile_percentile", prompt_data["benchmarks"])
         self.assertIn("approved_city_facts", prompt_data)
         self.assertGreaterEqual(len(prompt_data["approved_city_facts"]), 1)
-        self.assertEqual(summary.PROMPT_VERSION, "fire_metrics_summary_v4")
+        self.assertEqual(summary.PROMPT_VERSION, "fire_metrics_summary_v5")
 
     def test_prompt_source_requires_no_percentiles_and_concrete_stats(self):
         module_source = Path("tools/fire_metrics_ai_summary.py").read_text(encoding="utf-8")

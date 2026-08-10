@@ -8,8 +8,28 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-PROMPT_VERSION = "fire_metrics_summary_v4"
+PROMPT_VERSION = "fire_metrics_summary_v5"
 SUMMARY_SCHEMA_NAME = "fire_metrics_market_overview"
+
+CRE_RESEARCH_VERSION = "cre_v1"
+CRE_RESEARCH_TTL_DAYS = 7
+
+# Approved CRE publisher domains — server-side validation; also sent as allowed_domains hint
+CRE_ALLOWED_DOMAINS: tuple[str, ...] = (
+    "costar.com",
+    "yardimatrix.com",
+    "realpage.com",
+    "marcusmillichap.com",
+    "colliers.com",
+    "cbre.com",
+    "jll.com",
+    "cushmanwakefield.com",
+    "nmrk.com",
+    "berkadia.com",
+    "freddiemac.com",
+    "mf.freddiemac.com",
+    "commercialedge.com",
+)
 
 RECOMMENDATION_STRONG = "strong preliminary candidate"
 RECOMMENDATION_MIXED = "selective or mixed opportunity"
@@ -1463,3 +1483,146 @@ def combined_summary(structured: dict[str, str]) -> str:
             one_sentence(structured.get("comparison_sentence", "")),
         ]
     )
+
+
+def validate_research_source(source: dict[str, Any]) -> bool:
+    """Return True only if source URL hostname is an approved CRE domain."""
+    from urllib.parse import urlparse
+
+    url = str(source.get("url") or "").strip()
+    if not url:
+        return False
+    try:
+        hostname = urlparse(url).hostname or ""
+    except Exception:
+        return False
+    return any(
+        hostname == domain or hostname.endswith("." + domain)
+        for domain in CRE_ALLOWED_DOMAINS
+    )
+
+
+def is_cre_fresh(cre_generated_at: str | None) -> bool:
+    """Return True when the stored CRE research is within CRE_RESEARCH_TTL_DAYS."""
+    from datetime import timedelta
+
+    if not cre_generated_at:
+        return False
+    try:
+        generated = datetime.fromisoformat(cre_generated_at)
+        if generated.tzinfo is None:
+            generated = generated.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - generated) < timedelta(days=CRE_RESEARCH_TTL_DAYS)
+    except Exception:
+        return False
+
+
+def openai_cre_research(
+    *,
+    api_key: str,
+    model_name: str,
+    city: str,
+    state: str,
+    display_name: str,
+) -> dict[str, Any]:
+    """
+    Call the OpenAI Responses API with web_search_preview to gather recent
+    CRE market context for the given city/metro.
+
+    Returns:
+        {
+            "cre_sentences": str,           # 1-2 sentences; "" when no credible data found
+            "research_sources": [...],      # validated against CRE_ALLOWED_DOMAINS
+            "cre_generated_at": str,        # UTC ISO timestamp
+        }
+
+    Raises on failure; caller falls back to FIRE Metrics-only summary.
+    """
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+
+    instructions = (
+        "You are a commercial real estate research analyst helping a real estate investor "
+        "quickly assess whether a US city/metro has favorable current CRE market conditions. "
+        "Search the web for recent (last 6-12 months) CRE market information for the requested city and metro. "
+        "Focus primarily on multifamily/apartment market data: vacancy trends, rent growth, new supply, "
+        "absorption, and capital markets or investment activity. Mention office, retail, or industrial only "
+        "if they materially affect the metro investment outlook for a multifamily buyer. "
+        "Return ONLY a JSON object (no markdown, no extra text) with exactly these keys:\n"
+        '"cre_sentences": a string of 1-2 concise, neutral, professional sentences summarizing CRE market '
+        "context relevant to a multifamily investor. Only include content supported by search results from "
+        "approved publishers listed below. Set to empty string if no credible approved-source data found.\n"
+        '"research_sources": array of up to 3 objects, each with keys "publisher", "title", '
+        '"published_date" (e.g. "Q2 2026"), and "url". '
+        "Include ONLY sources from these approved publishers: CoStar, Yardi Matrix, RealPage, "
+        "Marcus & Millichap, Colliers, CBRE, JLL, Cushman & Wakefield, Newmark, Berkadia, "
+        "Freddie Mac Multifamily, CommercialEdge. "
+        "Do not fabricate statistics, sources, publication dates, or URLs. "
+        "Distinguish metro-area statistics from city-boundary data — never claim metro "
+        "figures are city-specific. Prefer the most recent data. Return only the JSON object."
+    )
+
+    metro_label = city_display_name({"city": city, "state": state, "display_name": display_name})
+    user_message = (
+        f"City: {city}, {state}\n"
+        f"Metro: {metro_label} metro area\n"
+        f"Search for recent commercial real estate and multifamily apartment market data "
+        f"for {metro_label}. Include vacancy, rent trends, new supply, and any significant "
+        f"investment or development activity from the past 6-12 months."
+    )
+
+    tool_config: dict[str, Any] = {
+        "type": "web_search_preview",
+        "web_search_preview": {
+            "search_context_size": "medium",
+            "allowed_domains": list(CRE_ALLOWED_DOMAINS),
+        },
+    }
+
+    response = client.responses.create(
+        model=model_name,
+        tools=[tool_config],
+        input=[
+            {
+                "role": "system",
+                "content": [{"type": "input_text", "text": instructions}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": user_message}],
+            },
+        ],
+    )
+
+    raw = (response.output_text or "").strip()
+    # Strip markdown code fences if the model wraps the JSON
+    raw = re.sub(r"^```[a-z]*\n?", "", raw)
+    raw = re.sub(r"\n?```$", "", raw).strip()
+
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return {"cre_sentences": "", "research_sources": [], "cre_generated_at": utc_now_iso()}
+
+    cre_sentences = str(parsed.get("cre_sentences") or "").strip()
+    raw_sources = parsed.get("research_sources") or []
+
+    # Server-side domain validation regardless of allowed_domains hint
+    validated_sources: list[dict[str, Any]] = []
+    for src in raw_sources[:3]:
+        if not isinstance(src, dict):
+            continue
+        if validate_research_source(src):
+            validated_sources.append({
+                "publisher": str(src.get("publisher") or "").strip(),
+                "title": str(src.get("title") or "").strip(),
+                "published_date": str(src.get("published_date") or "").strip(),
+                "url": str(src.get("url") or "").strip(),
+            })
+
+    return {
+        "cre_sentences": cre_sentences,
+        "research_sources": validated_sources,
+        "cre_generated_at": utc_now_iso(),
+    }
