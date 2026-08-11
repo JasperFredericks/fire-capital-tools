@@ -324,3 +324,19 @@ def count_for_deal(deal_id: int) -> int:
     hop for a single integer."""
     with db.get_connection() as conn:
         return db.count_comps(conn, deal_id)
+
+
+def list_for_deal(deal_id: int) -> list[dict]:
+    """This deal's saved rent comps, for Deal Dive's inline table.
+
+    Same in-process rationale as count_for_deal above. Returns the full
+    set rather than a slice: the inline table renders the first
+    SAVED_PREVIEW_COUNT and keeps the rest hidden in the DOM behind an
+    expander, so truncating here would break "Show all N" without a
+    second query.
+
+    Already ordered by match strength (correlation DESC, NULLs last) by
+    db.list_comps -- Deal Dive does not re-sort, so the inline table and
+    the standalone tool present the same rows in the same order."""
+    with db.get_connection() as conn:
+        return db.list_comps(conn, deal_id)

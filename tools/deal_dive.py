@@ -191,7 +191,8 @@ def detail(deal_id):
         market=market,
         statuses=db.STATUSES,
         auto_market_data=auto_market_data,
-        rent_comp_count=rent_comps.count_for_deal(deal_id),
+        rent_comps_saved=rent_comps.list_for_deal(deal_id),
+        rent_comps_preview=rent_comps.SAVED_PREVIEW_COUNT,
         rentcast_quota=market_data_service.rentcast_quota(),
     )
 

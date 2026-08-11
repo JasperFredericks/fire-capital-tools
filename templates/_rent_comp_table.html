@@ -1,0 +1,121 @@
+{#
+  Shared rent-comp row rendering.
+
+  Imported by both the standalone Rent Comps tool and Deal Dive's inline
+  table:
+
+      {% import "_rent_comp_table.html" as rc %}
+      {% for col in rc.COLUMNS %}<th>{{ col }}</th>{% endfor %}
+      ...
+      {{ rc.comp_cells(row) }}
+
+  Lives here rather than in tools/rent_comps.html because two templates
+  now render the same nine columns. Copying the cells into Deal Dive
+  would have made "the inline table matches the tool" a promise nobody
+  enforces -- the next column added to one would silently not appear in
+  the other.
+
+  These macros are deliberately pure formatting: they take a row and
+  return cells, touching no request context, so importing them without
+  context (Jinja's default) is safe.
+
+  Formatting rules, applied consistently: money as '${:,.0f}', a dash for
+  anything null, and $/sqft only when both operands are present so a
+  missing sqft never renders as a divide-by-zero or a fake $0.
+#}
+
+{% macro money(v) %}{{ '${:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
+
+{% macro per_sqft(rent, sqft) %}
+  {%- if rent is not none and sqft -%}
+    {{ '${:,.2f}'.format(rent / sqft) }}
+  {%- else -%}
+    —
+  {%- endif -%}
+{% endmacro %}
+
+{% macro match_pct(correlation) %}
+  {%- if correlation is not none and correlation != '' -%}
+    {{ '%.0f%%'|format(correlation * 100) }}
+  {%- else -%}
+    —
+  {%- endif -%}
+{% endmacro %}
+
+{#
+  Beds/baths come back as ints from the live RentCast JSON but as REALs
+  from SQLite, so the same comp would read "3/2" as a candidate and
+  "3.0/2.0" once saved. Render whole numbers without the decimal tail
+  while preserving genuine halves (2.5 baths is a real value).
+#}
+{% macro num(v) %}
+  {%- if v is none -%}—
+  {%- elif v == v|int -%}{{ v|int }}
+  {%- else -%}{{ v }}
+  {%- endif -%}
+{% endmacro %}
+
+{% macro sqft(v) %}{{ '{:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
+
+{% macro last_seen(days_old) %}
+  {%- if days_old is not none and days_old != '' -%}
+    {{ days_old|int }}d ago
+  {%- else -%}
+    —
+  {%- endif -%}
+{% endmacro %}
+
+{#
+  Read every field with .get() rather than attribute access. Two reasons,
+  both real:
+
+  * Saved rows call the rent column "rent"; live candidates call it
+    "price". One macro serves both.
+  * correlation / days_old / listing_status were added to the market-data
+    projection after some cache entries had already been written, so an
+    older cached row simply has no such key. Jinja's Undefined passes an
+    "is not none" test and then explodes on arithmetic, so attribute
+    access would 500 on exactly those rows. .get() yields None and the
+    cell renders a dash, which is the intended degradation.
+#}
+{% macro comp_cells(c) %}
+  {% set rent = c.get('rent') if c.get('rent') is not none else c.get('price') %}
+  <td>{{ c.get('address') or '—' }}</td>
+  <td>{{ money(rent) }}</td>
+  <td>{{ num(c.get('bedrooms')) }}/{{ num(c.get('bathrooms')) }}</td>
+  <td>{{ sqft(c.get('square_footage')) }}</td>
+  <td>{{ per_sqft(rent, c.get('square_footage')) }}</td>
+  <td>{{ '%.1f mi'|format(c.get('distance_miles')) if c.get('distance_miles') is not none else '—' }}</td>
+  <td>{{ match_pct(c.get('correlation')) }}</td>
+  <td>{{ last_seen(c.get('days_old')) }}</td>
+  <td>{{ c.get('listing_status') or '—' }}</td>
+{% endmacro %}
+
+{% set COLUMNS = ['Address', 'Rent', 'Bd/Ba', 'Sqft', '$/Sqft', 'Distance', 'Match %', 'Last Seen', 'Status'] %}
+
+{#
+  Expand/collapse for any table that renders rows past a preview count as
+  [hidden]. Generic over [data-expand], so one copy serves the standalone
+  tool's two tables and Deal Dive's inline one.
+
+  Rows are hidden rather than omitted, so the full set is present in the
+  DOM -- find-in-page and view-source see everything without a second
+  request. Emit once per page, after the tables.
+#}
+{% macro expander_script() %}
+<script>
+(function () {
+  document.querySelectorAll("[data-expand]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var rows = document.querySelectorAll("." + button.dataset.expand);
+      var expanding = rows.length > 0 && rows[0].hasAttribute("hidden");
+      rows.forEach(function (row) {
+        if (expanding) { row.removeAttribute("hidden"); }
+        else { row.setAttribute("hidden", ""); }
+      });
+      button.textContent = expanding ? button.dataset.less : button.dataset.more;
+    });
+  });
+})();
+</script>
+{% endmacro %}

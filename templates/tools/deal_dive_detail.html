@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ deal.address }} - Deal Dive{% endblock %}
+{% import "_rent_comp_table.html" as rc %}
 
 {% block content %}
 <div class="page-header">
@@ -319,12 +320,20 @@
 
   <!-- Rent comps live in the standalone Rent Comps tool (Markets), which
        stores the full RentCast field set rather than flattening it into a
-       source_notes string. Deal Dive keeps only this summary + link. -->
-  <div class="scorecard-mini-title" style="margin-bottom:10px;">Rent Comps</div>
+       source_notes string. Shown here read-only: searching, promoting and
+       the RentCast quota all stay on that tool, since duplicating a paid
+       API action in two places is how a quota gets spent twice. Rows are
+       rendered by the same shared macro the tool uses, so the two tables
+       cannot drift apart. -->
+  {% set rent_comp_count = rent_comps_saved|length %}
+  <div class="scorecard-mini-title" style="margin-bottom:10px;">
+    Rent Comps{% if rent_comp_count %} ({{ rent_comp_count }}){% endif %}
+  </div>
   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
     <p class="page-subtitle" style="margin:0;">
       {% if rent_comp_count %}
-        <strong>{{ rent_comp_count }}</strong> rent comp{{ '' if rent_comp_count == 1 else 's' }} saved for this property.
+        <strong>{{ rent_comp_count }}</strong> rent comp{{ '' if rent_comp_count == 1 else 's' }} saved for this property,
+        ordered by match strength.
       {% else %}
         No rent comps yet for this property.
       {% endif %}
@@ -334,7 +343,35 @@
       {% if rent_comp_count %}View / Manage &rarr;{% else %}Find Comps &rarr;{% endif %}
     </a>
   </div>
+
+  {% if rent_comp_count %}
+    <div class="table-wrap" style="margin-top:12px;">
+      <table class="rent-comps-table">
+        <thead>
+          <tr>{% for col in rc.COLUMNS %}<th>{{ col }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          {% for c in rent_comps_saved %}
+            {# Rows past the preview are in the DOM but hidden, so find-in-page
+               and view-source see the full set without a second request --
+               same mechanism as the standalone tool's saved table. #}
+            <tr {% if loop.index0 >= rent_comps_preview %}class="dd-rent-comp-extra" hidden{% endif %}>
+              {{ rc.comp_cells(c) }}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if rent_comp_count > rent_comps_preview %}
+      <button type="button" class="btn btn-ghost" style="margin-top:10px;" data-expand="dd-rent-comp-extra"
+              data-more="Show all {{ rent_comp_count }}" data-less="Show top {{ rent_comps_preview }}">
+        Show all {{ rent_comp_count }}
+      </button>
+    {% endif %}
+  {% endif %}
 </div>
+
+{{ rc.expander_script() }}
 
 <script>
 (function () {
