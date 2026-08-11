@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS underwriting_scenarios (
     deal_id INTEGER,
     name TEXT NOT NULL DEFAULT 'Base case',
     property_label TEXT NOT NULL,
-    purchase_price REAL, closing_costs_pct REAL, ltv_pct REAL,
+    purchase_price REAL, closing_costs_pct REAL, acquisition_fee_pct REAL,
+    ltv_pct REAL,
     interest_rate_pct REAL, amort_years INTEGER,
     hold_years INTEGER, exit_cap_pct REAL, selling_costs_pct REAL,
     vacancy_pct REAL, concessions_pct REAL, bad_debt_pct REAL,
@@ -80,7 +81,8 @@ CREATE INDEX IF NOT EXISTS idx_uw_unit ON underwriting_unit_lines (scenario_id);
 """
 
 SCENARIO_NUMERIC = (
-    "purchase_price", "closing_costs_pct", "ltv_pct", "interest_rate_pct",
+    "purchase_price", "closing_costs_pct", "acquisition_fee_pct",
+    "ltv_pct", "interest_rate_pct",
     "hold_years", "exit_cap_pct", "selling_costs_pct", "vacancy_pct",
     "concessions_pct", "bad_debt_pct", "other_income_annual",
     "rent_growth_pct", "expense_growth_pct", "amort_years",
@@ -94,8 +96,21 @@ def get_db_path() -> Path:
     return BASE_DIR / "underwriting.db"
 
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS does
+# nothing to a table that already exists, so a new column needs an explicit
+# ALTER on every existing database -- without this, a scenario saved before
+# the upgrade would raise "no such column" on read.
+_SCENARIO_ADDED_COLUMNS = (
+    ("acquisition_fee_pct", "REAL"),
+)
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(underwriting_scenarios)")}
+    for name, coltype in _SCENARIO_ADDED_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE underwriting_scenarios ADD COLUMN {name} {coltype}")
     conn.commit()
 
 
