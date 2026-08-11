@@ -63,6 +63,7 @@ def create_app(config_class: type = Config) -> Flask:
 
     # ── Blueprints ─────────────────────────────────────────────────────────
     from auth import auth_bp
+    from tools.admin import admin_bp
     from tools.deal_analyzer import deal_analyzer_bp
     from tools.deal_dive import deal_dive_bp
     from tools.feedback import feedback_bp
@@ -84,6 +85,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(site_dd_bp, url_prefix="/tools/site-dd")
     app.register_blueprint(underwriting_bp, url_prefix="/tools/underwriting")
     app.register_blueprint(investor_report_bp, url_prefix="/tools/investor-report")
+    app.register_blueprint(admin_bp, url_prefix="/admin")
     app.register_blueprint(feedback_bp, url_prefix="/feedback")
 
     # ── Security headers ───────────────────────────────────────────────────

@@ -282,6 +282,38 @@ def _record_google_places_call() -> None:
         cache.increment_google_places_usage(conn)
 
 
+def google_places_quota() -> dict[str, Any]:
+    """This month's Google Places usage, the counterpart to
+    rentcast_quota() above and for the same reason: at_cap mirrors
+    _google_places_usage_gate()'s own >= threshold condition, so anything
+    that displays this number is displaying the number that actually
+    blocks a call.
+
+    Unlike RentCast there is no "limit" key, and that absence is
+    deliberate. RentCast publishes a hard 50/month, so a used/limit
+    fraction is a true statement. Google's free allowance is a
+    researched estimate (see market_data_cache), so presenting one here
+    would dress a guess up as a denominator. Callers get the threshold
+    this app enforces and nothing it cannot stand behind. Purely a read --
+    never increments anything."""
+    with cache.get_connection() as conn:
+        used = cache.get_google_places_usage(conn)
+    threshold = cache.GOOGLE_PLACES_MONTHLY_SAFETY_THRESHOLD
+    return {
+        "used": used,
+        "threshold": threshold,
+        "at_cap": used >= threshold,
+    }
+
+
+def quota_reset_label() -> str:
+    """When both monthly counters roll over. Wraps the module-private
+    _next_month_label() so callers outside this module (the service-costs
+    page) can show the reset date without reaching past the underscore or
+    recomputing the date themselves."""
+    return _next_month_label()
+
+
 def get_google_place_rating(address: str, city: str, state: str) -> dict[str, Any]:
     """Rating, review count, and a few review snippets for the place at this
     address. Returns {"available": False, "message": ...} rather than

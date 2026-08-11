@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block title %}API &amp; Service Costs - FIRE Capital Tools{% endblock %}
+
+{#
+  Live counters and stated figures are deliberately styled differently.
+  A reader must never mistake a number a human typed months ago for one
+  read from the usage table a second ago, so the two never share a
+  presentation.
+#}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <h1 class="page-title">API &amp; Service Costs</h1>
+  <p class="page-subtitle">
+    Every external service this platform depends on, what it is used for, and what it costs.
+    Two services report live usage; the rest are figures checked by hand on the date shown
+    against each one.
+  </p>
+</div>
+
+<!-- ── What still needs a human ───────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Status</div>
+  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-top:12px;">
+    <div class="stat-box">
+      <div class="stat-box-label">Services tracked</div>
+      <div class="stat-box-value">{{ rows|length }}</div>
+      <div class="stat-box-sub">Including hosting.</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Live usage counters</div>
+      <div class="stat-box-value">2</div>
+      <div class="stat-box-sub">RentCast and Google Places only.</div>
+    </div>
+    <div class="stat-box" style="border-left:3px solid {{ '#b45309' if tbd_count else '#059669' }};">
+      <div class="stat-box-label">Cost figures still unknown</div>
+      <div class="stat-box-value" style="color:{{ '#b45309' if tbd_count else '#059669' }};">{{ tbd_count }}</div>
+      <div class="stat-box-sub">Need a real invoice or dashboard number.</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Static figures last reviewed</div>
+      <div class="stat-box-value" style="font-size:15px;">{{ last_reviewed }}</div>
+      <div class="stat-box-sub">Counters below are real-time.</div>
+    </div>
+  </div>
+
+  {% if tbd_count %}
+    <div class="result-note" style="margin-top:14px; border-left:3px solid #b45309;">
+      <strong>{{ tbd_count }} cost {{ 'figure needs' if tbd_count == 1 else 'figures need' }} a real number.</strong>
+      These are shown as &ldquo;{{ tbd_marker }}&rdquo; rather than as an estimate. A guessed
+      dollar amount on a costs page gets believed and then budgeted against, so nothing here
+      is filled in until it has actually been confirmed.
+    </div>
+  {% endif %}
+</div>
+
+<!-- ── Live usage ─────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Live Usage This Month</div>
+  <p class="page-subtitle" style="margin:8px 0 12px;">
+    Read from the usage tables at the moment this page loaded. Only real outbound API calls
+    count &mdash; a cache hit never increments these. Both reset {{ reset_label }}.
+  </p>
+  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:12px;">
+    {% for row in rows if row.usage %}
+      {% set u = row.usage %}
+      <div class="stat-box" style="border-left:3px solid {{ '#b91c1c' if u.at_cap else '#059669' }};">
+        <div class="stat-box-label">{{ row.name }}{% if u.at_cap %} &mdash; at cap{% endif %}</div>
+        <div class="stat-box-value" style="color:{{ '#b91c1c' if u.at_cap else 'inherit' }};">
+          {{ u.used }} / {{ u.threshold }}
+        </div>
+        <div class="stat-box-sub">
+          {% if u.limit %}
+            Safety threshold {{ u.threshold }}, below the real {{ u.limit }}/month limit.
+          {% else %}
+            Safety threshold enforced by this app.
+          {% endif %}
+          {% if u.at_cap %}
+            <strong style="color:#b91c1c;">Further lookups are refused until {{ reset_label }}.</strong>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  <p class="page-subtitle" style="margin-top:12px;">
+    Google Places has no published free-allowance figure to divide by, so it shows usage
+    against the threshold this app enforces rather than against a vendor limit &mdash; see
+    its note below.
+  </p>
+</div>
+
+<!-- ── Full inventory ─────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">All Services</div>
+  <div class="table-wrap" style="margin-top:12px;">
+    <table class="rent-comps-table">
+      <thead>
+        <tr>
+          <th>Service</th><th>Used by</th><th>Pricing model</th>
+          <th>Plan</th><th>Monthly cost</th><th>Key</th><th>Verified</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>
+              <strong>{{ row.name }}</strong>
+              {% if row.usage %}
+                <span class="stat-box-sub" style="color:#059669;">&#9679; live counter</span>
+              {% elif row.free %}
+                <span class="stat-box-sub">free</span>
+              {% endif %}
+              <div class="stat-box-sub">{{ row.purpose }}</div>
+            </td>
+            <td class="stat-box-sub">{{ row.used_by|join(', ') }}</td>
+            <td class="stat-box-sub">{{ row.pricing_model }}</td>
+            <td class="stat-box-sub">
+              {% if row.plan == tbd_marker %}
+                <span style="color:#b45309;">{{ row.plan }}</span>
+              {% else %}{{ row.plan }}{% endif %}
+            </td>
+            <td>
+              {% if row.is_tbd %}
+                <span style="color:#b45309; font-weight:650;">{{ row.monthly_cost }}</span>
+              {% else %}
+                <span style="font-weight:650;">{{ row.monthly_cost }}</span>
+              {% endif %}
+            </td>
+            <td class="stat-box-sub">
+              {% if row.configured is none %}
+                <span title="This service needs no API key.">none needed</span>
+              {% elif row.configured %}
+                <span style="color:#059669;">&#10003; configured</span>
+              {% else %}
+                <span style="color:#b45309;">not configured</span>
+              {% endif %}
+              {% if row.configured_key %}
+                <div style="font-size:11px; opacity:.75;">{{ row.configured_key }}</div>
+              {% endif %}
+            </td>
+            <td class="stat-box-sub">
+              {% if row.usage %}
+                <span style="color:#059669;">live</span>
+              {% else %}
+                {{ row.last_verified }}
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="page-subtitle" style="margin-top:12px;">
+    &ldquo;Configured&rdquo; means the key resolves right now, from the environment or a local
+    key file. The value itself is never read into this page.
+  </p>
+</div>
+
+<!-- ── Notes ──────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Notes &amp; Caveats</div>
+  <p class="page-subtitle" style="margin:8px 0 12px;">
+    The qualifications that matter per service &mdash; particularly which numbers are
+    estimates rather than facts.
+  </p>
+  {% for row in rows %}
+    <div style="padding:10px 0; border-top:1px solid rgba(0,0,0,.07);">
+      <div style="font-weight:650; font-size:13px;">{{ row.name }}</div>
+      <div class="stat-box-sub" style="margin-top:4px;">{{ row.notes }}</div>
+    </div>
+  {% endfor %}
+
+  <div class="result-note" style="margin-top:14px;">
+    <strong>AI summaries are currently
+    {% if ai_summaries_enabled %}ON{% else %}OFF{% endif %}.</strong>
+    {% if ai_summaries_enabled %}
+      FIRE_METRICS_AI_SUMMARIES_ENABLED is set to true, so both OpenAI lines above can incur
+      cost.
+      {% if summary_model %}
+        Model in use: <code>{{ summary_model }}</code>.
+      {% else %}
+        FIRE_METRICS_SUMMARY_MODEL is not set, so no model is pinned.
+      {% endif %}
+    {% else %}
+      FIRE_METRICS_AI_SUMMARIES_ENABLED defaults to false and has not been turned on, so
+      neither OpenAI line is currently spending anything.
+    {% endif %}
+  </div>
+</div>
+
+<!-- ── How this page works ────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">About This Page</div>
+  <p class="page-subtitle" style="margin-top:8px;">
+    This page stores nothing. The static figures live in a config module in the codebase, so
+    changing one is a commit with a reviewable history rather than an untracked form edit.
+    The usual requirement that new storage use an env-var-overridable path pointing at the
+    persistent volume is therefore <strong>not applicable here</strong> &mdash; there is no
+    database, no file, and nothing to lose on a redeploy.
+  </p>
+  <p class="page-subtitle">
+    To correct a cost figure, edit <code>tools/service_costs.py</code> and bump its
+    <code>LAST_REVIEWED</code> date. If keeping figures current without a deploy becomes
+    genuinely useful, that is the point to add a stored, editable version &mdash; not before.
+  </p>
+</div>
+
+{% include "_feedback.html" %}
+{% endblock %}
