@@ -12,6 +12,18 @@ class Config:
     WTF_CSRF_TIME_LIMIT: int = 4 * 60 * 60   # 4-hour CSRF token validity
     SESSION_COOKIE_HTTPONLY: bool = True
     SESSION_COOKIE_SAMESITE: str = "Lax"
+    # Marks the session cookie Secure so the browser will only ever send it
+    # over HTTPS. Railway terminates TLS at the edge and 301s HTTP->HTTPS,
+    # so in production there is no plaintext leg for the cookie to travel
+    # on and this costs nothing.
+    #
+    # Env-gated rather than hardcoded True because local development runs
+    # over http://localhost, where a Secure cookie is simply never sent
+    # back -- which presents as "login silently does nothing", one of the
+    # more confusing failure modes to debug. Defaults false so a developer
+    # who has not set anything keeps a working login; production opts in
+    # by setting SESSION_COOKIE_SECURE=true.
+    SESSION_COOKIE_SECURE: bool = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
 
     # ── Session ────────────────────────────────────────────────────────────
     PERMANENT_SESSION_LIFETIME: timedelta = timedelta(hours=4)
