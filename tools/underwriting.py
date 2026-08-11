@@ -62,6 +62,19 @@ DEFAULTS = {
     "rent_growth_pct": 3.0, "expense_growth_pct": 2.5,
 }
 
+# Rows of the side-by-side comparison, in the order an underwriter reads
+# them: what the deal costs, what it earns, whether it can service its
+# debt, then what it returns. (key, label, format) where the format names
+# a filter the template applies -- kept here rather than in the template
+# so the row set is defined once.
+COMPARE_METRICS = (
+    ("going_in_cap_rate", "Going-in Cap Rate", "pct"),
+    ("cash_on_cash", "Cash-on-Cash (Yr 1)", "pct"),
+    ("dscr", "DSCR (Yr 1)", "ratio"),
+    ("levered_irr", "Levered IRR", "pct"),
+    ("equity_multiple", "Equity Multiple", "multiple"),
+)
+
 
 def _upload_dir(scenario_id: int) -> Path:
     path = Path(current_app.config["UPLOAD_FOLDER"]) / "underwriting" / str(scenario_id)
@@ -167,6 +180,51 @@ def new_scenario():
 
 # ── Detail ───────────────────────────────────────────────────────────────
 
+@underwriting_bp.route("/compare")
+@login_required
+def compare():
+    """Saved scenarios for one deal, side by side.
+
+    Display only. Nothing is created, stored or mutated here -- every
+    column is analyze_scenario() run against rows that already exist, the
+    same call the detail page makes, so a figure here can never disagree
+    with the figure on the scenario's own page.
+
+    A scenario whose assumptions are incomplete raises ValidationError
+    rather than producing a number; that column reports the reason instead
+    of being silently dropped, since a missing column would read as "no
+    scenario" rather than "this one needs attention".
+    """
+    deal_id = to_int(request.args.get("deal_id"))
+    deal = _deal_for(deal_id)
+    if deal_id is not None and not deal:
+        flash("That deal could not be found.", "warning")
+        deal_id, deal = None, None
+
+    with deal_dive_db.get_connection() as conn:
+        deals = deal_dive_db.list_deals(conn)
+
+    columns = []
+    if deal_id is not None:
+        with db.get_connection() as conn:
+            scenarios = db.list_scenarios(conn, deal_id=deal_id)
+            for sc in scenarios:
+                units = db.list_unit_lines(conn, sc["id"])
+                lines = db.list_expense_lines(conn, sc["id"])
+                try:
+                    res = um.analyze_scenario(sc, units, lines)
+                    columns.append({"scenario": sc, "result": res, "error": None})
+                except um.ValidationError as exc:
+                    columns.append({"scenario": sc, "result": None, "error": str(exc)})
+
+    return render_template(
+        "tools/underwriting_compare.html",
+        deal=deal, deal_id=deal_id, deals=deals, columns=columns,
+        metrics=COMPARE_METRICS,
+        feedback_tool=FEEDBACK_TOOL_NAME,
+    )
+
+
 @underwriting_bp.route("/scenario/<int:scenario_id>")
 @login_required
 def detail(scenario_id):
@@ -195,10 +253,18 @@ def detail(scenario_id):
     return render_template(
         "tools/underwriting_detail.html",
         scenario=scenario, deal=_deal_for(scenario["deal_id"]),
-        units=units, expense_lines=expense_lines, result=result, error=error,
+        units=units, expense_lines=expense_lines,
+        # The operating-expenses table shows excluded lines deliberately
+        # ("shown, not dropped"), so this filters only on kind -- not on
+        # is_included -- to keep that behaviour intact.
+        operating_lines=[l for l in expense_lines if not um.is_acquisition_line(l)],
+        result=result, error=error,
         grid=grid, grid_metric=grid_metric, grid_variable=grid_variable,
         unit_mix=um.unit_mix(units),
         default_categories=um.DEFAULT_EXPENSE_CATEGORIES,
+        acquisition_categories=um.DEFAULT_ACQUISITION_COST_CATEGORIES,
+        acquisition_saved={l["category_key"]: l["annual_amount"]
+                           for l in expense_lines if um.is_acquisition_line(l)},
         feedback_tool=FEEDBACK_TOOL_NAME,
     )
 
@@ -229,6 +295,18 @@ def save_expenses(scenario_id):
         lines = []
         for l in existing:
             lid = str(l["id"])
+            # Acquisition costs are edited by their own form and are not
+            # rendered as inputs here. Reading them from this request would
+            # find nothing and silently blank every amount, so they are
+            # carried through untouched instead.
+            if um.is_acquisition_line(l):
+                lines.append({
+                    "category_key": l["category_key"], "category_name": l["category_name"],
+                    "gl_code": l["gl_code"], "label": l["label"], "line_kind": l["line_kind"],
+                    "annual_amount": l["annual_amount"], "growth_pct": l["growth_pct"],
+                    "is_included": l["is_included"],
+                })
+                continue
             lines.append({
                 "category_key": l["category_key"], "category_name": l["category_name"],
                 "gl_code": l["gl_code"], "label": l["label"], "line_kind": l["line_kind"],
@@ -248,6 +326,42 @@ def save_expenses(scenario_id):
         db.replace_expense_lines(conn, scenario_id, lines)
     flash("Expense lines saved.", "success")
     return redirect(url_for("underwriting.detail", scenario_id=scenario_id) + "#expenses")
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/acquisition-costs", methods=["POST"])
+@login_required
+def save_acquisition_costs(scenario_id):
+    """Replace this scenario's itemized acquisition costs.
+
+    Kept separate from the expenses form for the same reason the two are
+    separated in the math: these are a one-time capital outlay, not an
+    annual operating expense, and mixing them into one form is how one
+    ends up in the other's total. Operating lines are carried through
+    untouched here, mirroring how that form carries these through.
+    """
+    with db.get_connection() as conn:
+        if not db.get_scenario(conn, scenario_id):
+            return _not_found()
+
+        lines = [dict(l) for l in db.list_expense_lines(conn, scenario_id)
+                 if not um.is_acquisition_line(l)]
+
+        for key, label in um.DEFAULT_ACQUISITION_COST_CATEGORIES:
+            amt = to_float(request.form.get(f"acq_{key}"))
+            # A blank field removes the line rather than storing a zero, so
+            # "not itemized" and "itemized as nothing" stay distinguishable
+            # -- the override only applies when at least one line exists.
+            if amt is None:
+                continue
+            lines.append({
+                "category_key": key, "category_name": label, "gl_code": None,
+                "label": label, "line_kind": um.ACQUISITION_COST_KIND,
+                "annual_amount": amt, "growth_pct": None, "is_included": True,
+            })
+
+        db.replace_expense_lines(conn, scenario_id, lines)
+    flash("Acquisition costs saved.", "success")
+    return redirect(url_for("underwriting.detail", scenario_id=scenario_id) + "#acquisition")
 
 
 @underwriting_bp.route("/scenario/<int:scenario_id>/delete", methods=["POST"])

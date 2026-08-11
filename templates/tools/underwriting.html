@@ -30,6 +30,9 @@
       </div>
       <div style="display:flex; gap:8px;">
         <a href="{{ url_for('deal_dive.detail', deal_id=deal.id) }}" class="btn btn-ghost">Back to Deal</a>
+        {% if scenarios|length > 1 %}
+          <a href="{{ url_for('underwriting.compare', deal_id=deal.id) }}" class="btn btn-ghost">Compare Scenarios</a>
+        {% endif %}
         <a href="{{ url_for('underwriting.index') }}" class="btn btn-ghost">All Scenarios</a>
       </div>
     </div>

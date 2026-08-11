@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Compare Scenarios - Underwriting{% endblock %}
+
+{#
+  Read-only. Every column is analyze_scenario() against already-saved
+  rows, so nothing here can disagree with the scenario's own page.
+
+  Metrics run down the rows and scenarios across the columns rather than
+  the other way round: comparing is reading one metric across scenarios,
+  and that should be a horizontal scan, not a diagonal one.
+#}
+
+{% macro pct(v) %}{{ '{:,.2f}%'.format(v * 100) if v is not none else '—' }}{% endmacro %}
+{% macro ratio(v) %}{{ '{:,.2f}x'.format(v) if v is not none else '—' }}{% endmacro %}
+{% macro multiple(v) %}{{ '{:,.2f}x'.format(v) if v is not none else '—' }}{% endmacro %}
+{% macro money0(v) %}{{ '${:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
+
+{% macro metric_cell(value, fmt) %}
+  {%- if value is none -%}—
+  {%- elif fmt == 'pct' -%}{{ pct(value) }}
+  {%- elif fmt == 'ratio' -%}{{ ratio(value) }}
+  {%- elif fmt == 'multiple' -%}{{ multiple(value) }}
+  {%- else -%}{{ value }}
+  {%- endif -%}
+{% endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('underwriting.index', deal_id=deal_id) }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Underwriting
+  </a>
+  <h1 class="page-title">Compare Scenarios</h1>
+  <p class="page-subtitle">
+    Saved scenarios for one deal, side by side. Every figure is recomputed from the saved
+    assumptions on load &mdash; nothing here is stored, and nothing is changed.
+  </p>
+</div>
+
+<!-- ── Deal picker ────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Choose a Deal</div>
+  <form method="GET" action="{{ url_for('underwriting.compare') }}"
+        style="display:grid; grid-template-columns: 2fr auto; gap:12px; align-items:end; margin-top:12px;">
+    <div class="form-group" style="margin-bottom:0;">
+      <label class="form-label" for="deal_id">Deal</label>
+      <select class="form-input" id="deal_id" name="deal_id">
+        <option value="">— select —</option>
+        {% for d in deals %}
+          <option value="{{ d.id }}" {% if deal and deal.id == d.id %}selected{% endif %}>
+            {{ d.address }}, {{ d.city }} {{ d.state }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Compare</button>
+  </form>
+</div>
+
+{% if deal %}
+  {% if not columns %}
+    <div class="card">
+      <div class="result-note">
+        No saved scenarios for {{ deal.address }} yet &mdash;
+        <a href="{{ url_for('underwriting.index', deal_id=deal.id) }}">build one first &rarr;</a>
+      </div>
+    </div>
+  {% else %}
+    <div class="card">
+      <div class="scorecard-section-title">
+        {{ deal.address }} &mdash; {{ columns|length }} scenario{{ '' if columns|length == 1 else 's' }}
+      </div>
+      <div class="table-wrap" style="margin-top:12px;">
+        <table class="rent-comps-table">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              {% for c in columns %}
+                <th>
+                  <a href="{{ url_for('underwriting.detail', scenario_id=c.scenario.id) }}">{{ c.scenario.name }}</a>
+                  {% if c.error %}<div class="stat-box-sub" style="color:#b45309;">incomplete</div>{% endif %}
+                </th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {# ── Key assumptions, so a difference in output has a visible cause ── #}
+            <tr>
+              <th>Purchase Price</th>
+              {% for c in columns %}<td>{{ money0(c.scenario.purchase_price) }}</td>{% endfor %}
+            </tr>
+            <tr>
+              <th>LTV</th>
+              {% for c in columns %}<td>{{ '{:,.1f}%'.format(c.scenario.ltv_pct) if c.scenario.ltv_pct is not none else '—' }}</td>{% endfor %}
+            </tr>
+            <tr>
+              <th>Exit Cap</th>
+              {% for c in columns %}<td>{{ '{:,.2f}%'.format(c.scenario.exit_cap_pct) if c.scenario.exit_cap_pct is not none else '—' }}</td>{% endfor %}
+            </tr>
+            <tr>
+              <th>Hold</th>
+              {% for c in columns %}<td>{{ c.scenario.hold_years or '—' }} yr</td>{% endfor %}
+            </tr>
+            <tr>
+              <th>Year-1 NOI</th>
+              {% for c in columns %}
+                <td>{{ money0(c.result.projection.noi_series[0]) if c.result else '—' }}</td>
+              {% endfor %}
+            </tr>
+            <tr>
+              <th>Acquisition Costs</th>
+              {% for c in columns %}
+                <td>
+                  {% if c.result %}
+                    {{ money0(c.result.acquisition_costs.effective_total) }}
+                    <div class="stat-box-sub">
+                      {{ 'itemized' if c.result.acquisition_costs.is_itemized else 'flat %' }}
+                    </div>
+                  {% else %}—{% endif %}
+                </td>
+              {% endfor %}
+            </tr>
+            <tr><td colspan="{{ columns|length + 1 }}" style="padding:4px;"></td></tr>
+
+            {# ── Outputs ── #}
+            {% for key, label, fmt in metrics %}
+              <tr>
+                <th>{{ label }}</th>
+                {% for c in columns %}
+                  <td>
+                    {% if c.result %}
+                      {{ metric_cell(c.result.returns.get(key), fmt) }}
+                      {% set reason = c.result.returns.get(key ~ '_reason') %}
+                      {% if c.result.returns.get(key) is none and reason %}
+                        <div class="stat-box-sub">{{ reason }}</div>
+                      {% endif %}
+                    {% else %}—{% endif %}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% set broken = columns | selectattr('error') | list %}
+      {% if broken %}
+        <div class="result-note" style="margin-top:14px; border-left:3px solid #b45309;">
+          {{ broken|length }} scenario{{ '' if broken|length == 1 else 's' }} could not be computed
+          and {{ 'is' if broken|length == 1 else 'are' }} shown as dashes rather than dropped:
+          <ul class="scorecard-note-list" style="margin-top:8px;">
+            {% for c in broken %}
+              <li><strong>{{ c.scenario.name }}</strong> &mdash; {{ c.error }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      <p class="page-subtitle" style="margin-top:12px;">
+        Figures are recomputed on load by the same code the individual scenario pages use, so a
+        number here always matches that scenario's own page.
+      </p>
+    </div>
+  {% endif %}
+{% endif %}
+
+{% include "_feedback.html" %}
+{% endblock %}

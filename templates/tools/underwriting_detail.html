@@ -227,9 +227,76 @@
   {% endif %}
 </div>
 
+<!-- ── Acquisition costs ──────────────────────────────────────────────── -->
+{# One-time costs at close. Kept separate from operating expenses in the
+   form for the same reason they are separate in the math: a capital
+   outlay at t=0 is not an annual expense, and one leaking into the other
+   would distort NOI and then the exit value derived from it. #}
+{% set acq = result.acquisition_costs if result else none %}
+<div class="card" id="acquisition">
+  <div class="scorecard-section-title">Acquisition Costs</div>
+  <p class="page-subtitle" style="margin:8px 0 12px;">
+    Itemize the one-time costs paid at close. When any line is entered, the itemized total
+    <strong>replaces</strong> the flat closing-costs percentage rather than adding to it &mdash;
+    the two describe the same money, so adding them would count it twice. Leave every field
+    blank to keep using the percentage.
+  </p>
+
+  {% if acq %}
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap:12px; margin-bottom:14px;">
+      <div class="stat-box" style="{% if acq.is_itemized %}border-left:3px solid #059669;{% endif %}">
+        <div class="stat-box-label">Itemized total</div>
+        <div class="stat-box-value">{{ money(acq.itemized_total) }}</div>
+        <div class="stat-box-sub">
+          {% if acq.is_itemized %}{{ acq.line_count }} line{{ '' if acq.line_count == 1 else 's' }} &mdash; used{% else %}no lines entered{% endif %}
+        </div>
+      </div>
+      <div class="stat-box" style="{% if not acq.is_itemized %}border-left:3px solid #059669;{% endif %}">
+        <div class="stat-box-label">Flat {{ '{:,.2f}%'.format(acq.flat_pct) }} of price</div>
+        <div class="stat-box-value" style="{% if acq.is_itemized %}opacity:.6; text-decoration:line-through;{% endif %}">
+          {{ money(acq.flat_total) }}
+        </div>
+        <div class="stat-box-sub">{{ 'overridden' if acq.is_itemized else 'used' }}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Applied to equity</div>
+        <div class="stat-box-value">{{ money(acq.effective_total) }}</div>
+        <div class="stat-box-sub">= {{ '{:,.3f}%'.format(acq.effective_pct) }} of purchase price</div>
+      </div>
+    </div>
+
+    {% if acq.shortfall_warning %}
+      <div class="result-note" style="border-left:3px solid #b45309; margin-bottom:14px;">
+        <strong>Itemized total is {{ '{:,.0f}%'.format(acq.shortfall_pct) }} below the flat
+        {{ '{:,.2f}%'.format(acq.flat_pct) }} estimate.</strong>
+        Itemization may be incomplete. The entered figures are still what the returns above use
+        &mdash; this is a prompt to check, not a correction.
+      </div>
+    {% endif %}
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('underwriting.save_acquisition_costs', scenario_id=scenario.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap:12px;">
+      {% for key, label in acquisition_categories %}
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="acq_{{ key }}">{{ label }} ($)</label>
+          <input class="form-input" type="text" id="acq_{{ key }}" name="acq_{{ key }}"
+                 value="{{ acquisition_saved.get(key) if acquisition_saved.get(key) is not none else '' }}">
+        </div>
+      {% endfor %}
+    </div>
+    <p class="page-subtitle" style="margin:12px 0 10px;">
+      A blank field removes that line entirely rather than storing a zero, so &ldquo;not
+      itemized&rdquo; stays distinguishable from &ldquo;itemized as nothing&rdquo;.
+    </p>
+    <button type="submit" class="btn btn-primary">Save Acquisition Costs</button>
+  </form>
+</div>
+
 <!-- ── Expenses ───────────────────────────────────────────────────────── -->
 <div class="card" id="expenses">
-  <div class="scorecard-section-title">Operating Expenses{% if expense_lines %} ({{ expense_lines|length }} lines){% endif %}</div>
+  <div class="scorecard-section-title">Operating Expenses{% if operating_lines %} ({{ operating_lines|length }} lines){% endif %}</div>
   <p class="page-subtitle" style="margin:8px 0 12px;">
     Import a T12 to seed itemized lines, then adjust individually. Only leaf accounts are listed:
     a tree-format P&amp;L carries rollup parents as well as their children, and summing both would
@@ -245,12 +312,12 @@
 
   <form method="POST" action="{{ url_for('underwriting.save_expenses', scenario_id=scenario.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    {% if expense_lines %}
+    {% if operating_lines %}
       <div class="table-wrap" style="margin-bottom:14px;">
         <table class="rent-comps-table">
           <thead><tr><th>Include</th><th>Category</th><th>Line</th><th>Annual Amount</th><th>Growth %/yr</th><th>Kind</th></tr></thead>
           <tbody>
-            {% for l in expense_lines %}
+            {% for l in operating_lines %}
               <tr{% if not l.is_included %} style="opacity:0.55;"{% endif %}>
                 <td><input type="checkbox" name="included_{{ l.id }}" value="1" {% if l.is_included %}checked{% endif %}></td>
                 <td>{{ l.category_name or '—' }}</td>

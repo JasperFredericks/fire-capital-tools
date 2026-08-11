@@ -46,6 +46,36 @@ DEFAULT_EXPENSE_CATEGORIES = (
     ("general_admin", "General & Administrative"),
 )
 
+# ── Acquisition costs ────────────────────────────────────────────────────
+#
+# One-time costs paid at close, itemized instead of estimated as a flat
+# percentage of price. Stored in the same expense-lines table with this
+# line_kind, which is exactly why the operating-expense functions below
+# filter on it: an acquisition cost is a capital outlay at t=0, not an
+# annual operating expense, and summing it into NOI would both understate
+# NOI and then capitalize the error into the exit value via the cap rate.
+# is_included alone is NOT sufficient to separate them -- these lines are
+# genuinely "included", just in a different total.
+ACQUISITION_COST_KIND = "acquisition_cost"
+
+DEFAULT_ACQUISITION_COST_CATEGORIES = (
+    ("legal", "Legal"),
+    ("property_inspection", "Property Inspection"),
+    ("lead_paint", "Lead Paint"),
+    ("environmental", "Environmental"),
+    ("appraisal", "Appraisal"),
+    ("structural_inspection", "Structural Inspection"),
+    ("lender_legal", "Lender Legal"),
+    ("doc_prep", "Doc Prep"),
+    ("origination_fee", "Origination Fee"),
+)
+
+# When an itemized total falls this far below the flat-percentage estimate
+# it is more likely half-finished than genuinely cheap, so the result is
+# flagged. Deliberately a warning and not a correction: the entered data
+# still wins, exactly as the Scorecard Pro override mismatch behaves.
+ACQUISITION_SHORTFALL_WARN_PCT = 50.0
+
 # Sensitivity grid geometry.
 EXIT_CAP_STEPS = 11      # +/- 1.25% in 0.25 increments
 EXIT_CAP_STEP_PCT = 0.25
@@ -146,13 +176,80 @@ def unit_mix(unit_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 # ── Expenses ─────────────────────────────────────────────────────────────
 
+def is_acquisition_line(line: dict[str, Any]) -> bool:
+    """True for a one-time acquisition cost rather than an annual operating
+    expense. Checked by line_kind, never by label -- a category named
+    "Legal" is an operating expense on one deal and a closing cost on
+    another, so the kind is the only reliable signal."""
+    return (line or {}).get("line_kind") == ACQUISITION_COST_KIND
+
+
+def operating_expense_lines(expense_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Included lines that are genuinely annual operating expenses.
+
+    Excluded lines (debt service, capex) stay in the list so they remain
+    visible and re-includable, but contribute nothing -- debt service is
+    modeled by the loan, and counting it here as well would charge it
+    twice. Acquisition costs are dropped for a different reason: they are
+    a t=0 capital outlay, and letting one into an annual total would
+    depress every year's NOI and then be capitalized into the exit price.
+    """
+    return [l for l in (expense_lines or [])
+            if l.get("is_included") and not is_acquisition_line(l)]
+
+
 def total_operating_expenses(expense_lines: list[dict[str, Any]]) -> float:
-    """Sum of included lines only. Excluded lines (debt service, capex) stay
-    in the list so they remain visible and re-includable, but contribute
-    nothing -- debt service is modeled by the loan, and counting it here as
-    well would charge it twice."""
+    """Year-1 operating expenses. Acquisition costs are not operating
+    expenses and are excluded -- see operating_expense_lines()."""
     return sum(_num(l.get("annual_amount")) or 0.0
-               for l in (expense_lines or []) if l.get("is_included"))
+               for l in operating_expense_lines(expense_lines))
+
+
+def acquisition_costs(expense_lines: list[dict[str, Any]],
+                      purchase_price: Any,
+                      closing_costs_pct: Any) -> dict[str, Any]:
+    """Reconcile the itemized acquisition lines against the flat percentage.
+
+    Itemizing OVERRIDES the percentage rather than adding to it: the two
+    describe the same money, and the flat percentage exists as an estimate
+    for scenarios that have not been itemized yet. Adding them would
+    double-count every cost the percentage was already standing in for.
+
+    The override is never silent. Both totals are returned so the caller
+    can show the substitution, and a shortfall far below the estimate is
+    flagged as probably-incomplete itemization -- the entered data still
+    wins, but the reader is told.
+    """
+    lines = [l for l in (expense_lines or [])
+             if is_acquisition_line(l) and l.get("is_included")]
+    itemized_total = sum(_num(l.get("annual_amount")) or 0.0 for l in lines)
+
+    price = _f(purchase_price)
+    flat_total = price * _pct(closing_costs_pct)
+
+    is_itemized = bool(lines)
+    effective = itemized_total if is_itemized else flat_total
+
+    shortfall_pct = None
+    if is_itemized and flat_total > 0:
+        shortfall_pct = (flat_total - itemized_total) / flat_total * 100.0
+
+    return {
+        "lines": lines,
+        "line_count": len(lines),
+        "itemized_total": itemized_total,
+        "flat_total": flat_total,
+        "flat_pct": _f(closing_costs_pct),
+        "is_itemized": is_itemized,
+        "effective_total": effective,
+        # Percentage the shared engine is actually given, so the displayed
+        # dollars and the engine's arithmetic can never disagree.
+        "effective_pct": (effective / price * 100.0) if price > 0 else 0.0,
+        "shortfall_pct": shortfall_pct,
+        "shortfall_warning": bool(
+            shortfall_pct is not None and shortfall_pct >= ACQUISITION_SHORTFALL_WARN_PCT
+        ),
+    }
 
 
 def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
@@ -170,7 +267,7 @@ def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
 
     rg = (rent_growth_pct or 0.0) / 100.0
     default_eg = (default_expense_growth_pct or 0.0) / 100.0
-    included = [l for l in (expense_lines or []) if l.get("is_included")]
+    included = operating_expense_lines(expense_lines)
 
     years = []
     for t in range(1, hold_years + 2):        # one extra year for the exit
@@ -206,25 +303,34 @@ def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
         egi["effective_gross_income"], expense_lines, hold,
         _f(scenario.get("rent_growth_pct")), _f(scenario.get("expense_growth_pct")),
     )
-    engine_inputs = _engine_inputs(scenario)
+    acq = acquisition_costs(expense_lines, scenario.get("purchase_price"),
+                            scenario.get("closing_costs_pct"))
+    # The shared engine takes a percentage, not a dollar amount, and is
+    # deliberately not modified: itemized costs are handed over as the
+    # equivalent percentage instead. Deal Analyzer therefore keeps
+    # computing returns with byte-identical code.
+    engine_inputs = _engine_inputs(scenario, acq["effective_pct"])
     returns = analyze_noi_series(engine_inputs, proj["noi_series"], proj["noi_exit"])
     return {
         "egi": egi,
         "unit_mix": unit_mix(unit_lines),
         "projection": proj,
         "operating_expenses_year1": total_operating_expenses(expense_lines),
+        "acquisition_costs": acq,
         "returns": returns,
     }
 
 
-def _engine_inputs(scenario: dict[str, Any]) -> dict[str, Any]:
+def _engine_inputs(scenario: dict[str, Any],
+                   closing_costs_pct: float | None = None) -> dict[str, Any]:
     """Map a scenario onto the engine's input contract. noi_year1 and
     noi_growth_pct are required by the shared validator but unused on the
     explicit-series path; they are filled with harmless placeholders rather
     than loosening validation that Deal Analyzer depends on."""
     return {
         "purchase_price": _f(scenario.get("purchase_price")),
-        "closing_costs_pct": _f(scenario.get("closing_costs_pct")),
+        "closing_costs_pct": (_f(scenario.get("closing_costs_pct"))
+                              if closing_costs_pct is None else _f(closing_costs_pct)),
         "ltv_pct": _f(scenario.get("ltv_pct")),
         "interest_rate_pct": _f(scenario.get("interest_rate_pct")),
         "amort_years": int(scenario.get("amort_years") or 0),
