@@ -128,7 +128,7 @@ SERVICES: tuple[Service, ...] = (
         key="google_maps_js",
         name="Google Maps JavaScript",
         purpose="The interactive map on FIRE Metric.",
-        used_by=("FIRE Metric",),
+        used_by=("FIRE Metrics",),
         pricing_model="Per map load, billed as a separate SKU from Places.",
         plan="Pay-as-you-go with free allowance",
         monthly_cost=TBD,
@@ -144,15 +144,15 @@ SERVICES: tuple[Service, ...] = (
     Service(
         key="openai_summaries",
         name="OpenAI — AI summaries",
-        purpose="Narrative market summaries on FIRE Metric.",
-        used_by=("FIRE Metric",),
+        purpose="Narrative market summaries on FIRE Metrics.",
+        used_by=("FIRE Metrics",),
         pricing_model="Per token, in and out. Rate depends on the model.",
         plan="Pay-as-you-go",
         monthly_cost=TBD,
         last_verified=LAST_REVIEWED,
         notes=(
-            "Gated OFF by default: FIRE_METRICS_AI_SUMMARIES_ENABLED must be explicitly "
-            "set to true, so this costs nothing unless it has been turned on. The model "
+            "Enabled by default when OpenAI is configured. FIRE_METRICS_AI_SUMMARIES_ENABLED "
+            "can be explicitly set to false to disable AI summary and CRE research spend. The model "
             "is whatever FIRE_METRICS_SUMMARY_MODEL is set to and is not fixed in code, "
             "so the per-token rate cannot be derived here. Summaries are cached per "
             "city, so re-viewing a market does not re-spend."
@@ -162,8 +162,8 @@ SERVICES: tuple[Service, ...] = (
     Service(
         key="openai_web_search",
         name="OpenAI — web search tool",
-        purpose="Recent CRE market context gathered for FIRE Metric summaries.",
-        used_by=("FIRE Metric",),
+        purpose="Recent CRE market context gathered for FIRE Metrics summaries.",
+        used_by=("FIRE Metrics",),
         pricing_model="Per tool call, charged ON TOP of the tokens the call consumes.",
         plan="Pay-as-you-go",
         monthly_cost=TBD,
@@ -172,7 +172,7 @@ SERVICES: tuple[Service, ...] = (
             "The least predictable cost on this page, and listed separately from the "
             "summaries above because it bills separately. There is no local counter for "
             "it — nothing in this app knows how many searches have been run or what "
-            "they cost. It shares the AI summaries' off-by-default gate and cache, "
+            "they cost. It shares the AI summaries' enable/disable gate and cache, "
             "which is currently the only thing bounding it. Adding a counter is a "
             "deliberate open decision, not an oversight."
         ),
@@ -182,7 +182,7 @@ SERVICES: tuple[Service, ...] = (
         key="census",
         name="US Census / ACS",
         purpose="Population, income and home-value data for market metrics.",
-        used_by=("FIRE Metric",),
+        used_by=("FIRE Metrics",),
         pricing_model="Free. US government open data; the API key is free and rate-limits only.",
         plan="Free government API",
         monthly_cost="$0",
@@ -199,7 +199,7 @@ SERVICES: tuple[Service, ...] = (
         key="bls",
         name="Bureau of Labor Statistics",
         purpose="Job growth data for market metrics.",
-        used_by=("FIRE Metric",),
+        used_by=("FIRE Metrics",),
         pricing_model="Free. US government open data; the key raises the daily request limit.",
         plan="Free government API",
         monthly_cost="$0",
@@ -215,7 +215,7 @@ SERVICES: tuple[Service, ...] = (
         key="fema_nri",
         name="FEMA National Risk Index",
         purpose="Climate and natural-hazard risk scores.",
-        used_by=("FIRE Metric",),
+        used_by=("FIRE Metrics",),
         pricing_model="Free. Public ArcGIS hosted layer, no key and no account required.",
         plan="Free public dataset",
         monthly_cost="$0",

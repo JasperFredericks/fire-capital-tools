@@ -37,7 +37,7 @@ class Config:
     OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
     FIRE_METRICS_SUMMARY_MODEL: str = os.environ.get("FIRE_METRICS_SUMMARY_MODEL", "")
     FIRE_METRICS_CRE_MODEL: str = os.environ.get("FIRE_METRICS_CRE_MODEL", "gpt-4.1-mini")
-    FIRE_METRICS_AI_SUMMARIES_ENABLED: bool = os.environ.get("FIRE_METRICS_AI_SUMMARIES_ENABLED", "false").lower() == "true"
+    FIRE_METRICS_AI_SUMMARIES_ENABLED: bool = os.environ.get("FIRE_METRICS_AI_SUMMARIES_ENABLED", "true").lower() == "true"
 
     # ── File uploads ───────────────────────────────────────────────────────
     # Env-var-overridable with a repo-relative fallback, the same shape as
