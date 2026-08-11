@@ -75,6 +75,81 @@
   </p>
 </div>
 
+<!-- ── Deal readiness ─────────────────────────────────────────────────── -->
+{#
+  Compares figures already computed above against reference targets.
+
+  The disclaimer on every row is not decoration. Two of these thresholds
+  come from Michael Blank's template and three are industry-convention
+  placeholders nobody has confirmed, so a reader must be able to tell at
+  a glance which is which. A test asserts each row renders its own
+  disclaimer -- removing them from this template fails the build.
+
+  No overall score, deliberately: a single grade built on three invented
+  thresholds would be the most quotable and least defensible number here.
+#}
+<div class="card" id="readiness">
+  <div class="scorecard-section-title">Deal Readiness</div>
+
+  <div class="result-note" style="border-left:3px solid #b45309; margin:12px 0 14px;">
+    <strong>These are reference targets, not FIRE Capital standards.</strong>
+    Nothing below has been confirmed as a threshold this firm actually underwrites to.
+    Each row states where its number came from. They are shown to prompt a question,
+    never to pass or fail a deal.
+  </div>
+
+  <div class="table-wrap">
+    <table class="rent-comps-table">
+      <thead>
+        <tr><th>Metric</th><th>This Scenario</th><th>Reference Target</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for row in readiness_rows %}
+          {% set colour = '#059669' if row.status == 'pass' else ('#6b7280' if row.status == 'unavailable' else '#b45309') %}
+          <tr>
+            <td>
+              <strong>{{ row.label }}</strong>
+              <div class="stat-box-sub">{{ row.source_note }}</div>
+            </td>
+            <td style="font-weight:650;">
+              {% if row.actual is none %}
+                &mdash;
+                {% if row.reason %}<div class="stat-box-sub">{{ row.reason }}</div>{% endif %}
+              {% elif row.fmt == 'pct' %}{{ '{:,.2f}%'.format(row.actual * 100) }}
+              {% elif row.fmt == 'multiple' %}{{ '{:,.2f}x'.format(row.actual) }}
+              {% else %}{{ '{:,.2f}x'.format(row.actual) }}
+              {% endif %}
+            </td>
+            <td>
+              {{ '≥' if row.direction == 'min' else '≤' }}
+              {%- if row.fmt == 'pct' %} {{ '{:,.2f}%'.format(row.threshold * 100) }}
+              {%- elif row.fmt == 'multiple' %} {{ '{:,.2f}x'.format(row.threshold) }}
+              {%- else %} {{ '{:,.2f}x'.format(row.threshold) }}{% endif %}
+              {# MANDATORY per-row provenance. Never move this into a tooltip
+                 or a single page-level banner -- see the enforcement test. #}
+              <div class="stat-box-sub" style="color:#b45309;">{{ row.disclaimer }}</div>
+            </td>
+            <td style="color:{{ colour }}; font-weight:650;">
+              {% if row.status == 'pass' %}&#10003; meets target
+              {% elif row.status == 'unavailable' %}not computable
+              {% else %}&#9679; below target{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <p class="page-subtitle" style="margin-top:12px;">
+    {{ readiness_counts.pass }} of {{ readiness_counts.total }} reference targets met
+    {%- if readiness_counts.unavailable %}, {{ readiness_counts.unavailable }} not computable{% endif %}.
+    This is a tally of comparisons against unconfirmed targets, not a score &mdash; no grade is
+    produced, because three of the five targets are placeholders.
+    Every figure compared here is one already computed above; this section adds no new
+    calculation to the returns engine.
+  </p>
+</div>
+
 <!-- ── Income build-up ────────────────────────────────────────────────── -->
 <div class="card" id="income">
   <div class="scorecard-section-title">Year-1 Income Build-Up</div>

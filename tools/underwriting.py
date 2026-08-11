@@ -44,6 +44,7 @@ from werkzeug.utils import secure_filename
 
 from tools import deal_dive_db
 from tools import underwriting_db as db
+from tools import deal_readiness_defaults as readiness
 from tools import underwriting_math as um
 from tools.form_utils import to_float, to_int
 from tools.scorecard_pro.kpis import KPICalculator
@@ -250,6 +251,8 @@ def detail(scenario_id):
     except um.ValidationError as exc:
         error = str(exc)
 
+    readiness_rows = readiness.evaluate(result)
+
     return render_template(
         "tools/underwriting_detail.html",
         scenario=scenario, deal=_deal_for(scenario["deal_id"]),
@@ -263,6 +266,8 @@ def detail(scenario_id):
         unit_mix=um.unit_mix(units),
         default_categories=um.DEFAULT_EXPENSE_CATEGORIES,
         acquisition_categories=um.DEFAULT_ACQUISITION_COST_CATEGORIES,
+        readiness_rows=readiness_rows,
+        readiness_counts=readiness.counts(readiness_rows),
         acquisition_saved={l["category_key"]: l["annual_amount"]
                            for l in expense_lines if um.is_acquisition_line(l)},
         feedback_tool=FEEDBACK_TOOL_NAME,
