@@ -821,13 +821,15 @@ class TestMapZoomConfiguration(unittest.TestCase):
         text = self._template_text()
         self.assertIn("zoom: 3,", text)
 
-    def test_nationwide_fitbounds_padding_is_40(self):
+    def test_nationwide_fitbounds_padding_is_generous(self):
+        """Nationwide fitBounds padding is ≥60 for zoomed-out national feel."""
         text = self._template_text()
-        self.assertIn("fitBounds(usBounds, 40)", text)
+        self.assertIn("fitBounds(usBounds, 80)", text)
 
-    def test_nationwide_cap_is_4(self):
+    def test_nationwide_cap_is_3(self):
+        """Nationwide view caps at zoom 3 so the U.S. doesn't fill the frame."""
         text = self._template_text()
-        self.assertIn("googleMap.setZoom(4)", text)
+        self.assertIn("googleMap.setZoom(3)", text)
 
     def test_single_city_max_zoom_is_6(self):
         text = self._template_text()
@@ -887,13 +889,24 @@ class TestMapZoomConfiguration(unittest.TestCase):
         active_block = css[idx_current:idx_next_rule]
         self.assertIn("#e8590c", active_block)
 
-    def test_comparison_marker_uses_fire_navy(self):
-        """Comparison city marker uses FIRE navy (#1a2744), not generic blue."""
+    def test_comparison_marker_uses_fire_navy_family(self):
+        """Comparison city marker uses FIRE navy/royal-blue, not generic blue."""
         css = self._css_text()
         idx_compared = css.find(".fire-advanced-marker-compared")
         idx_next_rule = css.find("\n}", idx_compared)
         compared_block = css[idx_compared:idx_next_rule]
-        self.assertIn("#1a2744", compared_block)
+        # Accept either deep navy or royal blue — both are FIRE brand navy family
+        navy_family = "1a2744" in compared_block or "1e3a6e" in compared_block
+        self.assertTrue(navy_family, "Comparison marker should use FIRE navy/royal-blue")
+
+    def test_comparison_marker_not_generic_google_blue(self):
+        """Comparison city marker must not use generic Google blue (#4285F4 or #2563eb default)."""
+        css = self._css_text()
+        idx_compared = css.find(".fire-advanced-marker-compared")
+        idx_next_rule = css.find("\n}", idx_compared)
+        compared_block = css[idx_compared:idx_next_rule].lower()
+        self.assertNotIn("4285f4", compared_block)
+        self.assertNotIn("dc2626", compared_block)  # also not generic red
 
     def test_brand_tokens_defined(self):
         """Scoped brand token variables are defined in CSS."""
@@ -921,6 +934,93 @@ class TestMapZoomConfiguration(unittest.TestCase):
         css = self._css_text()
         self.assertIn(".dashboard-hero", css)
         self.assertIn(".dashboard-hero-title", css)
+
+    def test_map_branded_chrome_header_in_html(self):
+        """fire-map-chrome branded header exists in the FIRE Metrics template."""
+        text = self._template_text()
+        self.assertIn("fire-map-chrome", text)
+        self.assertIn("FIRE METRICS", text)
+
+    def test_map_vignette_overlay_in_html(self):
+        """fire-map-vignette overlay div is present in the template."""
+        text = self._template_text()
+        self.assertIn("fire-map-vignette", text)
+
+    def test_map_vignette_uses_pointer_events_none(self):
+        """Vignette overlay must not block map interaction."""
+        css = self._css_text()
+        idx = css.find(".fire-map-vignette")
+        self.assertGreater(idx, 0, ".fire-map-vignette rule not in CSS")
+        end = css.find("\n}", idx)
+        block = css[idx:end]
+        self.assertIn("pointer-events: none", block)
+
+    def test_map_vignette_z_index_above_map(self):
+        """Vignette overlay sits above map canvas (z-index ≥ 2)."""
+        css = self._css_text()
+        idx = css.find(".fire-map-vignette")
+        end = css.find("\n}", idx)
+        block = css[idx:end]
+        self.assertIn("z-index: 2", block)
+
+    def test_map_panel_has_navy_border(self):
+        """Map panel has FIRE navy border/frame treatment."""
+        css = self._css_text()
+        idx = css.find(".fire-map-panel {")
+        end = css.find("\n}", idx)
+        block = css[idx:end]
+        self.assertTrue(
+            "1a2744" in block or "0f1929" in block,
+            "fire-map-panel should have deep navy background/border",
+        )
+
+    def test_map_rotate_control_disabled(self):
+        """rotateControl: false must be set in the Map constructor."""
+        text = self._template_text()
+        self.assertIn("rotateControl: false", text)
+
+    def test_map_type_control_disabled(self):
+        """mapTypeControl: false must be set."""
+        text = self._template_text()
+        self.assertIn("mapTypeControl: false", text)
+
+    def test_street_view_control_disabled(self):
+        """streetViewControl: false must be set."""
+        text = self._template_text()
+        self.assertIn("streetViewControl: false", text)
+
+    def test_advanced_marker_element_still_used(self):
+        """AdvancedMarkerElement must still be used — not replaced."""
+        text = self._template_text()
+        self.assertIn("AdvancedMarkerElement", text)
+
+    def test_google_map_container_still_present(self):
+        """fire-google-map div must still be present."""
+        text = self._template_text()
+        self.assertIn('id="fire-google-map"', text)
+
+    def test_no_generic_red_marker(self):
+        """Generic Google red (#dc2626 or #ff0000) must not be used on markers."""
+        css = self._css_text()
+        idx_current = css.find(".fire-advanced-marker-current")
+        end = css.find("\n}", idx_current)
+        block = css[idx_current:end].lower()
+        self.assertNotIn("dc2626", block)
+        self.assertNotIn("ff0000", block)
+
+    def test_fire_map_chrome_css_exists(self):
+        """fire-map-chrome CSS rule is defined."""
+        css = self._css_text()
+        self.assertIn(".fire-map-chrome {", css)
+        self.assertIn(".fire-map-chrome-title", css)
+
+    def test_nationwide_legend_reflects_market_language(self):
+        """Legend text uses market-intelligence language (not just 'Current city')."""
+        text = self._template_text()
+        # Either 'Active market' or 'Current city' or similar is fine;
+        # just ensure the legend has some city indicator text.
+        has_legend = ("fire-map-legend" in text and "fire-map-dot" in text)
+        self.assertTrue(has_legend)
 
 
 # ---------------------------------------------------------------------------

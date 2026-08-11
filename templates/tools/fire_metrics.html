@@ -91,16 +91,24 @@
   </div>
   <div id="city-warning-badges" class="status-chip-row" style="margin-top:8px;"></div>
   <div id="fire-map-panel" class="fire-map-panel" style="margin-top:12px;">
-    <div class="fire-map-header">
-      <div id="fire-map-note" class="result-note">Current and compared city dots</div>
+    <div class="fire-map-chrome">
+      <div class="fire-map-chrome-brand">
+        <svg class="fire-map-chrome-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+          <path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/>
+        </svg>
+        <span class="fire-map-chrome-title">FIRE METRICS</span>
+        <span class="fire-map-chrome-sub">Market Map</span>
+      </div>
+      <div id="fire-map-note" class="fire-map-chrome-note">Current and compared city dots</div>
     </div>
     <div class="fire-map-frame">
       <div id="fire-google-map" class="fire-google-map" aria-label="Current and compared city locations on a United States map"></div>
+      <div class="fire-map-vignette" aria-hidden="true"></div>
       <div id="fire-map-fallback" class="fire-map-fallback" style="display:none;">Map unavailable. Google Maps configuration is missing.</div>
     </div>
     <div class="fire-map-legend">
-      <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-current"></span>Current city</span>
-      <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-compared"></span>Compared cities</span>
+      <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-current"></span>Active market</span>
+      <span class="fire-map-legend-item"><span class="fire-map-dot fire-map-dot-compared"></span>Comparison markets</span>
     </div>
   </div>
 </div>
@@ -1430,9 +1438,9 @@
 
     if (!positions.length) {
       const usBounds = new google.maps.LatLngBounds(contiguousUsBounds);
-      googleMap.fitBounds(usBounds, 40);
+      googleMap.fitBounds(usBounds, 80);
       google.maps.event.addListenerOnce(googleMap, "idle", () => {
-        if ((googleMap.getZoom() || 0) > 4) googleMap.setZoom(4);
+        if ((googleMap.getZoom() || 0) > 3) googleMap.setZoom(3);
       });
       return;
     }
@@ -1566,12 +1574,13 @@
       googleMap = new Map(mapContainer, {
         center: { lat: 39.5, lng: -98.35 },
         zoom: 3,
-        minZoom: 3,
+        minZoom: 2,
         maxZoom: 9,
         mapId: googleMapsMapId,
         mapTypeControl: false,
         streetViewControl: false,
         fullscreenControl: false,
+        rotateControl: false,
         clickableIcons: false,
         restriction: {
           latLngBounds: contiguousUsBounds,
