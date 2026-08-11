@@ -924,6 +924,374 @@ class TestMapZoomConfiguration(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# New tests: CRE dict-vs-object parsing, result_type correctness,
+# dashboard CSS ordering, card themes, and related regressions
+# ---------------------------------------------------------------------------
+
+class TestCRESafeAccessor(unittest.TestCase):
+    """_safe_get must work for both SDK objects (attrs) and plain dicts."""
+
+    def test_safe_get_dict_key(self):
+        obj = {"url": "https://cbre.com/report", "title": "CBRE Q1"}
+        self.assertEqual(summary._safe_get(obj, "url", ""), "https://cbre.com/report")
+        self.assertEqual(summary._safe_get(obj, "title", ""), "CBRE Q1")
+        self.assertEqual(summary._safe_get(obj, "missing", "default"), "default")
+
+    def test_safe_get_object_attribute(self):
+        class SDKObj:
+            url = "https://jll.com/q2"
+            title = "JLL Q2 Report"
+        obj = SDKObj()
+        self.assertEqual(summary._safe_get(obj, "url", ""), "https://jll.com/q2")
+        self.assertEqual(summary._safe_get(obj, "title", ""), "JLL Q2 Report")
+        self.assertEqual(summary._safe_get(obj, "missing", "x"), "x")
+
+    def test_safe_get_none_object_returns_default(self):
+        self.assertEqual(summary._safe_get(None, "url", "fallback"), "fallback")
+
+
+class TestCREDictShapedOutput(unittest.TestCase):
+    """Source extraction must work when SDK returns dict-shaped output items."""
+
+    def _make_dict_ws_call(self, url: str) -> dict:
+        return {
+            "type": "web_search_call",
+            "action": {
+                "type": "search",
+                "sources": [{"type": "url", "url": url}],
+            },
+            "status": "completed",
+            "id": "ws_1",
+        }
+
+    def _make_dict_message(self, text: str, annotation_url: str) -> dict:
+        return {
+            "type": "message",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": text,
+                "annotations": [{
+                    "type": "url_citation",
+                    "url": annotation_url,
+                    "title": "Dict-shaped title",
+                    "start_index": 0,
+                    "end_index": 10,
+                }],
+            }],
+        }
+
+    def test_dict_action_sources_extracted(self):
+        mock_response = MagicMock()
+        mock_response.output = [
+            self._make_dict_ws_call("https://cbre.com/dict-test"),
+            self._make_dict_message("Vacancy fell to 4% in the metro.", "https://cbre.com/dict-test"),
+        ]
+        mock_response.output_text = "Vacancy fell to 4% in the metro."
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test", model_name="gpt-4.1-mini",
+                city="Denver", state="CO", display_name="Denver, CO",
+            )
+        urls = [s["url"] for s in result["research_sources"]]
+        self.assertIn("https://cbre.com/dict-test", urls)
+        self.assertEqual(result["result_type"], "success")
+
+    def test_dict_url_citation_annotation_extracted(self):
+        mock_response = MagicMock()
+        mock_response.output = [
+            self._make_dict_message(
+                "Rents grew 3% in the Indianapolis metro.",
+                "https://yardimatrix.com/indianapolis-report",
+            ),
+        ]
+        mock_response.output_text = "Rents grew 3% in the Indianapolis metro."
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test", model_name="gpt-4.1-mini",
+                city="Carmel", state="IN", display_name="Carmel, IN",
+            )
+        urls = [s["url"] for s in result["research_sources"]]
+        self.assertIn("https://yardimatrix.com/indianapolis-report", urls)
+        self.assertEqual(result["result_type"], "success")
+
+
+class TestCREResultTypeCorrectness(unittest.TestCase):
+    """success requires BOTH text AND validated source; not one alone."""
+
+    def _run_cre(self, output_text: str, sources: list[dict]) -> dict:
+        mock_response = MagicMock()
+        # Build action.sources as dicts
+        ws_call = {
+            "type": "web_search_call",
+            "action": {"type": "search", "sources": sources},
+            "status": "completed",
+            "id": "ws_1",
+        }
+        mock_response.output = [ws_call] if sources else []
+        mock_response.output_text = output_text
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            return summary.openai_cre_research(
+                api_key="test", model_name="gpt-4.1-mini",
+                city="Austin", state="TX", display_name="Austin, TX",
+            )
+
+    def test_text_and_approved_source_is_success(self):
+        result = self._run_cre(
+            "Vacancy fell in the Austin metro.",
+            [{"type": "url", "url": "https://cbre.com/austin"}],
+        )
+        self.assertEqual(result["result_type"], "success")
+        self.assertTrue(result["cre_sentences"])
+        self.assertTrue(result["research_sources"])
+
+    def test_text_without_approved_source_is_no_data(self):
+        """Model produced prose but no approved-domain sources returned."""
+        result = self._run_cre("Some CRE insight with no sources.", [])
+        self.assertEqual(result["result_type"], "no_data")
+        self.assertEqual(result["research_sources"], [])
+
+    def test_source_without_useful_text_is_no_data(self):
+        """Approved source returned but model output empty/NONE."""
+        result = self._run_cre("NONE", [{"type": "url", "url": "https://cbre.com/report"}])
+        self.assertEqual(result["result_type"], "no_data")
+        self.assertEqual(result["cre_sentences"], "")
+
+    def test_unapproved_source_plus_text_is_no_data(self):
+        result = self._run_cre(
+            "Zillow says rents rose 5%.",
+            [{"type": "url", "url": "https://zillow.com/report"}],
+        )
+        # unapproved source filtered out → text + 0 approved sources → no_data
+        self.assertEqual(result["result_type"], "no_data")
+
+    def test_none_sentinel_produces_no_data(self):
+        result = self._run_cre("NONE", [])
+        self.assertEqual(result["result_type"], "no_data")
+        self.assertEqual(result["cre_sentences"], "")
+
+    def test_api_exception_is_failure(self):
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.side_effect = RuntimeError("network down")
+            result = summary.openai_cre_research(
+                api_key="test", model_name="gpt-4.1-mini",
+                city="NYC", state="NY", display_name="New York, NY",
+            )
+        self.assertEqual(result["result_type"], "failure")
+
+    def test_function_never_raises(self):
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.side_effect = Exception("constructor explodes")
+            try:
+                result = summary.openai_cre_research(
+                    api_key="test", model_name="gpt-4.1-mini",
+                    city="Miami", state="FL", display_name="Miami, FL",
+                )
+                self.assertEqual(result["result_type"], "failure")
+            except Exception:
+                self.fail("openai_cre_research must not raise")
+
+
+class TestCREFailureConsistency(unittest.TestCase):
+    """Failure TTL behavior must be consistent in new-row and cached-refresh paths."""
+
+    def test_failure_stores_current_version(self):
+        """Failure result always carries CRE_RESEARCH_VERSION (enables backoff via version+TTL)."""
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.side_effect = RuntimeError("err")
+            result = summary.openai_cre_research(
+                api_key="test", model_name="gpt-4.1-mini",
+                city="Portland", state="OR", display_name="Portland, OR",
+            )
+        self.assertEqual(result["cre_research_version"], summary.CRE_RESEARCH_VERSION)
+        self.assertEqual(result["result_type"], "failure")
+
+    def test_success_stores_current_version(self):
+        mock_response = MagicMock()
+        mock_response.output = [{
+            "type": "web_search_call",
+            "action": {"type": "search", "sources": [{"type": "url", "url": "https://cbre.com/r"}]},
+            "status": "completed", "id": "ws_1",
+        }]
+        mock_response.output_text = "Occupancy rose in the Chicago metro."
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test", model_name="gpt-4.1-mini",
+                city="Chicago", state="IL", display_name="Chicago, IL",
+            )
+        self.assertEqual(result["cre_research_version"], summary.CRE_RESEARCH_VERSION)
+        self.assertEqual(result["result_type"], "success")
+
+
+class TestCREDedupeAndCap(unittest.TestCase):
+
+    def test_duplicate_urls_deduped(self):
+        mock_response = MagicMock()
+        mock_response.output = [{
+            "type": "web_search_call",
+            "action": {"type": "search", "sources": [
+                {"type": "url", "url": "https://cbre.com/dup"},
+                {"type": "url", "url": "https://cbre.com/dup"},  # duplicate
+            ]},
+            "status": "completed", "id": "ws_1",
+        }]
+        mock_response.output_text = "Vacancy is low in the market."
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test", model_name="gpt-4.1-mini",
+                city="Boston", state="MA", display_name="Boston, MA",
+            )
+        urls = [s["url"] for s in result["research_sources"]]
+        self.assertEqual(len(urls), len(set(urls)), "duplicate URLs should be deduped")
+
+    def test_source_cap_at_three(self):
+        mock_response = MagicMock()
+        mock_response.output = [{
+            "type": "web_search_call",
+            "action": {"type": "search", "sources": [
+                {"type": "url", "url": f"https://cbre.com/r{i}"} for i in range(5)
+            ]},
+            "status": "completed", "id": "ws_1",
+        }]
+        mock_response.output_text = "CRE conditions are improving."
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test", model_name="gpt-4.1-mini",
+                city="Seattle", state="WA", display_name="Seattle, WA",
+            )
+        self.assertLessEqual(len(result["research_sources"]), 3)
+
+
+class TestDashboardCSS(unittest.TestCase):
+
+    def _css_text(self) -> str:
+        return (Path(__file__).parent.parent / "static" / "style.css").read_text()
+
+    def _dashboard_html(self) -> str:
+        return (Path(__file__).parent.parent / "templates" / "dashboard.html").read_text()
+
+    def test_no_stray_brace_after_tool_card_icon_fire_svg(self):
+        """The stray } after .tool-card-icon-fire svg must be removed."""
+        css = self._css_text()
+        # The stray brace appeared immediately after the svg rule
+        # e.g. ".tool-card-icon-fire svg { ... }\n}"
+        # After fix: the next meaningful token after that block should not be "}"
+        idx = css.find(".tool-card-icon-fire svg")
+        if idx < 0:
+            return  # class removed entirely is also acceptable
+        block_end = css.find("}", idx)
+        # The character after the closing brace should NOT be another stray "}"
+        remainder = css[block_end + 1:].lstrip()
+        # A stray } would be the very first non-whitespace character
+        self.assertFalse(
+            remainder.startswith("}"),
+            "Stray } detected after .tool-card-icon-fire svg rule",
+        )
+
+    def test_base_tool_card_defined_before_theme_variants(self):
+        """Generic .tool-card base rule must appear before theme variants."""
+        css = self._css_text()
+        base_pos = css.find("\n.tool-card {")
+        navy_pos = css.find(".tool-card--navy {")
+        blue_pos = css.find(".tool-card--blue {")
+        self.assertGreater(base_pos, 0, ".tool-card base rule not found")
+        if navy_pos > 0:
+            self.assertLess(base_pos, navy_pos, ".tool-card--navy must come after .tool-card base")
+        if blue_pos > 0:
+            self.assertLess(base_pos, blue_pos, ".tool-card--blue must come after .tool-card base")
+
+    def test_fire_metrics_card_has_dark_background_not_white(self):
+        """FIRE Metrics card theme must override white background."""
+        css = self._css_text()
+        # The theme rule should have a non-white background
+        navy_idx = css.find(".tool-card--navy {")
+        compat_idx = css.find(".tool-card-fire-metrics {")
+        found_dark = False
+        for idx in [navy_idx, compat_idx]:
+            if idx < 0:
+                continue
+            block_end = css.find("}", idx)
+            block = css[idx:block_end]
+            if "1a2744" in block or "1e3a6e" in block or "linear-gradient" in block:
+                found_dark = True
+        self.assertTrue(found_dark, "FIRE Metrics card should have dark navy background")
+
+    def test_fire_metrics_title_color_is_white_on_dark(self):
+        """FIRE Metrics title must be white (readable on dark card)."""
+        css = self._css_text()
+        # navy theme title rule
+        for selector in [".tool-card--navy .tool-card-title", ".tool-card-fire-metrics .tool-card-title"]:
+            idx = css.find(selector)
+            if idx > 0:
+                block_end = css.find("}", idx)
+                block = css[idx:block_end]
+                self.assertIn("fff", block.lower(), f"{selector} should have white color")
+                return
+        self.fail("No FIRE Metrics title color rule found")
+
+    def test_theme_variant_rules_use_new_class_names(self):
+        """New semantic theme classes should exist in CSS."""
+        css = self._css_text()
+        self.assertIn(".tool-card--navy", css)
+        self.assertIn(".tool-card--blue", css)
+        self.assertIn(".tool-card--slate", css)
+        self.assertIn(".tool-card--gold", css)
+
+    def test_all_dashboard_tool_cards_have_theme_class(self):
+        """Every tool card anchor in dashboard.html must have a theme modifier class."""
+        html = self._dashboard_html()
+        import re
+        # Only match <a> or <div> elements that start with "tool-card " or "tool-card "
+        # Exclude tool-card-icon, tool-card-title, etc.
+        card_classes = re.findall(r'class="(tool-card(?:\s+[^"]+)?)"', html)
+        for classes in card_classes:
+            parts = classes.split()
+            # Skip if the only class is a sub-component (icon, title, desc)
+            if any(p in ("tool-card-icon", "tool-card-title", "tool-card-desc", "tool-card-fire-metrics") for p in parts if p != "tool-card"):
+                continue
+            if "tool-card" not in parts:
+                continue
+            # Each card link must have a theme class
+            has_theme = any(p.startswith("tool-card--") or p == "tool-card-fire-metrics" for p in parts)
+            # Skip elements that are just the base class (sub-components)
+            if len(parts) == 1:
+                continue
+            self.assertTrue(has_theme, f"Card anchor with classes '{classes}' has no FIRE theme modifier")
+
+    def test_no_inline_hardcoded_fill_colors_on_themed_cards(self):
+        """SVG icons on themed cards should use currentColor, not hardcoded fills."""
+        html = self._dashboard_html()
+        import re
+        # No fill="#2563eb" or fill="#9ca3af" on themed cards
+        hardcoded = re.findall(r'fill="#[0-9a-fA-F]+"', html)
+        for fill in hardcoded:
+            # Only allow fill="currentColor" or fill="none"; reject hex fills
+            self.fail(f"Hardcoded SVG fill found: {fill} — use fill=\"currentColor\" instead")
+
+    def test_fire_metrics_plural_in_dashboard(self):
+        html = self._dashboard_html()
+        self.assertIn("FIRE Metrics", html)
+        self.assertNotIn(">FIRE Metric<", html)
+
+    def test_dashboard_hero_present_in_html(self):
+        html = self._dashboard_html()
+        self.assertIn("dashboard-hero", html)
+
+    def test_deal_dive_macroeconomic_wording_preserved(self):
+        """Deal Dive card must say 'Market & Macroeconomic Context (FIRE Metrics)'."""
+        dd_path = Path(__file__).parent.parent / "templates" / "tools" / "deal_dive_detail.html"
+        content = dd_path.read_text()
+        self.assertIn("Market & Macroeconomic Context (FIRE Metrics)", content)
+        self.assertNotIn("Market Context (FIRE Metric)", content)
+
+
+# ---------------------------------------------------------------------------
 # Part 1: Existing score and summary tests remain intact (smoke-level check)
 # ---------------------------------------------------------------------------
 

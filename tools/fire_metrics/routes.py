@@ -346,7 +346,7 @@ def city_summary():
                     if result_type in ("success", "no_data"):
                         cre_sentences = cre_result.get("cre_sentences") or ""
                         research_sources = cre_result.get("research_sources") or []
-                    # Determine what TTL to store (failures get short backoff)
+                    # Determine what TTL to store
                     if result_type == "failure":
                         import datetime as _dt
                         backoff_at = (
@@ -365,6 +365,17 @@ def city_summary():
                         store_at = no_data_at
                     else:
                         store_at = cre_result.get("cre_generated_at") or ai_summary.utc_now_iso()
+                    # Store version for all result types; version + TTL together drive backoff
+                    store_version = cre_result.get("cre_research_version") or ai_summary.CRE_RESEARCH_VERSION
+                    # Preserve old CRE text when the refresh fails (don't overwrite with empty)
+                    store_cre_text = (
+                        cre_sentences if result_type != "failure"
+                        else (cache_row.get("cre_sentences_text") or "")
+                    )
+                    store_sources = (
+                        research_sources if result_type != "failure"
+                        else research_sources
+                    )
                     db_module.update_city_summary_cre_fields(
                         conn,
                         city=selected_city["city"],
@@ -372,10 +383,10 @@ def city_summary():
                         data_fingerprint=data_fingerprint,
                         model_name=model_name,
                         prompt_version=ai_summary.PROMPT_VERSION,
-                        cre_sentences_text=cre_sentences if result_type != "failure" else (cache_row.get("cre_sentences_text") or ""),
-                        research_sources_json=json.dumps(research_sources if result_type != "failure" else (research_sources)),
+                        cre_sentences_text=store_cre_text,
+                        research_sources_json=json.dumps(store_sources),
                         cre_generated_at=store_at,
-                        cre_research_version=cre_result.get("cre_research_version") or ai_summary.CRE_RESEARCH_VERSION,
+                        cre_research_version=store_version,
                     )
 
                 full_summary = cache_row["summary_text"]
@@ -474,17 +485,17 @@ def city_summary():
                     + _dt.timedelta(hours=ai_summary.CRE_NEGATIVE_CACHE_TTL_HOURS)
                 ).isoformat()
                 cre_research_version_stored = cre_result.get("cre_research_version")
-            elif result_type == "failure":
-                # Short backoff — allow retry after CRE_FAILURE_BACKOFF_MINUTES
+            else:  # failure
+                # Backoff: allow retry after CRE_FAILURE_BACKOFF_MINUTES; store version
+                # so is_cre_cache_current (version+TTL check) provides the backoff window.
+                # Consistent with cached-refresh failure path.
                 import datetime as _dt
                 cre_generated_at = (
                     _dt.datetime.now(_dt.timezone.utc)
                     - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
                     + _dt.timedelta(minutes=ai_summary.CRE_FAILURE_BACKOFF_MINUTES)
                 ).isoformat()
-                # Don't store current version on failure — leave version NULL
-                # so the next check treats it as legacy and retries immediately
-                cre_research_version_stored = None
+                cre_research_version_stored = cre_result.get("cre_research_version")
 
             summary_text = ai_summary.combined_summary(structured)
             full_summary = f"{summary_text} {cre_sentences}".strip() if cre_sentences else summary_text

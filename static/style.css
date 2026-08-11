@@ -279,30 +279,6 @@ a { color: inherit; text-decoration: none; }
   margin-bottom: 20px;
 }
 
-/* FIRE Metrics branded tool card */
-.tool-card-fire-metrics {
-  background: linear-gradient(135deg, #1a2744 0%, #1e3a6e 100%);
-  border: none;
-  color: #fff;
-}
-
-.tool-card-fire-metrics .tool-card-title { color: #fff; }
-.tool-card-fire-metrics .tool-card-desc { color: rgba(255,255,255,0.65); }
-.tool-card-fire-metrics .tool-tag { background: rgba(232,89,12,0.25); color: #fbbf24; }
-
-.tool-card-fire-metrics:hover {
-  box-shadow: 0 6px 20px rgba(26,39,68,0.35);
-  transform: translateY(-2px);
-}
-
-.tool-card-icon-fire {
-  background: rgba(232,89,12,0.18) !important;
-  color: #fb923c;
-}
-
-.tool-card-icon-fire svg { color: #fb923c; fill: #fb923c; }
-}
-
 .section-label:first-of-type { margin-top: 0; }
 
 .tool-grid {
@@ -312,10 +288,11 @@ a { color: inherit; text-decoration: none; }
   margin-bottom: 4px;
 }
 
+/* Base tool-card — all theme variants must come AFTER this block */
 .tool-card {
   display: block;
   background: #fff;
-  border: 1px solid #f3f4f6;
+  border: 1px solid #e5e7eb;
   border-radius: 12px;
   padding: 22px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.06);
@@ -344,7 +321,7 @@ a { color: inherit; text-decoration: none; }
   margin-bottom: 14px;
 }
 
-.tool-card-icon svg { width: 20px; height: 20px; }
+.tool-card-icon svg { width: 20px; height: 20px; color: #2563eb; fill: #2563eb; }
 
 .tool-card-title {
   font-size: 14px;
@@ -372,6 +349,86 @@ a { color: inherit; text-decoration: none; }
 
 .tag-live  { background: #d1fae5; color: #065f46; }
 .tag-soon  { background: #f3f4f6; color: #9ca3af; }
+
+/* ── Dashboard tool-card theme variants (must follow .tool-card base) ──────── */
+
+/* Navy — FIRE Metrics flagship card */
+.tool-card--navy {
+  background: linear-gradient(135deg, #1a2744 0%, #1e3a6e 100%);
+  border-color: transparent;
+  color: #fff;
+}
+.tool-card--navy .tool-card-title { color: #fff; }
+.tool-card--navy .tool-card-desc  { color: rgba(255,255,255,0.65); }
+.tool-card--navy .tool-card-icon  { background: rgba(232,89,12,0.18); }
+.tool-card--navy .tool-card-icon svg { color: #fb923c; fill: #fb923c; }
+.tool-card--navy .tool-tag        { background: rgba(232,89,12,0.22); color: #fbbf24; }
+.tool-card--navy:hover             { box-shadow: 0 6px 22px rgba(26,39,68,0.4); }
+
+/* Blue — Acquisitions tools */
+.tool-card--blue {
+  background: linear-gradient(135deg, #1e3a6e 0%, #1d4ed8 100%);
+  border-color: transparent;
+  color: #fff;
+}
+.tool-card--blue .tool-card-title { color: #fff; }
+.tool-card--blue .tool-card-desc  { color: rgba(255,255,255,0.65); }
+.tool-card--blue .tool-card-icon  { background: rgba(255,255,255,0.12); }
+.tool-card--blue .tool-card-icon svg { color: #bfdbfe; fill: #bfdbfe; }
+.tool-card--blue .tool-tag        { background: rgba(255,255,255,0.15); color: #bfdbfe; }
+.tool-card--blue:hover             { box-shadow: 0 6px 22px rgba(30,58,110,0.45); }
+
+/* Slate — Operations tools */
+.tool-card--slate {
+  background: linear-gradient(135deg, #334155 0%, #475569 100%);
+  border-color: transparent;
+  color: #fff;
+}
+.tool-card--slate .tool-card-title { color: #fff; }
+.tool-card--slate .tool-card-desc  { color: rgba(255,255,255,0.65); }
+.tool-card--slate .tool-card-icon  { background: rgba(255,255,255,0.12); }
+.tool-card--slate .tool-card-icon svg { color: #cbd5e1; fill: #cbd5e1; }
+.tool-card--slate .tool-tag        { background: rgba(255,255,255,0.12); color: #cbd5e1; }
+.tool-card--slate:hover             { box-shadow: 0 6px 22px rgba(51,65,85,0.4); }
+
+/* Gold — Investor tools */
+.tool-card--gold {
+  background: linear-gradient(135deg, #92400e 0%, #b45309 100%);
+  border-color: transparent;
+  color: #fff;
+}
+.tool-card--gold .tool-card-title { color: #fff; }
+.tool-card--gold .tool-card-desc  { color: rgba(255,255,255,0.7); }
+.tool-card--gold .tool-card-icon  { background: rgba(245,158,11,0.22); }
+.tool-card--gold .tool-card-icon svg { color: #fcd34d; fill: #fcd34d; }
+.tool-card--gold .tool-tag        { background: rgba(245,158,11,0.25); color: #fef3c7; }
+.tool-card--gold:hover             { box-shadow: 0 6px 22px rgba(146,64,14,0.4); }
+
+/* Teal — Markets tools (complementary to navy/blue) */
+.tool-card--teal {
+  background: linear-gradient(135deg, #0f766e 0%, #0d9488 100%);
+  border-color: transparent;
+  color: #fff;
+}
+.tool-card--teal .tool-card-title { color: #fff; }
+.tool-card--teal .tool-card-desc  { color: rgba(255,255,255,0.7); }
+.tool-card--teal .tool-card-icon  { background: rgba(255,255,255,0.14); }
+.tool-card--teal .tool-card-icon svg { color: #99f6e4; fill: #99f6e4; }
+.tool-card--teal .tool-tag        { background: rgba(255,255,255,0.14); color: #ccfbf1; }
+.tool-card--teal:hover             { box-shadow: 0 6px 22px rgba(15,118,110,0.4); }
+
+/* Backward-compat alias for the old fire-metrics class */
+.tool-card-fire-metrics {
+  background: linear-gradient(135deg, #1a2744 0%, #1e3a6e 100%);
+  border-color: transparent;
+  color: #fff;
+}
+.tool-card-fire-metrics .tool-card-title { color: #fff; }
+.tool-card-fire-metrics .tool-card-desc  { color: rgba(255,255,255,0.65); }
+.tool-card-fire-metrics .tool-card-icon  { background: rgba(232,89,12,0.18); }
+.tool-card-fire-metrics .tool-card-icon svg { color: #fb923c; fill: #fb923c; }
+.tool-card-fire-metrics .tool-tag        { background: rgba(232,89,12,0.22); color: #fbbf24; }
+.tool-card-fire-metrics:hover            { box-shadow: 0 6px 22px rgba(26,39,68,0.4); }
 
 /* ── Buttons ────────────────────────────────────────────────────────────── */
 .btn {

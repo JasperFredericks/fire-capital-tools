@@ -1530,6 +1530,13 @@ def is_cre_fresh(cre_generated_at: str | None, cre_version: str | None = None) -
     return is_cre_cache_current(cre_generated_at, cre_version)
 
 
+def _safe_get(obj: Any, key: str, default: Any = "") -> Any:
+    """Read a field from either a dict or an SDK Pydantic object safely."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def openai_cre_research(
     *,
     api_key: str,
@@ -1540,7 +1547,7 @@ def openai_cre_research(
 ) -> dict[str, Any]:
     """
     Call the Responses API hosted web_search tool to gather recent CRE market
-    context.  Requires a model that supports hosted web search (e.g. gpt-4.1-mini).
+    context.  Requires a model that supports hosted web search (gpt-4.1-mini).
 
     Returns:
         {
@@ -1551,8 +1558,8 @@ def openai_cre_research(
             "result_type": str,             # "success" | "no_data" | "failure"
         }
 
-    Never raises: returns result_type="failure" on any error so the caller can
-    distinguish API failures (short backoff) from no-useful-data (longer cache).
+    Never raises; returns result_type="failure" on any error.
+    result_type="success" requires BOTH useful text AND >=1 validated source.
     """
     import logging
     from openai import OpenAI
@@ -1565,7 +1572,7 @@ def openai_cre_research(
         city, state, model_name, CRE_RESEARCH_VERSION,
     )
 
-    _empty = {
+    _result_base = {
         "cre_sentences": "",
         "research_sources": [],
         "cre_generated_at": utc_now_iso(),
@@ -1575,18 +1582,22 @@ def openai_cre_research(
     try:
         client = OpenAI(api_key=api_key)
 
-        # One compact search prompt — keeps costs low
+        # Metro-aware prompt: city-specific reports preferred but metro/MSA data
+        # is explicitly acceptable for smaller cities/suburbs where institutional
+        # publishers may only have metro-level coverage (e.g. Carmel → Indianapolis).
         search_prompt = (
-            f"Find recent acquisition-relevant multifamily/CRE research for "
-            f"{city}, {state} / the {metro_label} metro from approved publishers "
-            f"(CoStar, Yardi Matrix, RealPage, Marcus & Millichap, Colliers, "
-            f"CBRE, JLL, Cushman & Wakefield, Newmark, Berkadia, Freddie Mac "
-            f"Multifamily, CommercialEdge). "
-            f"Prefer the past 6 months, then 12 months. "
-            f"Return 1-2 concise factual sentences on vacancy/occupancy, rent growth, "
-            f"supply/deliveries, absorption, investment activity, or cap rates. "
-            f"Distinguish metro data from city-boundary data. "
-            f"Output only the word NONE if no useful approved-source data is found."
+            f"Find recent acquisition-relevant multifamily and commercial real estate research "
+            f"for {city}, {state}. If city-specific institutional reports are unavailable, "
+            f"use recent metro/MSA-level reports for the {metro_label} area — that is acceptable "
+            f"and useful as long as you clearly label any statistic as metro-level rather than "
+            f"specific to {city}. "
+            f"Use only approved publishers: CoStar, Yardi Matrix, RealPage, Marcus & Millichap, "
+            f"Colliers, CBRE, JLL, Cushman & Wakefield, Newmark, Berkadia, Freddie Mac Multifamily, "
+            f"CommercialEdge. "
+            f"Prefer research from the past 12 months; if unavailable, use up to 18-24 months old. "
+            f"Return 1-2 concise factual sentences on: vacancy/occupancy, rent growth, "
+            f"new supply/deliveries, absorption, investment/transaction activity, or cap rates. "
+            f"Output only the word NONE if no useful approved-source research is found."
         )
 
         tool_config: dict[str, Any] = {
@@ -1603,50 +1614,64 @@ def openai_cre_research(
             input=[{"role": "user", "content": [{"type": "input_text", "text": search_prompt}]}],
         )
 
+        output_items = _safe_get(response, "output", None) or []
+
         # Diagnostic counts
         web_search_calls = 0
         action_source_count = 0
-        for item in (response.output or []):
-            item_type = getattr(item, "type", "")
-            if item_type == "web_search_call":
+        for item in output_items:
+            if _safe_get(item, "type", "") == "web_search_call":
                 web_search_calls += 1
-                action = getattr(item, "action", None)
-                sources = getattr(action, "sources", None) or []
-                action_source_count += len(sources)
+                action = _safe_get(item, "action", None)
+                if action is not None:
+                    sources = _safe_get(action, "sources", None) or []
+                    action_source_count += len(sources)
 
-        raw_text = (response.output_text or "").strip()
+        # output_text may be on the response object or needs manual extraction
+        raw_text = ""
+        if hasattr(response, "output_text"):
+            raw_text = (response.output_text or "").strip()
+        else:
+            # Fallback: extract text from message output items
+            for item in output_items:
+                if _safe_get(item, "type", "") == "message":
+                    for part in (_safe_get(item, "content", None) or []):
+                        raw_text += _safe_get(part, "text", "")
 
-        # Collect URLs from action.sources (explicit include) and url_citation annotations
+        # Collect URLs from action.sources and url_citation annotations.
+        # _safe_get handles both SDK Pydantic objects (attribute) and dicts (key).
         url_sources: list[dict[str, Any]] = []
-        for item in (response.output or []):
-            item_type = getattr(item, "type", "")
+        for item in output_items:
+            item_type = _safe_get(item, "type", "")
             if item_type == "web_search_call":
-                action = getattr(item, "action", None)
-                for src in (getattr(action, "sources", None) or []):
-                    url = str(getattr(src, "url", "") or "").strip()
-                    if url:
-                        url_sources.append({"url": url, "title": ""})
+                action = _safe_get(item, "action", None)
+                if action is not None:
+                    for src in (_safe_get(action, "sources", None) or []):
+                        url = str(_safe_get(src, "url", "") or "").strip()
+                        if url:
+                            url_sources.append({"url": url, "title": ""})
             elif item_type == "message":
-                for part in (getattr(item, "content", None) or []):
-                    for ann in (getattr(part, "annotations", None) or []):
-                        if getattr(ann, "type", "") == "url_citation":
+                for part in (_safe_get(item, "content", None) or []):
+                    for ann in (_safe_get(part, "annotations", None) or []):
+                        if _safe_get(ann, "type", "") == "url_citation":
                             url_sources.append({
-                                "url": str(getattr(ann, "url", "") or "").strip(),
-                                "title": str(getattr(ann, "title", "") or "").strip(),
+                                "url": str(_safe_get(ann, "url", "") or "").strip(),
+                                "title": str(_safe_get(ann, "title", "") or "").strip(),
                             })
 
         annotation_count = sum(
-            1 for i in (response.output or [])
-            if getattr(i, "type", "") == "message"
-            for p in (getattr(i, "content", None) or [])
-            for a in (getattr(p, "annotations", None) or [])
-            if getattr(a, "type", "") == "url_citation"
+            1 for i in output_items
+            if _safe_get(i, "type", "") == "message"
+            for p in (_safe_get(i, "content", None) or [])
+            for a in (_safe_get(p, "annotations", None) or [])
+            if _safe_get(a, "type", "") == "url_citation"
         )
 
         log.info(
             "FIRE CRE response: city_key=%s|%s web_search_calls=%d "
-            "action_sources=%d annotations=%d",
-            city, state, web_search_calls, action_source_count, annotation_count,
+            "action_sources=%d annotations=%d raw_text_len=%d",
+            city, state, web_search_calls, action_source_count,
+            annotation_count, len(raw_text),
         )
 
         # Server-side domain validation
@@ -1683,12 +1708,17 @@ def openai_cre_research(
             city, state, len(validated_sources), bool(cre_sentences),
         )
 
-        result_type = "success" if (cre_sentences or validated_sources) else "no_data"
+        # success requires BOTH text grounded in approved sources
+        if cre_sentences and validated_sources:
+            result_type = "success"
+        else:
+            result_type = "no_data"
+
         return {
+            **_result_base,
             "cre_sentences": cre_sentences,
             "research_sources": validated_sources,
             "cre_generated_at": utc_now_iso(),
-            "cre_research_version": CRE_RESEARCH_VERSION,
             "result_type": result_type,
         }
 
@@ -1697,7 +1727,8 @@ def openai_cre_research(
             "FIRE CRE failed: city_key=%s|%s error=%s: %s",
             city, state, type(exc).__name__, str(exc)[:200],
         )
-        return {**_empty, "result_type": "failure"}
+        return {**_result_base, "result_type": "failure"}
+
 
 
 # Map CRE publisher hostnames to display names
