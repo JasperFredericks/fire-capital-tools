@@ -75,16 +75,68 @@ class UnrecognizedRentRoll(ValueError):
     understands. The message is written to be shown to the user."""
 
 
+# Sheets that only ever appear in a Weekly Property Summary (MMR) export.
+# Used to tell the user *which* wrong file they uploaded rather than just
+# that it was wrong -- an MMR and a rent roll are both ResMan exports for
+# the same property, so "unrecognized" alone would be an unhelpful answer.
+#
+# Two dialects are in circulation and both are covered. The long-form one
+# (Eagle Rock, Canyon, OXPT, High Caliber) uses names like "Cash Flow
+# Statement"; the short-form one (Maple Valley) uses "Cash Flow", "Work
+# Order", "Tenant Tickler". Listing both matters only for the quality of
+# the error message -- either way the file is rejected -- but naming the
+# actual mistake is the difference between a user fixing it in seconds and
+# re-uploading the same wrong file.
+_MMR_SHEET_MARKERS = (
+    # long form
+    "box score", "cash flow statement", "delinquency", "bank deposit register",
+    "bank deposits by category", "work order summary", "expiring leases",
+    "new and renewed leases", "prospect source summary", "renewal percentages",
+    "available units",
+    # short form
+    "cash flow", "work order", "tenant tickler", "vacancy", "check register",
+    "deposit register", "general ledger",
+)
+# Three markers, not one: a genuine rent roll is a single unnamed sheet, so
+# even one marker would in practice be decisive -- but requiring three means
+# a future rent-roll variant that happens to carry a "Vacancy" tab is not
+# mislabelled as an MMR.
+_MMR_SHEET_MATCH_THRESHOLD = 3
+
+
+def _looks_like_mmr(sheetnames) -> bool:
+    """True when the workbook is a Weekly Property Summary export.
+
+    Matched on several marker sheets rather than one, so a rent roll that
+    happens to carry a single similarly-named tab is not misclassified.
+    """
+    present = {norm(s) for s in sheetnames}
+    return sum(1 for m in _MMR_SHEET_MARKERS if m in present) >= _MMR_SHEET_MATCH_THRESHOLD
+
+
 def _header_index(rows) -> int | None:
-    """Row index of the column header band. Requires both a Unit column and
-    a Market Rent column -- either alone appears in other ResMan reports, so
-    demanding both is what distinguishes a rent roll from, say, an Available
-    Units export."""
+    """Row index of the column header band.
+
+    Requires Unit, Market Rent, AND the Description/Amount charge-line pair.
+
+    The charge-line requirement is the load-bearing part, and its absence is
+    exactly what let an MMR through before. An MMR's "Available Units" sheet
+    does carry Unit and Market Rent, so demanding only those two matched it
+    happily -- and because that sheet lists vacant units and has no charge
+    lines at all, every unit came back with an in-place rent of zero. The
+    result was a fully-computed model built from nothing but vacant units.
+
+    Description and Amount are the columns in-place rent is actually summed
+    from, so requiring them is not a heuristic: a sheet without them cannot
+    produce a rent roll, only a plausible-looking shell.
+    """
     for idx, row in enumerate(rows[:MAX_HEADER_SCAN_ROWS]):
         has_unit = find_col(row, "unit") is not None
         has_market = (find_col(row, "market rent") is not None
                       or find_col_contains(row, "market rent") is not None)
-        if has_unit and has_market:
+        has_charges = (find_col(row, "description") is not None
+                       and find_col(row, "amount") is not None)
+        if has_unit and has_market and has_charges:
             return idx
     return None
 
@@ -132,11 +184,21 @@ def parse_rent_roll_workbook(path) -> dict[str, Any]:
     rows = rows_of(ws)
     header_idx = _header_index(rows)
     if header_idx is None:
+        # Name the actual mistake when it is recognizable. An MMR is the file
+        # most likely to be uploaded here by accident -- it is the same
+        # property, the same system and a similar filename -- so it gets its
+        # own message rather than a generic rejection.
+        if _looks_like_mmr(wb.sheetnames):
+            raise UnrecognizedRentRoll(
+                "This looks like a Weekly Property Summary / MMR export, not a "
+                "rent roll. Please upload the property's actual rent roll file."
+            )
         raise UnrecognizedRentRoll(
-            "This does not look like a ResMan rent roll — no row with both a "
-            "'Unit' and a 'Market Rent' column was found. Only ResMan rent roll "
-            "exports are supported in this beta; upload one of those, or enter "
-            "the rent roll manually."
+            "This does not look like a ResMan rent roll — no row was found "
+            "carrying a 'Unit' column, a 'Market Rent' column and the "
+            "'Description'/'Amount' charge lines that in-place rent is read "
+            "from. Only ResMan rent roll exports are supported in this beta; "
+            "upload one of those, or enter the rent roll manually."
         )
 
     header = rows[header_idx]
@@ -155,6 +217,15 @@ def parse_rent_roll_workbook(path) -> dict[str, Any]:
     }
     if cols["unit"] is None or cols["market"] is None:
         raise UnrecognizedRentRoll("Rent roll header found but its Unit/Market Rent columns could not be read.")
+    # _header_index already required these, so this is a belt-and-braces
+    # guard against the two ever drifting apart -- without the charge lines
+    # every in-place rent would silently come back as zero.
+    if cols["description"] is None or cols["amount"] is None:
+        raise UnrecognizedRentRoll(
+            "Rent roll header found but it has no 'Description'/'Amount' charge "
+            "lines, so in-place rent cannot be read. Upload a full rent roll "
+            "export rather than a summary."
+        )
 
     units: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
