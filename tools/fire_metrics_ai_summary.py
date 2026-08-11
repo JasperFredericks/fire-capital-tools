@@ -11,8 +11,10 @@ from typing import Any
 PROMPT_VERSION = "fire_metrics_summary_v5"
 SUMMARY_SCHEMA_NAME = "fire_metrics_market_overview"
 
-CRE_RESEARCH_VERSION = "cre_v1"
+CRE_RESEARCH_VERSION = "cre_v3"  # increment to bust stale cached broken results
 CRE_RESEARCH_TTL_DAYS = 7
+CRE_NEGATIVE_CACHE_TTL_HOURS = 24   # no-useful-result cache: try again after 24 h
+CRE_FAILURE_BACKOFF_MINUTES = 30    # API error backoff: retry after 30 min
 
 # Approved CRE publisher domains — server-side validation; also sent as allowed_domains hint
 CRE_ALLOWED_DOMAINS: tuple[str, ...] = (
@@ -1502,19 +1504,30 @@ def validate_research_source(source: dict[str, Any]) -> bool:
     )
 
 
-def is_cre_fresh(cre_generated_at: str | None) -> bool:
-    """Return True when the stored CRE research is within CRE_RESEARCH_TTL_DAYS."""
+def is_cre_cache_current(
+    cre_generated_at: str | None,
+    cre_version: str | None,
+    *,
+    ttl_days: int = CRE_RESEARCH_TTL_DAYS,
+) -> bool:
+    """Return True only when the CRE cache row is the current version AND within TTL."""
     from datetime import timedelta
-
     if not cre_generated_at:
+        return False
+    if (cre_version or "") != CRE_RESEARCH_VERSION:
         return False
     try:
         generated = datetime.fromisoformat(cre_generated_at)
         if generated.tzinfo is None:
             generated = generated.replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - generated) < timedelta(days=CRE_RESEARCH_TTL_DAYS)
+        return (datetime.now(timezone.utc) - generated) < timedelta(days=ttl_days)
     except Exception:
         return False
+
+
+def is_cre_fresh(cre_generated_at: str | None, cre_version: str | None = None) -> bool:
+    """Backward-compatible alias; prefer is_cre_cache_current for version-aware checks."""
+    return is_cre_cache_current(cre_generated_at, cre_version)
 
 
 def openai_cre_research(
@@ -1526,154 +1539,165 @@ def openai_cre_research(
     display_name: str,
 ) -> dict[str, Any]:
     """
-    Call the OpenAI Responses API with the web_search tool (NOT web_search_preview)
-    to gather recent CRE market context for the given city/metro.
-
-    Uses type: "web_search" with filters.allowed_domains for API-level domain
-    restriction.  Sources are extracted from real url_citation annotations in
-    the response — provenance is grounded in actual search results, not model
-    memory.
+    Call the Responses API hosted web_search tool to gather recent CRE market
+    context.  Requires a model that supports hosted web search (e.g. gpt-4.1-mini).
 
     Returns:
         {
-            "cre_sentences": str,           # 1-2 sentences; "" when no credible data found
-            "research_sources": [...],      # grounded in actual annotation URLs
+            "cre_sentences": str,           # 1-2 sentences; "" when nothing useful
+            "research_sources": [...],      # grounded in actual search results
             "cre_generated_at": str,        # UTC ISO timestamp
+            "cre_research_version": str,    # CRE_RESEARCH_VERSION at generation time
+            "result_type": str,             # "success" | "no_data" | "failure"
         }
 
-    Raises on failure; caller falls back to FIRE Metrics-only summary.
+    Never raises: returns result_type="failure" on any error so the caller can
+    distinguish API failures (short backoff) from no-useful-data (longer cache).
     """
     import logging
     from openai import OpenAI
 
     log = logging.getLogger(__name__)
     metro_label = city_display_name({"city": city, "state": state, "display_name": display_name})
-    log.info("CRE research started: city_key=%s|%s model=%s", city, state, model_name)
-
-    client = OpenAI(api_key=api_key)
-
-    instructions = (
-        "You are a commercial real estate research analyst. "
-        "Search the web for recent (last 6-12 months) multifamily and CRE market data "
-        "for the requested US city and metro area. "
-        "Focus on multifamily/apartment metrics: vacancy rate, asking or effective rent growth, "
-        "new unit deliveries or supply pipeline, absorption, occupancy, and investment/transaction activity. "
-        "Mention office, retail, or industrial only if they materially affect the multifamily investment outlook. "
-        "Write 1-2 concise, neutral, factual sentences summarizing the most important CRE market conditions "
-        "relevant to a multifamily acquisitions investor. "
-        "Use only information from the approved publishers reached via web search. "
-        "If no credible approved-source data is found from search, output only the word NONE. "
-        "Do not distinguish metro statistics from city-boundary data as if they were identical; "
-        "metro figures apply to the wider metro. "
-        "Do not fabricate statistics. Do not include generic filler like 'the market remains dynamic.'"
-    )
-
-    user_message = (
-        f"City: {city}, {state}\n"
-        f"Metro: {metro_label}\n"
-        f"Find recent CRE and multifamily apartment market data for the {metro_label} metro area. "
-        f"Include vacancy, rent growth, new supply/deliveries, absorption, or investment activity "
-        f"from the past 6-12 months from approved sources: CoStar, Yardi Matrix, RealPage, "
-        f"Marcus & Millichap, Colliers, CBRE, JLL, Cushman & Wakefield, Newmark, Berkadia, "
-        f"Freddie Mac Multifamily, CommercialEdge."
-    )
-
-    # web_search (not web_search_preview) supports filters.allowed_domains
-    tool_config: dict[str, Any] = {
-        "type": "web_search",
-        "filters": {
-            "allowed_domains": list(CRE_ALLOWED_DOMAINS),
-        },
-        "search_context_size": "medium",
-    }
-
-    response = client.responses.create(
-        model=model_name,
-        tools=[tool_config],
-        tool_choice="required",  # force the model to actually search
-        input=[
-            {
-                "role": "system",
-                "content": [{"type": "input_text", "text": instructions}],
-            },
-            {
-                "role": "user",
-                "content": [{"type": "input_text", "text": user_message}],
-            },
-        ],
-    )
-
-    # Count web_search_call items for diagnostics
-    web_search_calls = sum(
-        1 for item in (response.output or [])
-        if getattr(item, "type", "") == "web_search_call"
-    )
-    log.info("CRE web_search_call count=%d city_key=%s|%s", web_search_calls, city, state)
-
-    # Extract real source URLs from url_citation annotations in text output.
-    # Annotations are grounded in what the search tool actually retrieved.
-    raw_text = (response.output_text or "").strip()
-    annotation_sources: list[dict[str, Any]] = []
-    for item in (response.output or []):
-        if getattr(item, "type", "") != "message":
-            continue
-        for part in (getattr(item, "content", None) or []):
-            for ann in (getattr(part, "annotations", None) or []):
-                if getattr(ann, "type", "") == "url_citation":
-                    annotation_sources.append({
-                        "url": str(getattr(ann, "url", "") or "").strip(),
-                        "title": str(getattr(ann, "title", "") or "").strip(),
-                    })
 
     log.info(
-        "CRE raw annotation sources=%d city_key=%s|%s",
-        len(annotation_sources), city, state,
+        "FIRE CRE research started: city_key=%s|%s model=%s version=%s",
+        city, state, model_name, CRE_RESEARCH_VERSION,
     )
 
-    # Server-side domain validation: only keep approved-domain URLs
-    validated_sources: list[dict[str, Any]] = []
-    seen_urls: set[str] = set()
-    for src in annotation_sources:
-        url = src.get("url") or ""
-        if not url or url in seen_urls:
-            continue
-        if validate_research_source(src):
-            seen_urls.add(url)
-            hostname = ""
-            try:
-                from urllib.parse import urlparse
-                hostname = urlparse(url).hostname or ""
-            except Exception:
-                pass
-            validated_sources.append({
-                "publisher": _hostname_to_publisher(hostname),
-                "title": src.get("title") or "",
-                "published_date": "",
-                "url": url,
-            })
-        if len(validated_sources) >= 3:
-            break
-
-    log.info(
-        "CRE approved sources=%d city_key=%s|%s",
-        len(validated_sources), city, state,
-    )
-
-    # Strip inline citation markers like [1], [2] from display text
-    cre_sentences = re.sub(r"\[\d+\]", "", raw_text).strip()
-    if cre_sentences.upper() == "NONE" or not cre_sentences:
-        cre_sentences = ""
-
-    log.info(
-        "CRE text_present=%s city_key=%s|%s",
-        bool(cre_sentences), city, state,
-    )
-
-    return {
-        "cre_sentences": cre_sentences,
-        "research_sources": validated_sources,
+    _empty = {
+        "cre_sentences": "",
+        "research_sources": [],
         "cre_generated_at": utc_now_iso(),
+        "cre_research_version": CRE_RESEARCH_VERSION,
     }
+
+    try:
+        client = OpenAI(api_key=api_key)
+
+        # One compact search prompt — keeps costs low
+        search_prompt = (
+            f"Find recent acquisition-relevant multifamily/CRE research for "
+            f"{city}, {state} / the {metro_label} metro from approved publishers "
+            f"(CoStar, Yardi Matrix, RealPage, Marcus & Millichap, Colliers, "
+            f"CBRE, JLL, Cushman & Wakefield, Newmark, Berkadia, Freddie Mac "
+            f"Multifamily, CommercialEdge). "
+            f"Prefer the past 6 months, then 12 months. "
+            f"Return 1-2 concise factual sentences on vacancy/occupancy, rent growth, "
+            f"supply/deliveries, absorption, investment activity, or cap rates. "
+            f"Distinguish metro data from city-boundary data. "
+            f"Output only the word NONE if no useful approved-source data is found."
+        )
+
+        tool_config: dict[str, Any] = {
+            "type": "web_search",
+            "filters": {"allowed_domains": list(CRE_ALLOWED_DOMAINS)},
+            "search_context_size": "low",
+        }
+
+        response = client.responses.create(
+            model=model_name,
+            tools=[tool_config],
+            tool_choice="required",
+            include=["web_search_call.action.sources"],
+            input=[{"role": "user", "content": [{"type": "input_text", "text": search_prompt}]}],
+        )
+
+        # Diagnostic counts
+        web_search_calls = 0
+        action_source_count = 0
+        for item in (response.output or []):
+            item_type = getattr(item, "type", "")
+            if item_type == "web_search_call":
+                web_search_calls += 1
+                action = getattr(item, "action", None)
+                sources = getattr(action, "sources", None) or []
+                action_source_count += len(sources)
+
+        raw_text = (response.output_text or "").strip()
+
+        # Collect URLs from action.sources (explicit include) and url_citation annotations
+        url_sources: list[dict[str, Any]] = []
+        for item in (response.output or []):
+            item_type = getattr(item, "type", "")
+            if item_type == "web_search_call":
+                action = getattr(item, "action", None)
+                for src in (getattr(action, "sources", None) or []):
+                    url = str(getattr(src, "url", "") or "").strip()
+                    if url:
+                        url_sources.append({"url": url, "title": ""})
+            elif item_type == "message":
+                for part in (getattr(item, "content", None) or []):
+                    for ann in (getattr(part, "annotations", None) or []):
+                        if getattr(ann, "type", "") == "url_citation":
+                            url_sources.append({
+                                "url": str(getattr(ann, "url", "") or "").strip(),
+                                "title": str(getattr(ann, "title", "") or "").strip(),
+                            })
+
+        annotation_count = sum(
+            1 for i in (response.output or [])
+            if getattr(i, "type", "") == "message"
+            for p in (getattr(i, "content", None) or [])
+            for a in (getattr(p, "annotations", None) or [])
+            if getattr(a, "type", "") == "url_citation"
+        )
+
+        log.info(
+            "FIRE CRE response: city_key=%s|%s web_search_calls=%d "
+            "action_sources=%d annotations=%d",
+            city, state, web_search_calls, action_source_count, annotation_count,
+        )
+
+        # Server-side domain validation
+        validated_sources: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+        for src in url_sources:
+            url = src.get("url") or ""
+            if not url or url in seen_urls:
+                continue
+            if validate_research_source(src):
+                seen_urls.add(url)
+                hostname = ""
+                try:
+                    from urllib.parse import urlparse
+                    hostname = urlparse(url).hostname or ""
+                except Exception:
+                    pass
+                validated_sources.append({
+                    "publisher": _hostname_to_publisher(hostname),
+                    "title": src.get("title") or "",
+                    "published_date": "",
+                    "url": url,
+                })
+            if len(validated_sources) >= 3:
+                break
+
+        # Strip citation markers; check for no-data sentinel
+        cre_sentences = re.sub(r"\[\d+\]", "", raw_text).strip()
+        if cre_sentences.upper() == "NONE" or not cre_sentences:
+            cre_sentences = ""
+
+        log.info(
+            "FIRE CRE done: city_key=%s|%s approved_sources=%d text_present=%s",
+            city, state, len(validated_sources), bool(cre_sentences),
+        )
+
+        result_type = "success" if (cre_sentences or validated_sources) else "no_data"
+        return {
+            "cre_sentences": cre_sentences,
+            "research_sources": validated_sources,
+            "cre_generated_at": utc_now_iso(),
+            "cre_research_version": CRE_RESEARCH_VERSION,
+            "result_type": result_type,
+        }
+
+    except Exception as exc:
+        log.warning(
+            "FIRE CRE failed: city_key=%s|%s error=%s: %s",
+            city, state, type(exc).__name__, str(exc)[:200],
+        )
+        return {**_empty, "result_type": "failure"}
 
 
 # Map CRE publisher hostnames to display names

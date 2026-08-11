@@ -3,24 +3,27 @@
 
 {% block content %}
 <div class="fire-metrics-surface">
-<div class="page-header">
-  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
-    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
-      <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
-    </svg>
-    Back to Dashboard
-  </a>
-  <h1 class="page-title">FIRE Metrics</h1>
-  <p class="page-subtitle">Search city-level market indicators</p>
-  <div class="status-chip-row" style="margin-top:10px;">
-    <span id="status-chip" class="source-badge source-badge-{{ status.status|default('missing') }}">{{ status.status|default('missing')|upper }}</span>
-    <span id="last-refreshed-text" class="result-period">Last refreshed: {{ status.last_refresh_at or 'Never' }}</span>
-    <span id="city-count-text" class="result-period">Cities indexed: {{ status.city_count or 0 }}</span>
+<div class="fire-metrics-hero">
+  <div class="fire-metrics-hero-inner">
+    <a href="{{ url_for('dashboard') }}" class="fire-metrics-back" aria-label="Back to Dashboard">
+      <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14"><path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd"/></svg>
+      Dashboard
+    </a>
+    <div class="fire-metrics-hero-title-row">
+      <span class="fire-metrics-hero-tag">FIRE Capital</span>
+      <h1 class="fire-metrics-hero-title">FIRE Metrics</h1>
+      <p class="fire-metrics-hero-sub">City-level market screening for acquisitions</p>
+    </div>
+    <div class="fire-metrics-hero-status">
+      <span id="status-chip" class="source-badge source-badge-{{ status.status|default('missing') }}">{{ status.status|default('missing')|upper }}</span>
+      <span id="last-refreshed-text" class="result-period">Last refreshed: {{ status.last_refresh_at or 'Never' }}</span>
+      <span id="city-count-text" class="result-period">Cities indexed: {{ status.city_count or 0 }}</span>
+    </div>
   </div>
-  <p id="last-refresh-error-text" class="page-subtitle" style="max-width:900px; margin-top:8px; color:#991b1b; {% if not status.last_refresh_error %}display:none;{% endif %}">
-    {% if status.last_refresh_error %}Last refresh had errors: {{ status.last_refresh_error }}{% endif %}
-  </p>
 </div>
+<p id="last-refresh-error-text" class="page-subtitle" style="max-width:900px; margin-bottom:16px; color:#991b1b; {% if not status.last_refresh_error %}display:none;{% endif %}">
+  {% if status.last_refresh_error %}Last refresh had errors: {{ status.last_refresh_error }}{% endif %}
+</p>
 
 <div class="card">
   <h2 class="dashboard-section-title">Search Dashboard</h2>

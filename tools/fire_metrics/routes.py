@@ -305,7 +305,11 @@ def city_summary():
                 )
                 cache_row = None
             if cache_row:
-                cre_fresh = ai_summary.is_cre_fresh(cache_row.get("cre_generated_at"))
+                cached_cre_version = cache_row.get("cre_research_version")
+                cre_fresh = ai_summary.is_cre_cache_current(
+                    cache_row.get("cre_generated_at"),
+                    cached_cre_version,
+                )
                 cre_sentences = str(cache_row.get("cre_sentences_text") or "").strip()
                 research_sources: list[dict] = []
                 try:
@@ -313,43 +317,66 @@ def city_summary():
                 except (json.JSONDecodeError, ValueError):
                     research_sources = []
 
+                current_app.logger.info(
+                    "FIRE CRE cache state: city=%s|%s version=%s expected=%s fresh=%s",
+                    selected_city["city"], selected_city["state"],
+                    cached_cre_version, ai_summary.CRE_RESEARCH_VERSION, cre_fresh,
+                )
+
                 if not cre_fresh and _summary_enabled() and _summary_api_key():
-                    try:
-                        cre_model = _cre_research_model_name()
-                        current_app.logger.info(
-                            "FIRE CRE stale refresh: city=%s state=%s model=%s",
-                            selected_city["city"], selected_city["state"], cre_model,
-                        )
-                        cre_result = ai_summary.openai_cre_research(
-                            api_key=_summary_api_key(),
-                            model_name=cre_model,
-                            city=selected_city["city"],
-                            state=selected_city["state"],
-                            display_name=str(selected_city.get("display_name") or ""),
-                        )
+                    cre_model = _cre_research_model_name()
+                    current_app.logger.info(
+                        "FIRE CRE refresh needed: city=%s state=%s model=%s",
+                        selected_city["city"], selected_city["state"], cre_model,
+                    )
+                    cre_result = ai_summary.openai_cre_research(
+                        api_key=_summary_api_key(),
+                        model_name=cre_model,
+                        city=selected_city["city"],
+                        state=selected_city["state"],
+                        display_name=str(selected_city.get("display_name") or ""),
+                    )
+                    result_type = cre_result.get("result_type", "failure")
+                    current_app.logger.info(
+                        "FIRE CRE refresh result: city=%s state=%s result_type=%s sources=%d",
+                        selected_city["city"], selected_city["state"],
+                        result_type, len(cre_result.get("research_sources") or []),
+                    )
+                    # Only update visible CRE content when we actually got useful data
+                    if result_type in ("success", "no_data"):
                         cre_sentences = cre_result.get("cre_sentences") or ""
                         research_sources = cre_result.get("research_sources") or []
-                        current_app.logger.info(
-                            "FIRE CRE stale refresh done: city=%s state=%s sources=%d",
-                            selected_city["city"], selected_city["state"], len(research_sources),
-                        )
-                        db_module.update_city_summary_cre_fields(
-                            conn,
-                            city=selected_city["city"],
-                            state=selected_city["state"],
-                            data_fingerprint=data_fingerprint,
-                            model_name=model_name,
-                            prompt_version=ai_summary.PROMPT_VERSION,
-                            cre_sentences_text=cre_sentences,
-                            research_sources_json=json.dumps(research_sources),
-                            cre_generated_at=cre_result.get("cre_generated_at") or ai_summary.utc_now_iso(),
-                        )
-                    except Exception as cre_exc:
-                        current_app.logger.warning(
-                            "FIRE CRE stale refresh failed (non-fatal): city=%s state=%s error=%s: %s",
-                            selected_city["city"], selected_city["state"],
-                            type(cre_exc).__name__, str(cre_exc)[:120],
-                        )
+                    # Determine what TTL to store (failures get short backoff)
+                    if result_type == "failure":
+                        import datetime as _dt
+                        backoff_at = (
+                            _dt.datetime.now(_dt.timezone.utc)
+                            - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
+                            + _dt.timedelta(minutes=ai_summary.CRE_FAILURE_BACKOFF_MINUTES)
+                        ).isoformat()
+                        store_at = backoff_at
+                    elif result_type == "no_data":
+                        import datetime as _dt
+                        no_data_at = (
+                            _dt.datetime.now(_dt.timezone.utc)
+                            - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
+                            + _dt.timedelta(hours=ai_summary.CRE_NEGATIVE_CACHE_TTL_HOURS)
+                        ).isoformat()
+                        store_at = no_data_at
+                    else:
+                        store_at = cre_result.get("cre_generated_at") or ai_summary.utc_now_iso()
+                    db_module.update_city_summary_cre_fields(
+                        conn,
+                        city=selected_city["city"],
+                        state=selected_city["state"],
+                        data_fingerprint=data_fingerprint,
+                        model_name=model_name,
+                        prompt_version=ai_summary.PROMPT_VERSION,
+                        cre_sentences_text=cre_sentences if result_type != "failure" else (cache_row.get("cre_sentences_text") or ""),
+                        research_sources_json=json.dumps(research_sources if result_type != "failure" else (research_sources)),
+                        cre_generated_at=store_at,
+                        cre_research_version=cre_result.get("cre_research_version") or ai_summary.CRE_RESEARCH_VERSION,
+                    )
 
                 full_summary = cache_row["summary_text"]
                 if cre_sentences:
@@ -410,37 +437,54 @@ def city_summary():
             except Exception:
                 structured = ai_summary.fallback_summary(selected_city, benchmarks)
 
-            # CRE research: attempted after FIRE Metrics summary; failure is non-fatal
+            # CRE research: never raises; returns result_type="failure" on errors
             cre_sentences = ""
             research_sources: list[dict] = []
             cre_generated_at = ai_summary.utc_now_iso()
-            try:
-                cre_model = _cre_research_model_name()
-                current_app.logger.info(
-                    "FIRE CRE starting: city=%s state=%s model=%s",
-                    selected_city["city"], selected_city["state"], cre_model,
-                )
-                cre_result = ai_summary.openai_cre_research(
-                    api_key=api_key,
-                    model_name=cre_model,
-                    city=selected_city["city"],
-                    state=selected_city["state"],
-                    display_name=str(selected_city.get("display_name") or ""),
-                )
+            cre_research_version_stored: str | None = None
+            cre_model = _cre_research_model_name()
+            current_app.logger.info(
+                "FIRE CRE starting: city=%s state=%s model=%s",
+                selected_city["city"], selected_city["state"], cre_model,
+            )
+            cre_result = ai_summary.openai_cre_research(
+                api_key=api_key,
+                model_name=cre_model,
+                city=selected_city["city"],
+                state=selected_city["state"],
+                display_name=str(selected_city.get("display_name") or ""),
+            )
+            result_type = cre_result.get("result_type", "failure")
+            current_app.logger.info(
+                "FIRE CRE complete: city=%s state=%s result_type=%s sources=%d",
+                selected_city["city"], selected_city["state"],
+                result_type, len(cre_result.get("research_sources") or []),
+            )
+            if result_type == "success":
                 cre_sentences = cre_result.get("cre_sentences") or ""
                 research_sources = cre_result.get("research_sources") or []
                 cre_generated_at = cre_result.get("cre_generated_at") or cre_generated_at
-                current_app.logger.info(
-                    "FIRE CRE done: city=%s state=%s sentences=%s sources=%d",
-                    selected_city["city"], selected_city["state"],
-                    bool(cre_sentences), len(research_sources),
-                )
-            except Exception as cre_exc:
-                current_app.logger.warning(
-                    "FIRE CRE failed (non-fatal): city=%s state=%s error=%s: %s",
-                    selected_city["city"], selected_city["state"],
-                    type(cre_exc).__name__, str(cre_exc)[:120],
-                )
+                cre_research_version_stored = cre_result.get("cre_research_version")
+            elif result_type == "no_data":
+                # Store a negative-cache timestamp so we don't retry for 24 h
+                import datetime as _dt
+                cre_generated_at = (
+                    _dt.datetime.now(_dt.timezone.utc)
+                    - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
+                    + _dt.timedelta(hours=ai_summary.CRE_NEGATIVE_CACHE_TTL_HOURS)
+                ).isoformat()
+                cre_research_version_stored = cre_result.get("cre_research_version")
+            elif result_type == "failure":
+                # Short backoff — allow retry after CRE_FAILURE_BACKOFF_MINUTES
+                import datetime as _dt
+                cre_generated_at = (
+                    _dt.datetime.now(_dt.timezone.utc)
+                    - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
+                    + _dt.timedelta(minutes=ai_summary.CRE_FAILURE_BACKOFF_MINUTES)
+                ).isoformat()
+                # Don't store current version on failure — leave version NULL
+                # so the next check treats it as legacy and retries immediately
+                cre_research_version_stored = None
 
             summary_text = ai_summary.combined_summary(structured)
             full_summary = f"{summary_text} {cre_sentences}".strip() if cre_sentences else summary_text
@@ -459,6 +503,7 @@ def city_summary():
                 "cre_sentences_text": cre_sentences,
                 "research_sources_json": json.dumps(research_sources),
                 "cre_generated_at": cre_generated_at,
+                "cre_research_version": cre_research_version_stored,
             }
 
             try:

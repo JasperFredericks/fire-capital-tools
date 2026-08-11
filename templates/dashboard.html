@@ -2,9 +2,14 @@
 {% block title %}Dashboard — FIRE Capital Tools{% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <h1 class="page-title">Dashboard</h1>
-  <p class="page-subtitle">All your property management tools in one place.</p>
+<div class="dashboard-hero">
+  <div class="dashboard-hero-inner">
+    <div class="dashboard-hero-text">
+      <h1 class="dashboard-hero-title">FIRE Capital Tools</h1>
+      <p class="dashboard-hero-sub">Internal platform for acquisitions, market research, and property operations.</p>
+    </div>
+    <div class="dashboard-hero-accent" aria-hidden="true"></div>
+  </div>
 </div>
 
 <!-- ── Operations ─────────────────────────────────────────────────── -->
@@ -103,14 +108,14 @@
     <span class="tool-tag tag-live">Live</span>
   </a>
 
-  <a href="{{ url_for('fire_metrics.index') }}" class="tool-card">
-    <div class="tool-card-icon" style="background:#f9fafb;">
-      <svg viewBox="0 0 20 20" fill="#9ca3af">
+  <a href="{{ url_for('fire_metrics.index') }}" class="tool-card tool-card-fire-metrics">
+    <div class="tool-card-icon tool-card-icon-fire">
+      <svg viewBox="0 0 20 20" fill="currentColor">
         <path fill-rule="evenodd" d="M12 7a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0V8.414l-4.293 4.293a1 1 0 01-1.414 0L8 10.414l-4.293 4.293a1 1 0 01-1.414-1.414l5-5a1 1 0 011.414 0L11 10.586 14.586 7H12z" clip-rule="evenodd"/>
       </svg>
     </div>
-    <div class="tool-card-title">FIRE Metric</div>
-    <div class="tool-card-desc">Refresh market indicator workbooks with source-backed Census, ACS, BLS, FEMA, crime, and formatting workflows.</div>
+    <div class="tool-card-title">FIRE Metrics</div>
+    <div class="tool-card-desc">City-level market screening — employment, population, income, crime, climate, and AI-powered CRE research from institutional sources.</div>
     <span class="tool-tag tag-live">Live</span>
   </a>
 

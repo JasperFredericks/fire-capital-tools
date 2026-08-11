@@ -153,6 +153,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE fire_metrics_city_summaries ADD COLUMN research_sources_json TEXT NOT NULL DEFAULT '[]'")
     if "cre_generated_at" not in summaries_existing:
         conn.execute("ALTER TABLE fire_metrics_city_summaries ADD COLUMN cre_generated_at TEXT")
+    if "cre_research_version" not in summaries_existing:
+        conn.execute("ALTER TABLE fire_metrics_city_summaries ADD COLUMN cre_research_version TEXT")
     conn.commit()
 
 
@@ -479,13 +481,15 @@ def upsert_city_summary_cache(conn: sqlite3.Connection, row: dict[str, Any]) -> 
             generated_at = excluded.generated_at,
             cre_sentences_text = excluded.cre_sentences_text,
             research_sources_json = excluded.research_sources_json,
-            cre_generated_at = excluded.cre_generated_at
+            cre_generated_at = excluded.cre_generated_at,
+            cre_research_version = excluded.cre_research_version
         """,
         {
             **row,
             "cre_sentences_text": row.get("cre_sentences_text") or "",
             "research_sources_json": row.get("research_sources_json") or "[]",
             "cre_generated_at": row.get("cre_generated_at"),
+            "cre_research_version": row.get("cre_research_version"),
         },
     )
     conn.commit()
@@ -502,6 +506,7 @@ def update_city_summary_cre_fields(
     cre_sentences_text: str,
     research_sources_json: str,
     cre_generated_at: str,
+    cre_research_version: str | None = None,
 ) -> None:
     """Refresh only the CRE fields of an existing cached summary row."""
     conn.execute(
@@ -509,14 +514,15 @@ def update_city_summary_cre_fields(
         UPDATE fire_metrics_city_summaries
         SET cre_sentences_text = ?,
             research_sources_json = ?,
-            cre_generated_at = ?
+            cre_generated_at = ?,
+            cre_research_version = ?
         WHERE city = ? AND state = ?
           AND data_fingerprint = ?
           AND model_name = ?
           AND prompt_version = ?
         """,
         (
-            cre_sentences_text, research_sources_json, cre_generated_at,
+            cre_sentences_text, research_sources_json, cre_generated_at, cre_research_version,
             city, state, data_fingerprint, model_name, prompt_version,
         ),
     )

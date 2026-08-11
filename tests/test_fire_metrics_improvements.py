@@ -152,28 +152,45 @@ class TestCREAllowlist(unittest.TestCase):
 
 class TestCRECacheFreshness(unittest.TestCase):
 
-    def test_fresh_timestamp_returns_true(self):
+    def test_fresh_timestamp_and_current_version_returns_true(self):
         recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-        self.assertTrue(summary.is_cre_fresh(recent))
+        self.assertTrue(summary.is_cre_cache_current(recent, summary.CRE_RESEARCH_VERSION))
 
     def test_stale_timestamp_returns_false(self):
         old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
-        self.assertFalse(summary.is_cre_fresh(old))
+        self.assertFalse(summary.is_cre_cache_current(old, summary.CRE_RESEARCH_VERSION))
 
-    def test_none_returns_false(self):
-        self.assertFalse(summary.is_cre_fresh(None))
+    def test_none_timestamp_returns_false(self):
+        self.assertFalse(summary.is_cre_cache_current(None, summary.CRE_RESEARCH_VERSION))
 
     def test_empty_string_returns_false(self):
-        self.assertFalse(summary.is_cre_fresh(""))
+        self.assertFalse(summary.is_cre_cache_current("", summary.CRE_RESEARCH_VERSION))
 
     def test_at_ttl_boundary_returns_false(self):
-        # Exactly at the TTL edge should be stale (timedelta comparison is exclusive)
         exactly_at_ttl = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        self.assertFalse(summary.is_cre_fresh(exactly_at_ttl))
+        self.assertFalse(summary.is_cre_cache_current(exactly_at_ttl, summary.CRE_RESEARCH_VERSION))
 
     def test_just_within_ttl_returns_true(self):
         just_within = (datetime.now(timezone.utc) - timedelta(days=6, hours=23)).isoformat()
-        self.assertTrue(summary.is_cre_fresh(just_within))
+        self.assertTrue(summary.is_cre_cache_current(just_within, summary.CRE_RESEARCH_VERSION))
+
+    def test_old_version_is_immediately_stale(self):
+        """A row with a valid timestamp but old CRE version is not fresh."""
+        fresh_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        self.assertFalse(summary.is_cre_cache_current(fresh_ts, "cre_v1"))
+        self.assertFalse(summary.is_cre_cache_current(fresh_ts, "cre_v2"))
+
+    def test_null_version_is_immediately_stale(self):
+        """A row with NULL version is never considered current."""
+        fresh_ts = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        self.assertFalse(summary.is_cre_cache_current(fresh_ts, None))
+        self.assertFalse(summary.is_cre_cache_current(fresh_ts, ""))
+
+    def test_backward_compat_is_cre_fresh(self):
+        """is_cre_fresh still works via alias but now requires version."""
+        recent = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        self.assertTrue(summary.is_cre_fresh(recent, summary.CRE_RESEARCH_VERSION))
+        self.assertFalse(summary.is_cre_fresh(recent, "cre_v1"))
 
 
 class TestCRESourceStructure(unittest.TestCase):
@@ -227,53 +244,189 @@ class TestCRESourceStructure(unittest.TestCase):
 
 class TestCREAPIShape(unittest.TestCase):
     """
-    Tests that WOULD HAVE CAUGHT the production failure.
-    Verifies the corrected web_search tool shape and source extraction logic.
+    Tests that verify the corrected API shape (all mocked — no real API calls).
     """
 
     def _inspect_source_code(self) -> str:
         import inspect
         return inspect.getsource(summary.openai_cre_research)
 
+    def test_default_model_is_gpt_4_1_mini(self):
+        """Default CRE model must be gpt-4.1-mini (supports hosted web_search)."""
+        svc_src = open(str(Path(__file__).parent.parent / "tools" / "fire_metrics" / "services.py")).read()
+        self.assertIn("gpt-4.1-mini", svc_src)
+        self.assertNotIn("gpt-4o-mini\"", svc_src)  # must not silently use gpt-4o-mini
+
+    def test_gpt_4o_mini_not_the_default(self):
+        """gpt-4o-mini must not be the default CRE model (it doesn't support web_search)."""
+        cfg_src = open(str(Path(__file__).parent.parent / "config.py")).read()
+        # The default should not be gpt-4o-mini (only gpt-4.1-mini)
+        self.assertNotIn("\"gpt-4o-mini\"", cfg_src)
+
     def test_uses_web_search_not_web_search_preview(self):
-        """CRE call must use 'web_search', NOT 'web_search_preview'."""
+        """CRE call uses 'web_search', NOT 'web_search_preview'."""
         src = self._inspect_source_code()
         self.assertIn('"web_search"', src)
         self.assertNotIn('"web_search_preview"', src)
 
-    def test_allowed_domains_in_filters_not_tool_body(self):
-        """Domain filtering must be under filters.allowed_domains, not in tool body."""
+    def test_search_context_size_is_low(self):
+        """search_context_size must be 'low' to minimize cost."""
         src = self._inspect_source_code()
-        # 'filters' key must appear
+        self.assertIn('"low"', src)
+
+    def test_allowed_domains_in_filters(self):
+        """Domain filtering is under filters.allowed_domains."""
+        src = self._inspect_source_code()
         self.assertIn('"filters"', src)
-        # allowed_domains must be inside filters, not a direct sibling of type
         self.assertIn('"allowed_domains"', src)
-        # The old broken pattern must not appear
-        self.assertNotIn('"web_search_preview": {', src)
 
     def test_tool_choice_required_present(self):
-        """tool_choice='required' must be passed to force search execution."""
+        """tool_choice='required' forces web search to happen."""
         src = self._inspect_source_code()
         self.assertIn('tool_choice="required"', src)
 
-    def test_sources_extracted_from_annotations_not_model_json(self):
-        """Sources must come from url_citation annotations, not model-generated JSON."""
+    def test_include_action_sources(self):
+        """include parameter requests web_search_call.action.sources."""
         src = self._inspect_source_code()
-        # Must access url_citation annotations
-        self.assertIn("url_citation", src)
-        self.assertIn("annotations", src)
-        # Must NOT rely on json.loads(raw) for the primary source list
-        self.assertNotIn("parsed.get(\"research_sources\")", src)
+        self.assertIn("web_search_call.action.sources", src)
 
-    def test_non_approved_annotation_url_rejected(self):
-        """validate_research_source rejects non-approved URLs even when they come from annotations."""
-        bad_src = {"url": "https://zillow.com/report", "title": "Zillow Report"}
-        self.assertFalse(summary.validate_research_source(bad_src))
+    def test_only_one_api_call_per_request(self):
+        """openai_cre_research makes exactly one responses.create call."""
+        mock_response = MagicMock()
+        mock_response.output = []
+        mock_response.output_text = "NONE"
+        calls = []
+        def mock_create(**kwargs):
+            calls.append(kwargs)
+            return mock_response
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.side_effect = mock_create
+            summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="Austin", state="TX", display_name="Austin, TX",
+            )
+        self.assertEqual(len(calls), 1, "Must make exactly one API call per request")
 
-    def test_approved_annotation_url_accepted(self):
-        """validate_research_source accepts approved URLs from annotations."""
-        good_src = {"url": "https://yardimatrix.com/report", "title": "Yardi Report"}
-        self.assertTrue(summary.validate_research_source(good_src))
+    def test_sources_extracted_from_action_sources(self):
+        """Sources are extracted from web_search_call action.sources."""
+        mock_action_src = MagicMock()
+        mock_action_src.url = "https://cbre.com/report-2026"
+        mock_action = MagicMock()
+        mock_action.sources = [mock_action_src]
+        mock_ws_call = MagicMock()
+        mock_ws_call.type = "web_search_call"
+        mock_ws_call.action = mock_action
+        mock_response = MagicMock()
+        mock_response.output = [mock_ws_call]
+        mock_response.output_text = "CBRE reports improving occupancy in the Austin metro."
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="Austin", state="TX", display_name="Austin, TX",
+            )
+        self.assertEqual(result["result_type"], "success")
+        self.assertGreater(len(result["research_sources"]), 0)
+        self.assertEqual(result["research_sources"][0]["url"], "https://cbre.com/report-2026")
+
+    def test_sources_extracted_from_url_citation_annotations(self):
+        """Sources are also extracted from url_citation annotations in text output."""
+        mock_ann = MagicMock()
+        mock_ann.type = "url_citation"
+        mock_ann.url = "https://yardimatrix.com/report"
+        mock_ann.title = "Yardi Q2 Report"
+        mock_part = MagicMock()
+        mock_part.annotations = [mock_ann]
+        mock_msg = MagicMock()
+        mock_msg.type = "message"
+        mock_msg.content = [mock_part]
+        mock_response = MagicMock()
+        mock_response.output = [mock_msg]
+        mock_response.output_text = "Vacancy declined in the Raleigh metro."
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="Raleigh", state="NC", display_name="Raleigh, NC",
+            )
+        self.assertEqual(result["result_type"], "success")
+        urls = [s["url"] for s in result["research_sources"]]
+        self.assertIn("https://yardimatrix.com/report", urls)
+
+    def test_non_approved_domain_source_rejected(self):
+        """Non-approved domain URLs from action.sources are rejected server-side."""
+        mock_action_src = MagicMock()
+        mock_action_src.url = "https://zillow.com/research"
+        mock_action = MagicMock()
+        mock_action.sources = [mock_action_src]
+        mock_ws_call = MagicMock()
+        mock_ws_call.type = "web_search_call"
+        mock_ws_call.action = mock_action
+        mock_response = MagicMock()
+        mock_response.output = [mock_ws_call]
+        mock_response.output_text = "Some content."
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="Dallas", state="TX", display_name="Dallas, TX",
+            )
+        approved_urls = [s["url"] for s in result["research_sources"]]
+        self.assertNotIn("https://zillow.com/research", approved_urls)
+
+    def test_none_response_produces_no_data_result_type(self):
+        """Model outputting 'NONE' → result_type='no_data'."""
+        mock_response = MagicMock()
+        mock_response.output = []
+        mock_response.output_text = "NONE"
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="Miami", state="FL", display_name="Miami, FL",
+            )
+        self.assertEqual(result["result_type"], "no_data")
+        self.assertEqual(result["cre_sentences"], "")
+        self.assertEqual(result["research_sources"], [])
+
+    def test_api_exception_produces_failure_result_type(self):
+        """Any API exception → result_type='failure' (never raises)."""
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.side_effect = RuntimeError("Connection error")
+            result = summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="NYC", state="NY", display_name="New York, NY",
+            )
+        self.assertEqual(result["result_type"], "failure")
+        self.assertEqual(result["cre_sentences"], "")
+
+    def test_successful_result_stores_current_cre_version(self):
+        """Successful result includes the current CRE_RESEARCH_VERSION."""
+        mock_response = MagicMock()
+        mock_response.output = []
+        mock_response.output_text = "Vacancy is falling in the NYC metro."
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="NYC", state="NY", display_name="New York, NY",
+            )
+        self.assertEqual(result["cre_research_version"], summary.CRE_RESEARCH_VERSION)
+
+    def test_cre_research_version_is_cre_v3(self):
+        """CRE_RESEARCH_VERSION must be cre_v3 to bust old broken cached results."""
+        self.assertEqual(summary.CRE_RESEARCH_VERSION, "cre_v3")
+
+    def test_cre_version_v1_is_old_version(self):
+        """cre_v1 is NOT the current version."""
+        self.assertNotEqual(summary.CRE_RESEARCH_VERSION, "cre_v1")
+
+    def test_negative_cache_constants_exist(self):
+        """Negative cache and failure backoff constants are defined."""
+        self.assertTrue(hasattr(summary, "CRE_NEGATIVE_CACHE_TTL_HOURS"))
+        self.assertTrue(hasattr(summary, "CRE_FAILURE_BACKOFF_MINUTES"))
+        self.assertGreater(summary.CRE_NEGATIVE_CACHE_TTL_HOURS, 0)
+        self.assertGreater(summary.CRE_FAILURE_BACKOFF_MINUTES, 0)
 
     def test_hostname_to_publisher_mapping(self):
         """_hostname_to_publisher maps known hostnames to display names."""
@@ -282,65 +435,66 @@ class TestCREAPIShape(unittest.TestCase):
         self.assertEqual(summary._hostname_to_publisher("yardimatrix.com"), "Yardi Matrix")
         self.assertEqual(summary._hostname_to_publisher("research.cbre.com"), "CBRE")
 
-    def test_inline_citation_markers_stripped(self):
-        """[1], [2] citation markers are stripped from display text."""
-        raw = "Vacancy declined to 4.5% in Q1 2026.[1] Rent growth was 3%.[2]"
-        cleaned = summary.re.sub(r"\[\d+\]", "", raw).strip()
-        self.assertNotIn("[1]", cleaned)
-        self.assertNotIn("[2]", cleaned)
-        self.assertIn("4.5%", cleaned)
+    def test_cre_version_column_in_db_schema(self):
+        """DB schema includes cre_research_version column."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = Path(f.name)
+        try:
+            with db_module.get_connection(db_path) as conn:
+                cols = {row[1] for row in conn.execute("PRAGMA table_info(fire_metrics_city_summaries)").fetchall()}
+            self.assertIn("cre_research_version", cols)
+        finally:
+            db_path.unlink(missing_ok=True)
 
-    def test_none_response_produces_empty_sentences(self):
-        """Model outputting 'NONE' should yield empty cre_sentences."""
-        # Simulate what the function does when no useful research found
-        raw = "NONE"
-        cre = summary.re.sub(r"\[\d+\]", "", raw).strip()
-        if cre.upper() == "NONE" or not cre:
-            cre = ""
-        self.assertEqual(cre, "")
-
-    def test_missing_cre_timestamp_is_eligible_immediately(self):
-        """A cache row with cre_generated_at=None is immediately eligible for CRE research."""
-        self.assertFalse(summary.is_cre_fresh(None))
-
-    def test_fresh_cre_cache_skips_research(self):
-        """A cache row with cre_generated_at within TTL is considered fresh."""
-        fresh = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
-        self.assertTrue(summary.is_cre_fresh(fresh))
-
-    def test_stale_cre_cache_triggers_research(self):
-        """A cache row with cre_generated_at > TTL is considered stale."""
-        stale = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
-        self.assertFalse(summary.is_cre_fresh(stale))
-
-    def test_web_search_exception_does_not_appear_in_main_response(self):
-        """Simulated web_search exception: normal FIRE summary still returned."""
-        # Route-level: the exception handler catches CRE errors without propagating
-        import inspect
-        route_src = open(
-            str(Path(__file__).parent.parent / "tools" / "fire_metrics" / "routes.py")
-        ).read()
-        # Must have except clause around cre_research call
-        self.assertIn("cre_exc", route_src)
-        # Must log the exception without re-raising
-        self.assertIn("FIRE CRE failed", route_src)
-
-    def test_malformed_api_response_handled_gracefully(self):
-        """Empty/malformed response text yields empty cre_sentences, not an exception."""
-        raw = ""
-        cre = summary.re.sub(r"\[\d+\]", "", raw).strip()
-        if cre.upper() == "NONE" or not cre:
-            cre = ""
-        self.assertEqual(cre, "")
-
-    def test_default_model_is_general_purpose_not_search_preview(self):
-        """Default CRE model must be a general-purpose model (web_search compatible)."""
-        src = open(
-            str(Path(__file__).parent.parent / "tools" / "fire_metrics" / "services.py")
-        ).read()
-        # Default must NOT be gpt-4o-mini-search-preview (only works with web_search_preview)
-        self.assertNotIn("gpt-4o-mini-search-preview", src)
-        self.assertIn("gpt-4o-mini", src)
+    def test_mocked_success_returns_research_sources(self):
+        """city-summary endpoint returns non-empty research_sources on mocked success."""
+        import os
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        original_db = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            os.environ["FIRE_METRICS_DB_PATH"] = tmp.name
+            city = make_city()
+            with db_module.get_connection(Path(tmp.name)) as conn:
+                _seed_cities_table(conn, [city])
+            from app import create_app
+            from config import Config
+            class TestCfg(Config):
+                TESTING = True
+                WTF_CSRF_ENABLED = False
+                SECRET_KEY = "test"
+                FIRE_METRICS_AI_SUMMARIES_ENABLED = True
+                UPLOAD_FOLDER = "/tmp/fire_test_uploads"
+            app = create_app(TestCfg)
+            mock_cre_result = {
+                "cre_sentences": "Vacancy in the Alpha metro declined to 4.2%.",
+                "research_sources": [{"publisher": "CBRE", "title": "Q2 Report", "published_date": "", "url": "https://cbre.com/q2"}],
+                "cre_generated_at": summary.utc_now_iso(),
+                "cre_research_version": summary.CRE_RESEARCH_VERSION,
+                "result_type": "success",
+            }
+            with app.test_request_context(
+                "/tools/fire-metrics/api/city-summary", method="POST",
+                json={"city": "Alpha", "state": "AA"},
+            ):
+                with patch.object(summary, "openai_summary", return_value={
+                    "strength_sentence": "Alpha has solid employment growth.",
+                    "weakness_sentence": "Climate risk is moderate.",
+                    "comparison_sentence": "Overall Alpha is a mixed opportunity.",
+                }), patch.object(summary, "openai_cre_research", return_value=mock_cre_result), \
+                     patch("tools.fire_metrics.routes._summary_api_key", return_value="test-key"), \
+                     patch("tools.fire_metrics.routes._summary_model_name", return_value="gpt-4.1-mini"):
+                    result = city_summary.__wrapped__()
+            response = result[0] if isinstance(result, tuple) else result
+            data = response.get_json()
+            self.assertIsInstance(data.get("research_sources"), list)
+            self.assertGreater(len(data["research_sources"]), 0)
+        finally:
+            Path(tmp.name).unlink(missing_ok=True)
+            if original_db is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db
 
 
     """Verify that CRE research failure never blocks the FIRE Metrics summary."""
@@ -558,7 +712,38 @@ class TestCREDBSchema(unittest.TestCase):
 # Part 2: Analytics row selection (city_key identity + no duplication)
 # ---------------------------------------------------------------------------
 
-class TestAnalyticsRowSelectionLogic(unittest.TestCase):
+class TestFireMetricsLabelCorrection(unittest.TestCase):
+    """Regression: no user-facing UI should say 'FIRE Metric' (singular)."""
+
+    def _template(self, name: str) -> str:
+        return (Path(__file__).parent.parent / "templates" / name).read_text(encoding="utf-8")
+
+    def test_sidebar_says_fire_metrics_plural(self):
+        text = self._template("base.html")
+        # The nav link text should say FIRE Metrics
+        self.assertIn("FIRE Metrics", text)
+        # It must not have the singular label in a nav-link context
+        import re
+        # Match the exact nav-link text area
+        nav_blocks = re.findall(r'class="nav-link[^"]*"[^>]*>.*?</a>', text, re.DOTALL)
+        for block in nav_blocks:
+            if "fire_metrics" in block or "FIRE Metric" in block:
+                # The link text should be plural
+                self.assertIn("FIRE Metrics", block, f"nav-link block still has singular: {block[:120]}")
+
+    def test_dashboard_card_says_fire_metrics_plural(self):
+        text = self._template("dashboard.html")
+        # Must have FIRE Metrics plural in a tool-card-title
+        self.assertIn("FIRE Metrics", text)
+        # Must not have the old singular in a tool-card-title element
+        self.assertNotIn("<div class=\"tool-card-title\">FIRE Metric</div>", text)
+
+    def test_deal_dive_detail_says_fire_metrics_plural(self):
+        text = self._template("tools/deal_dive_detail.html")
+        self.assertNotIn("Market Context (FIRE Metric)</div>", text)
+
+
+
     """
     The analytics row click routes through selectCurrentSearchCity(), which is
     pure JS. We validate the Python-side contracts it depends on:
@@ -717,27 +902,25 @@ class TestMapZoomConfiguration(unittest.TestCase):
         self.assertIn("--fm-navy", css)
         self.assertIn(".fire-metrics-surface", css)
 
-    def test_ai_overview_sources_panel_styled(self):
-        """AI overview sources section has branded styling."""
+    def test_active_nav_uses_fire_orange(self):
+        """Active nav link uses FIRE orange, not generic blue."""
         css = self._css_text()
-        self.assertIn(".fire-ai-overview-sources", css)
-        self.assertIn(".fire-ai-sources-list", css)
-
-    def test_active_analytics_row_uses_orange_accent(self):
-        """Active analytics row left accent uses FIRE orange."""
-        css = self._css_text()
-        idx = css.find(".fire-analytics-row-active td:first-child")
+        idx = css.find(".nav-link.active")
         idx_end = css.find("\n}", idx)
         block = css[idx:idx_end]
-        self.assertIn("#e8590c", block)
+        self.assertIn("#fb923c", block)  # orange text
 
-    def test_active_city_chip_uses_orange(self):
-        """Active city chip uses FIRE orange treatment."""
+    def test_fire_metrics_hero_present(self):
+        """FIRE Metrics has a branded navy hero header."""
         css = self._css_text()
-        idx = css.find(".fire-city-chip.active")
-        idx_end = css.find("\n}", idx)
-        block = css[idx:idx_end]
-        self.assertIn("#e8590c", block)
+        self.assertIn(".fire-metrics-hero", css)
+        self.assertIn(".fire-metrics-hero-title", css)
+
+    def test_dashboard_hero_present(self):
+        """Dashboard has a branded navy hero section."""
+        css = self._css_text()
+        self.assertIn(".dashboard-hero", css)
+        self.assertIn(".dashboard-hero-title", css)
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +945,7 @@ class TestExistingBehaviorPreserved(unittest.TestCase):
         self.assertEqual(summary.count_sentences(combined), 3)
 
     def test_cre_research_version_constant(self):
-        self.assertEqual(summary.CRE_RESEARCH_VERSION, "cre_v1")
+        self.assertEqual(summary.CRE_RESEARCH_VERSION, "cre_v3")
 
     def test_cre_ttl_days_constant(self):
         self.assertEqual(summary.CRE_RESEARCH_TTL_DAYS, 7)
