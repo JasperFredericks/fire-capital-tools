@@ -24,6 +24,7 @@ class Config:
     GOOGLE_MAPS_MAP_ID: str = os.environ.get("GOOGLE_MAPS_MAP_ID", "")
     OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
     FIRE_METRICS_SUMMARY_MODEL: str = os.environ.get("FIRE_METRICS_SUMMARY_MODEL", "")
+    FIRE_METRICS_CRE_MODEL: str = os.environ.get("FIRE_METRICS_CRE_MODEL", "gpt-4o-mini")
     FIRE_METRICS_AI_SUMMARIES_ENABLED: bool = os.environ.get("FIRE_METRICS_AI_SUMMARIES_ENABLED", "false").lower() == "true"
 
     # ── File uploads ───────────────────────────────────────────────────────

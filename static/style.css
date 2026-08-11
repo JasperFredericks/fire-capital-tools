@@ -1095,6 +1095,28 @@ hr.divider {
   box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
 }
 
+/* ── FIRE Metrics scoped brand tokens ──────────────────────────────────────
+   Applied to the .fire-metrics-surface wrapper in fire_metrics.html so these
+   variables are available to all FIRE Metrics-specific descendants without
+   leaking into other tools. */
+.fire-metrics-surface {
+  --fm-navy:           #1a2744;
+  --fm-blue:           #2563eb;
+  --fm-blue-light:     #3b82f6;
+  --fm-blue-pale:      #dbeafe;
+  --fm-blue-faint:     #eff6ff;
+  --fm-orange:         #e8590c;
+  --fm-orange-hover:   #c94d0a;
+  --fm-orange-faint:   #fff7f3;
+  --fm-surface:        #ffffff;
+  --fm-surface-alt:    #f8fafc;
+  --fm-border:         #e2e8f0;
+  --fm-text:           #0f172a;
+  --fm-muted:          #64748b;
+  --fm-marker-active:  #e8590c;
+  --fm-marker-compare: #1a2744;
+}
+
 /* FIRE Metric dashboard */
 .dashboard-section-title {
   font-size: 16px;
@@ -1125,7 +1147,7 @@ hr.divider {
 .fire-city-chip-list {
   width: 100%;
   min-height: 46px;
-  border: 1px solid #d1d5db;
+  border: 1.5px solid #cbd5e1;
   border-radius: 10px;
   padding: 6px;
   display: flex;
@@ -1136,8 +1158,8 @@ hr.divider {
 }
 
 .fire-city-chip-list:focus-within {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  border-color: #e8590c;
+  box-shadow: 0 0 0 3px rgba(232, 89, 12, 0.12);
 }
 
 .fire-search-input {
@@ -1156,7 +1178,7 @@ hr.divider {
 
 .fire-city-chip {
   max-width: min(320px, 100%);
-  border: 1px solid #d1d5db;
+  border: 1.5px solid #cbd5e1;
   border-radius: 999px;
   background: #f8fafc;
   display: inline-flex;
@@ -1165,8 +1187,9 @@ hr.divider {
 }
 
 .fire-city-chip.active {
-  border-color: #60a5fa;
-  background: #dbeafe;
+  border-color: #e8590c;
+  background: #fff3ed;
+  color: #c94d0a;
 }
 
 .fire-city-chip-select,
@@ -1225,10 +1248,10 @@ hr.divider {
 
 .quick-ranking-btn.active,
 .quick-ranking-btn[aria-pressed="true"] {
-  border-color: #2563eb;
-  background: #dbeafe;
-  color: #1d4ed8;
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.2);
+  border-color: #e8590c;
+  background: #fff3ed;
+  color: #c94d0a;
+  box-shadow: inset 0 0 0 1px rgba(232, 89, 12, 0.2);
 }
 
 .quick-ranking-btn:disabled {
@@ -1266,26 +1289,41 @@ hr.divider {
 
 .fire-ai-overview {
   margin-top: 0;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  background: #f9fafb;
-  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 20px;
   display: grid;
-  gap: 8px;
+  gap: 10px;
+  box-shadow: 0 1px 4px rgba(26,39,68,0.05);
 }
 
 .fire-ai-overview-title {
-  font-size: 12px;
-  letter-spacing: 0.4px;
+  font-size: 11px;
+  letter-spacing: 1px;
   text-transform: uppercase;
-  color: #374151;
-  font-weight: 600;
+  color: #e8590c;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fire-ai-overview-title::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 14px;
+  background: #e8590c;
+  border-radius: 2px;
+  flex-shrink: 0;
 }
 
 .fire-ai-overview-body {
-  font-size: 13px;
-  line-height: 1.55;
-  color: #111827;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: #0f172a;
+  max-width: 800px;
 }
 
 .fire-ai-overview-meta {
@@ -1294,18 +1332,20 @@ hr.divider {
 }
 
 .fire-ai-overview-sources {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid #e5e7eb;
+  margin-top: 4px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
 }
 
 .fire-ai-sources-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: #6b7280;
+  font-size: 10px;
+  font-weight: 700;
+  color: #1d4ed8;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-bottom: 4px;
+  letter-spacing: 0.8px;
+  margin-bottom: 6px;
 }
 
 .fire-ai-sources-list {
@@ -1314,16 +1354,29 @@ hr.divider {
   margin: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
+  gap: 4px 10px;
 }
 
 .fire-ai-sources-list li {
-  font-size: 11px;
+  font-size: 11.5px;
 }
 
 .fire-ai-sources-list a {
-  color: #4b5563;
+  color: #1d4ed8;
   text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.fire-ai-sources-list a::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  background: #e8590c;
+  border-radius: 999px;
+  flex-shrink: 0;
 }
 
 .fire-ai-sources-list a:hover {
@@ -1361,11 +1414,12 @@ hr.divider {
 }
 
 .comparison-table th {
-  background: #f9fafb;
-  color: #4b5563;
+  background: #f1f5f9;
+  color: #1a2744;
   font-size: 10.5px;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.5px;
   text-transform: uppercase;
+  font-weight: 700;
 }
 
 .fire-analytics-row-active td {
@@ -1373,7 +1427,7 @@ hr.divider {
 }
 
 .fire-analytics-row-active td:first-child {
-  box-shadow: inset 4px 0 0 #2563eb;
+  box-shadow: inset 4px 0 0 #e8590c;  /* FIRE orange left accent */
   padding-left: 6px;
 }
 
@@ -1401,13 +1455,14 @@ hr.divider {
 }
 
 .fire-map-panel {
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  box-shadow: 0 1px 4px rgba(26,39,68,0.06), 0 0 0 1px rgba(26,39,68,0.04);
 }
 
 .fire-map-header {
@@ -1417,13 +1472,14 @@ hr.divider {
 
 .fire-map-frame {
   width: 100%;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fbff;
   overflow: hidden;
   height: clamp(520px, 65vh, 720px);
   min-height: 520px;
   position: relative;
+  box-shadow: inset 0 1px 3px rgba(26,39,68,0.04);
 }
 
 .fire-google-map,
@@ -1455,18 +1511,21 @@ hr.divider {
   height: 12px;
   border-radius: 999px;
   border: 2px solid #ffffff;
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.28);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(15, 23, 42, 0.12);
 }
 
 .fire-advanced-marker-current {
-  width: 14px;
-  height: 14px;
-  background: #dc2626;
+  width: 16px;
+  height: 16px;
+  background: #e8590c;   /* FIRE orange — active city */
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 2px 8px rgba(232, 89, 12, 0.5), 0 0 0 1.5px rgba(232, 89, 12, 0.25);
 }
 
 .fire-advanced-marker-compared {
-  background: #2563eb;
-  opacity: 0.9;
+  background: #1a2744;   /* FIRE navy — comparison cities */
+  opacity: 1;
+  border: 2px solid #ffffff;
 }
 
 .fire-map-infowindow {
@@ -1478,12 +1537,17 @@ hr.divider {
 .fire-map-preview-title {
   font-size: 13px;
   font-weight: 700;
-  margin-bottom: 8px;
+  color: #1a2744;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid #e8590c;
+  display: inline-block;
 }
 
 .fire-map-preview-fire {
   font-size: 12px;
   font-weight: 700;
+  color: #1a2744;
   margin-bottom: 2px;
 }
 
@@ -1547,11 +1611,11 @@ hr.divider {
 }
 
 .fire-map-dot-current {
-  background: #dc2626;
+  background: #e8590c;   /* FIRE orange */
 }
 
 .fire-map-dot-compared {
-  background: #2563eb;
+  background: #1a2744;   /* FIRE navy */
 }
 
 .stat-box-freshness {

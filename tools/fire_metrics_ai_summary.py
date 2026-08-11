@@ -1526,63 +1526,71 @@ def openai_cre_research(
     display_name: str,
 ) -> dict[str, Any]:
     """
-    Call the OpenAI Responses API with web_search_preview to gather recent
-    CRE market context for the given city/metro.
+    Call the OpenAI Responses API with the web_search tool (NOT web_search_preview)
+    to gather recent CRE market context for the given city/metro.
+
+    Uses type: "web_search" with filters.allowed_domains for API-level domain
+    restriction.  Sources are extracted from real url_citation annotations in
+    the response — provenance is grounded in actual search results, not model
+    memory.
 
     Returns:
         {
             "cre_sentences": str,           # 1-2 sentences; "" when no credible data found
-            "research_sources": [...],      # validated against CRE_ALLOWED_DOMAINS
+            "research_sources": [...],      # grounded in actual annotation URLs
             "cre_generated_at": str,        # UTC ISO timestamp
         }
 
     Raises on failure; caller falls back to FIRE Metrics-only summary.
     """
+    import logging
     from openai import OpenAI
+
+    log = logging.getLogger(__name__)
+    metro_label = city_display_name({"city": city, "state": state, "display_name": display_name})
+    log.info("CRE research started: city_key=%s|%s model=%s", city, state, model_name)
 
     client = OpenAI(api_key=api_key)
 
     instructions = (
-        "You are a commercial real estate research analyst helping a real estate investor "
-        "quickly assess whether a US city/metro has favorable current CRE market conditions. "
-        "Search the web for recent (last 6-12 months) CRE market information for the requested city and metro. "
-        "Focus primarily on multifamily/apartment market data: vacancy trends, rent growth, new supply, "
-        "absorption, and capital markets or investment activity. Mention office, retail, or industrial only "
-        "if they materially affect the metro investment outlook for a multifamily buyer. "
-        "Return ONLY a JSON object (no markdown, no extra text) with exactly these keys:\n"
-        '"cre_sentences": a string of 1-2 concise, neutral, professional sentences summarizing CRE market '
-        "context relevant to a multifamily investor. Only include content supported by search results from "
-        "approved publishers listed below. Set to empty string if no credible approved-source data found.\n"
-        '"research_sources": array of up to 3 objects, each with keys "publisher", "title", '
-        '"published_date" (e.g. "Q2 2026"), and "url". '
-        "Include ONLY sources from these approved publishers: CoStar, Yardi Matrix, RealPage, "
-        "Marcus & Millichap, Colliers, CBRE, JLL, Cushman & Wakefield, Newmark, Berkadia, "
-        "Freddie Mac Multifamily, CommercialEdge. "
-        "Do not fabricate statistics, sources, publication dates, or URLs. "
-        "Distinguish metro-area statistics from city-boundary data — never claim metro "
-        "figures are city-specific. Prefer the most recent data. Return only the JSON object."
+        "You are a commercial real estate research analyst. "
+        "Search the web for recent (last 6-12 months) multifamily and CRE market data "
+        "for the requested US city and metro area. "
+        "Focus on multifamily/apartment metrics: vacancy rate, asking or effective rent growth, "
+        "new unit deliveries or supply pipeline, absorption, occupancy, and investment/transaction activity. "
+        "Mention office, retail, or industrial only if they materially affect the multifamily investment outlook. "
+        "Write 1-2 concise, neutral, factual sentences summarizing the most important CRE market conditions "
+        "relevant to a multifamily acquisitions investor. "
+        "Use only information from the approved publishers reached via web search. "
+        "If no credible approved-source data is found from search, output only the word NONE. "
+        "Do not distinguish metro statistics from city-boundary data as if they were identical; "
+        "metro figures apply to the wider metro. "
+        "Do not fabricate statistics. Do not include generic filler like 'the market remains dynamic.'"
     )
 
-    metro_label = city_display_name({"city": city, "state": state, "display_name": display_name})
     user_message = (
         f"City: {city}, {state}\n"
-        f"Metro: {metro_label} metro area\n"
-        f"Search for recent commercial real estate and multifamily apartment market data "
-        f"for {metro_label}. Include vacancy, rent trends, new supply, and any significant "
-        f"investment or development activity from the past 6-12 months."
+        f"Metro: {metro_label}\n"
+        f"Find recent CRE and multifamily apartment market data for the {metro_label} metro area. "
+        f"Include vacancy, rent growth, new supply/deliveries, absorption, or investment activity "
+        f"from the past 6-12 months from approved sources: CoStar, Yardi Matrix, RealPage, "
+        f"Marcus & Millichap, Colliers, CBRE, JLL, Cushman & Wakefield, Newmark, Berkadia, "
+        f"Freddie Mac Multifamily, CommercialEdge."
     )
 
+    # web_search (not web_search_preview) supports filters.allowed_domains
     tool_config: dict[str, Any] = {
-        "type": "web_search_preview",
-        "web_search_preview": {
-            "search_context_size": "medium",
+        "type": "web_search",
+        "filters": {
             "allowed_domains": list(CRE_ALLOWED_DOMAINS),
         },
+        "search_context_size": "medium",
     }
 
     response = client.responses.create(
         model=model_name,
         tools=[tool_config],
+        tool_choice="required",  # force the model to actually search
         input=[
             {
                 "role": "system",
@@ -1595,34 +1603,102 @@ def openai_cre_research(
         ],
     )
 
-    raw = (response.output_text or "").strip()
-    # Strip markdown code fences if the model wraps the JSON
-    raw = re.sub(r"^```[a-z]*\n?", "", raw)
-    raw = re.sub(r"\n?```$", "", raw).strip()
+    # Count web_search_call items for diagnostics
+    web_search_calls = sum(
+        1 for item in (response.output or [])
+        if getattr(item, "type", "") == "web_search_call"
+    )
+    log.info("CRE web_search_call count=%d city_key=%s|%s", web_search_calls, city, state)
 
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        return {"cre_sentences": "", "research_sources": [], "cre_generated_at": utc_now_iso()}
+    # Extract real source URLs from url_citation annotations in text output.
+    # Annotations are grounded in what the search tool actually retrieved.
+    raw_text = (response.output_text or "").strip()
+    annotation_sources: list[dict[str, Any]] = []
+    for item in (response.output or []):
+        if getattr(item, "type", "") != "message":
+            continue
+        for part in (getattr(item, "content", None) or []):
+            for ann in (getattr(part, "annotations", None) or []):
+                if getattr(ann, "type", "") == "url_citation":
+                    annotation_sources.append({
+                        "url": str(getattr(ann, "url", "") or "").strip(),
+                        "title": str(getattr(ann, "title", "") or "").strip(),
+                    })
 
-    cre_sentences = str(parsed.get("cre_sentences") or "").strip()
-    raw_sources = parsed.get("research_sources") or []
+    log.info(
+        "CRE raw annotation sources=%d city_key=%s|%s",
+        len(annotation_sources), city, state,
+    )
 
-    # Server-side domain validation regardless of allowed_domains hint
+    # Server-side domain validation: only keep approved-domain URLs
     validated_sources: list[dict[str, Any]] = []
-    for src in raw_sources[:3]:
-        if not isinstance(src, dict):
+    seen_urls: set[str] = set()
+    for src in annotation_sources:
+        url = src.get("url") or ""
+        if not url or url in seen_urls:
             continue
         if validate_research_source(src):
+            seen_urls.add(url)
+            hostname = ""
+            try:
+                from urllib.parse import urlparse
+                hostname = urlparse(url).hostname or ""
+            except Exception:
+                pass
             validated_sources.append({
-                "publisher": str(src.get("publisher") or "").strip(),
-                "title": str(src.get("title") or "").strip(),
-                "published_date": str(src.get("published_date") or "").strip(),
-                "url": str(src.get("url") or "").strip(),
+                "publisher": _hostname_to_publisher(hostname),
+                "title": src.get("title") or "",
+                "published_date": "",
+                "url": url,
             })
+        if len(validated_sources) >= 3:
+            break
+
+    log.info(
+        "CRE approved sources=%d city_key=%s|%s",
+        len(validated_sources), city, state,
+    )
+
+    # Strip inline citation markers like [1], [2] from display text
+    cre_sentences = re.sub(r"\[\d+\]", "", raw_text).strip()
+    if cre_sentences.upper() == "NONE" or not cre_sentences:
+        cre_sentences = ""
+
+    log.info(
+        "CRE text_present=%s city_key=%s|%s",
+        bool(cre_sentences), city, state,
+    )
 
     return {
         "cre_sentences": cre_sentences,
         "research_sources": validated_sources,
         "cre_generated_at": utc_now_iso(),
     }
+
+
+# Map CRE publisher hostnames to display names
+_PUBLISHER_MAP: dict[str, str] = {
+    "costar.com": "CoStar",
+    "yardimatrix.com": "Yardi Matrix",
+    "realpage.com": "RealPage",
+    "marcusmillichap.com": "Marcus & Millichap",
+    "colliers.com": "Colliers",
+    "cbre.com": "CBRE",
+    "jll.com": "JLL",
+    "cushmanwakefield.com": "Cushman & Wakefield",
+    "nmrk.com": "Newmark",
+    "berkadia.com": "Berkadia",
+    "freddiemac.com": "Freddie Mac Multifamily",
+    "mf.freddiemac.com": "Freddie Mac Multifamily",
+    "commercialedge.com": "CommercialEdge",
+}
+
+
+def _hostname_to_publisher(hostname: str) -> str:
+    hostname = hostname.lower().lstrip("www.")
+    if hostname in _PUBLISHER_MAP:
+        return _PUBLISHER_MAP[hostname]
+    for domain, name in _PUBLISHER_MAP.items():
+        if hostname.endswith("." + domain) or hostname == domain:
+            return name
+    return hostname

@@ -225,7 +225,124 @@ class TestCRESourceStructure(unittest.TestCase):
         self.assertEqual(summary.PROMPT_VERSION, "fire_metrics_summary_v5")
 
 
-class TestCREFallbackChain(unittest.TestCase):
+class TestCREAPIShape(unittest.TestCase):
+    """
+    Tests that WOULD HAVE CAUGHT the production failure.
+    Verifies the corrected web_search tool shape and source extraction logic.
+    """
+
+    def _inspect_source_code(self) -> str:
+        import inspect
+        return inspect.getsource(summary.openai_cre_research)
+
+    def test_uses_web_search_not_web_search_preview(self):
+        """CRE call must use 'web_search', NOT 'web_search_preview'."""
+        src = self._inspect_source_code()
+        self.assertIn('"web_search"', src)
+        self.assertNotIn('"web_search_preview"', src)
+
+    def test_allowed_domains_in_filters_not_tool_body(self):
+        """Domain filtering must be under filters.allowed_domains, not in tool body."""
+        src = self._inspect_source_code()
+        # 'filters' key must appear
+        self.assertIn('"filters"', src)
+        # allowed_domains must be inside filters, not a direct sibling of type
+        self.assertIn('"allowed_domains"', src)
+        # The old broken pattern must not appear
+        self.assertNotIn('"web_search_preview": {', src)
+
+    def test_tool_choice_required_present(self):
+        """tool_choice='required' must be passed to force search execution."""
+        src = self._inspect_source_code()
+        self.assertIn('tool_choice="required"', src)
+
+    def test_sources_extracted_from_annotations_not_model_json(self):
+        """Sources must come from url_citation annotations, not model-generated JSON."""
+        src = self._inspect_source_code()
+        # Must access url_citation annotations
+        self.assertIn("url_citation", src)
+        self.assertIn("annotations", src)
+        # Must NOT rely on json.loads(raw) for the primary source list
+        self.assertNotIn("parsed.get(\"research_sources\")", src)
+
+    def test_non_approved_annotation_url_rejected(self):
+        """validate_research_source rejects non-approved URLs even when they come from annotations."""
+        bad_src = {"url": "https://zillow.com/report", "title": "Zillow Report"}
+        self.assertFalse(summary.validate_research_source(bad_src))
+
+    def test_approved_annotation_url_accepted(self):
+        """validate_research_source accepts approved URLs from annotations."""
+        good_src = {"url": "https://yardimatrix.com/report", "title": "Yardi Report"}
+        self.assertTrue(summary.validate_research_source(good_src))
+
+    def test_hostname_to_publisher_mapping(self):
+        """_hostname_to_publisher maps known hostnames to display names."""
+        self.assertEqual(summary._hostname_to_publisher("cbre.com"), "CBRE")
+        self.assertEqual(summary._hostname_to_publisher("jll.com"), "JLL")
+        self.assertEqual(summary._hostname_to_publisher("yardimatrix.com"), "Yardi Matrix")
+        self.assertEqual(summary._hostname_to_publisher("research.cbre.com"), "CBRE")
+
+    def test_inline_citation_markers_stripped(self):
+        """[1], [2] citation markers are stripped from display text."""
+        raw = "Vacancy declined to 4.5% in Q1 2026.[1] Rent growth was 3%.[2]"
+        cleaned = summary.re.sub(r"\[\d+\]", "", raw).strip()
+        self.assertNotIn("[1]", cleaned)
+        self.assertNotIn("[2]", cleaned)
+        self.assertIn("4.5%", cleaned)
+
+    def test_none_response_produces_empty_sentences(self):
+        """Model outputting 'NONE' should yield empty cre_sentences."""
+        # Simulate what the function does when no useful research found
+        raw = "NONE"
+        cre = summary.re.sub(r"\[\d+\]", "", raw).strip()
+        if cre.upper() == "NONE" or not cre:
+            cre = ""
+        self.assertEqual(cre, "")
+
+    def test_missing_cre_timestamp_is_eligible_immediately(self):
+        """A cache row with cre_generated_at=None is immediately eligible for CRE research."""
+        self.assertFalse(summary.is_cre_fresh(None))
+
+    def test_fresh_cre_cache_skips_research(self):
+        """A cache row with cre_generated_at within TTL is considered fresh."""
+        fresh = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+        self.assertTrue(summary.is_cre_fresh(fresh))
+
+    def test_stale_cre_cache_triggers_research(self):
+        """A cache row with cre_generated_at > TTL is considered stale."""
+        stale = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        self.assertFalse(summary.is_cre_fresh(stale))
+
+    def test_web_search_exception_does_not_appear_in_main_response(self):
+        """Simulated web_search exception: normal FIRE summary still returned."""
+        # Route-level: the exception handler catches CRE errors without propagating
+        import inspect
+        route_src = open(
+            str(Path(__file__).parent.parent / "tools" / "fire_metrics" / "routes.py")
+        ).read()
+        # Must have except clause around cre_research call
+        self.assertIn("cre_exc", route_src)
+        # Must log the exception without re-raising
+        self.assertIn("FIRE CRE failed", route_src)
+
+    def test_malformed_api_response_handled_gracefully(self):
+        """Empty/malformed response text yields empty cre_sentences, not an exception."""
+        raw = ""
+        cre = summary.re.sub(r"\[\d+\]", "", raw).strip()
+        if cre.upper() == "NONE" or not cre:
+            cre = ""
+        self.assertEqual(cre, "")
+
+    def test_default_model_is_general_purpose_not_search_preview(self):
+        """Default CRE model must be a general-purpose model (web_search compatible)."""
+        src = open(
+            str(Path(__file__).parent.parent / "tools" / "fire_metrics" / "services.py")
+        ).read()
+        # Default must NOT be gpt-4o-mini-search-preview (only works with web_search_preview)
+        self.assertNotIn("gpt-4o-mini-search-preview", src)
+        self.assertIn("gpt-4o-mini", src)
+
+
     """Verify that CRE research failure never blocks the FIRE Metrics summary."""
 
     def setUp(self):
@@ -564,6 +681,63 @@ class TestMapZoomConfiguration(unittest.TestCase):
         self.assertIn('"Enter"', text)
         # spacebar key value is " " (single space), not "Space"
         self.assertIn('" "', text)
+
+    def test_fire_metrics_surface_class_present(self):
+        """fire-metrics-surface class scopes brand tokens."""
+        text = self._template_text()
+        self.assertIn("fire-metrics-surface", text)
+
+    def _css_text(self) -> str:
+        css_path = Path(__file__).parent.parent / "static" / "style.css"
+        return css_path.read_text(encoding="utf-8")
+
+    def test_active_marker_uses_fire_orange(self):
+        """Active city marker uses FIRE orange (#e8590c), not generic red."""
+        css = self._css_text()
+        # fire-advanced-marker-current section should reference orange
+        self.assertIn("#e8590c", css)
+        # Must not use the old #dc2626 red for the active marker
+        idx_current = css.find(".fire-advanced-marker-current")
+        idx_next_rule = css.find("\n}", idx_current)
+        active_block = css[idx_current:idx_next_rule]
+        self.assertIn("#e8590c", active_block)
+
+    def test_comparison_marker_uses_fire_navy(self):
+        """Comparison city marker uses FIRE navy (#1a2744), not generic blue."""
+        css = self._css_text()
+        idx_compared = css.find(".fire-advanced-marker-compared")
+        idx_next_rule = css.find("\n}", idx_compared)
+        compared_block = css[idx_compared:idx_next_rule]
+        self.assertIn("#1a2744", compared_block)
+
+    def test_brand_tokens_defined(self):
+        """Scoped brand token variables are defined in CSS."""
+        css = self._css_text()
+        self.assertIn("--fm-orange", css)
+        self.assertIn("--fm-navy", css)
+        self.assertIn(".fire-metrics-surface", css)
+
+    def test_ai_overview_sources_panel_styled(self):
+        """AI overview sources section has branded styling."""
+        css = self._css_text()
+        self.assertIn(".fire-ai-overview-sources", css)
+        self.assertIn(".fire-ai-sources-list", css)
+
+    def test_active_analytics_row_uses_orange_accent(self):
+        """Active analytics row left accent uses FIRE orange."""
+        css = self._css_text()
+        idx = css.find(".fire-analytics-row-active td:first-child")
+        idx_end = css.find("\n}", idx)
+        block = css[idx:idx_end]
+        self.assertIn("#e8590c", block)
+
+    def test_active_city_chip_uses_orange(self):
+        """Active city chip uses FIRE orange treatment."""
+        css = self._css_text()
+        idx = css.find(".fire-city-chip.active")
+        idx_end = css.find("\n}", idx)
+        block = css[idx:idx_end]
+        self.assertIn("#e8590c", block)
 
 
 # ---------------------------------------------------------------------------

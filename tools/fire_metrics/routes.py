@@ -315,15 +315,24 @@ def city_summary():
 
                 if not cre_fresh and _summary_enabled() and _summary_api_key():
                     try:
+                        cre_model = _cre_research_model_name()
+                        current_app.logger.info(
+                            "FIRE CRE stale refresh: city=%s state=%s model=%s",
+                            selected_city["city"], selected_city["state"], cre_model,
+                        )
                         cre_result = ai_summary.openai_cre_research(
                             api_key=_summary_api_key(),
-                            model_name=_cre_research_model_name(),
+                            model_name=cre_model,
                             city=selected_city["city"],
                             state=selected_city["state"],
                             display_name=str(selected_city.get("display_name") or ""),
                         )
                         cre_sentences = cre_result.get("cre_sentences") or ""
                         research_sources = cre_result.get("research_sources") or []
+                        current_app.logger.info(
+                            "FIRE CRE stale refresh done: city=%s state=%s sources=%d",
+                            selected_city["city"], selected_city["state"], len(research_sources),
+                        )
                         db_module.update_city_summary_cre_fields(
                             conn,
                             city=selected_city["city"],
@@ -335,8 +344,12 @@ def city_summary():
                             research_sources_json=json.dumps(research_sources),
                             cre_generated_at=cre_result.get("cre_generated_at") or ai_summary.utc_now_iso(),
                         )
-                    except Exception:
-                        pass  # stale CRE is acceptable; return existing data
+                    except Exception as cre_exc:
+                        current_app.logger.warning(
+                            "FIRE CRE stale refresh failed (non-fatal): city=%s state=%s error=%s: %s",
+                            selected_city["city"], selected_city["state"],
+                            type(cre_exc).__name__, str(cre_exc)[:120],
+                        )
 
                 full_summary = cache_row["summary_text"]
                 if cre_sentences:
@@ -402,9 +415,14 @@ def city_summary():
             research_sources: list[dict] = []
             cre_generated_at = ai_summary.utc_now_iso()
             try:
+                cre_model = _cre_research_model_name()
+                current_app.logger.info(
+                    "FIRE CRE starting: city=%s state=%s model=%s",
+                    selected_city["city"], selected_city["state"], cre_model,
+                )
                 cre_result = ai_summary.openai_cre_research(
                     api_key=api_key,
-                    model_name=_cre_research_model_name(),
+                    model_name=cre_model,
                     city=selected_city["city"],
                     state=selected_city["state"],
                     display_name=str(selected_city.get("display_name") or ""),
@@ -412,8 +430,17 @@ def city_summary():
                 cre_sentences = cre_result.get("cre_sentences") or ""
                 research_sources = cre_result.get("research_sources") or []
                 cre_generated_at = cre_result.get("cre_generated_at") or cre_generated_at
-            except Exception:
-                pass  # CRE failure never blocks the FIRE Metrics summary
+                current_app.logger.info(
+                    "FIRE CRE done: city=%s state=%s sentences=%s sources=%d",
+                    selected_city["city"], selected_city["state"],
+                    bool(cre_sentences), len(research_sources),
+                )
+            except Exception as cre_exc:
+                current_app.logger.warning(
+                    "FIRE CRE failed (non-fatal): city=%s state=%s error=%s: %s",
+                    selected_city["city"], selected_city["state"],
+                    type(cre_exc).__name__, str(cre_exc)[:120],
+                )
 
             summary_text = ai_summary.combined_summary(structured)
             full_summary = f"{summary_text} {cre_sentences}".strip() if cre_sentences else summary_text

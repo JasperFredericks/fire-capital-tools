@@ -165,7 +165,8 @@ def _summary_api_key() -> str:
 
 
 def _cre_research_model_name() -> str:
-    return str(current_app.config.get("FIRE_METRICS_CRE_MODEL") or "gpt-4o-mini-search-preview").strip()
+    # web_search tool requires a general-purpose model, not a search-preview model
+    return str(current_app.config.get("FIRE_METRICS_CRE_MODEL") or "gpt-4o-mini").strip()
 
 
 def _summary_unavailable_response(
