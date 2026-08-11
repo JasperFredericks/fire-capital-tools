@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block title %}Investor Report - FIRE Capital Tools{% endblock %}
+
+{% macro money(v) %}{{ '${:,.2f}'.format(v) if v is not none else '—' }}{% endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('dashboard') }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Dashboard
+  </a>
+  <h1 class="page-title">Investor Report <span class="tool-tag tag-soon" style="vertical-align:middle; font-size:11px;">Beta</span></h1>
+  <p class="page-subtitle">
+    LP/GP distribution waterfalls built on a saved Underwriting scenario &mdash; return of capital,
+    preferred return, then the promote split. Every run is checked against ten conservation
+    invariants before any number is shown.
+  </p>
+</div>
+
+<!-- ── Deal picker ────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Choose a Deal</div>
+  <p class="page-subtitle" style="margin:8px 0 12px;">
+    A waterfall distributes a specific property's cash, so it is always tied to a deal and to
+    one of that deal's Underwriting scenarios.
+  </p>
+  <form method="GET" action="{{ url_for('investor_report.index') }}"
+        style="display:grid; grid-template-columns: 2fr auto; gap:12px; align-items:end;">
+    <div class="form-group" style="margin-bottom:0;">
+      <label class="form-label" for="deal_id">Deal</label>
+      <select class="form-input" id="deal_id" name="deal_id">
+        <option value="">— select —</option>
+        {% for d in deals %}
+          <option value="{{ d.id }}" {% if deal and deal.id == d.id %}selected{% endif %}>
+            {{ d.address }}, {{ d.city }} {{ d.state }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Open</button>
+  </form>
+  {% if not deals %}
+    <div class="result-note" style="margin-top:12px;">
+      No deals yet — create one in <a href="{{ url_for('deal_dive.index') }}">Deal Dive</a> first.
+    </div>
+  {% endif %}
+</div>
+
+{% if deal %}
+<!-- ── Capital ────────────────────────────────────────────────────────── -->
+<div class="card" id="capital">
+  <div class="scorecard-section-title">Capital Contributions &mdash; {{ deal.address }}</div>
+  <div class="table-wrap" style="margin:12px 0 14px;">
+    <table class="rent-comps-table">
+      <thead><tr><th>Investor</th><th>Class</th><th>Amount</th><th>Ownership</th><th>Date</th><th></th></tr></thead>
+      <tbody>
+        {% if not contributions %}
+          <tr><td colspan="6">No contributions recorded — add one below before building a waterfall.</td></tr>
+        {% else %}
+          {% for c in contributions %}
+            <tr>
+              <td>{{ c.name }}{% if c.entity_type %} <span class="stat-box-sub">{{ c.entity_type }}</span>{% endif %}</td>
+              <td>{{ c.investor_class }}</td>
+              <td>{{ money(c.amount) }}</td>
+              <td>{{ '{:,.2f}%'.format(c.amount / total_contributed * 100) if total_contributed else '—' }}</td>
+              <td>{{ c.contribution_date or '—' }}</td>
+              <td>
+                <form method="POST" action="{{ url_for('investor_report.delete_contribution', contribution_id=c.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="deal_id" value="{{ deal.id }}">
+                  <button type="submit" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          <tr><th>Total</th><th></th><th>{{ money(total_contributed) }}</th><th>100.00%</th><th></th><th></th></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  <form method="POST" action="{{ url_for('investor_report.add_contribution') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="deal_id" value="{{ deal.id }}">
+    <div style="display:grid; grid-template-columns: 2fr 1fr 1fr 1fr auto; gap:12px; align-items:end;">
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="investor_id">Investor</label>
+        <select class="form-input" id="investor_id" name="investor_id" required>
+          <option value="">— select —</option>
+          {% for i in investors %}<option value="{{ i.id }}">{{ i.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="investor_class">Class</label>
+        <select class="form-input" id="investor_class" name="investor_class">
+          <option value="LP">LP</option><option value="GP">GP</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="amount">Amount ($)</label>
+        <input class="form-input" type="text" id="amount" name="amount" required>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="contribution_date">Date</label>
+        <input class="form-input" type="date" id="contribution_date" name="contribution_date">
+      </div>
+      <button type="submit" class="btn btn-ghost">Add</button>
+    </div>
+  </form>
+</div>
+
+<!-- ── New waterfall ──────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">New Waterfall Scenario</div>
+  {% if not uw_scenarios %}
+    <div class="result-note" style="margin-top:12px;">
+      This deal has no Underwriting scenario yet. A waterfall distributes the cash an
+      Underwriting model produces, so there is nothing to allocate until one exists &mdash;
+      <a href="{{ url_for('underwriting.index', deal_id=deal.id) }}">build one first &rarr;</a>
+    </div>
+  {% else %}
+    <form method="POST" action="{{ url_for('investor_report.new_scenario') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="deal_id" value="{{ deal.id }}">
+      <div style="display:grid; grid-template-columns: 1.4fr 1.6fr 1fr 1fr auto; gap:12px; align-items:end; margin-top:12px;">
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="name">Name</label>
+          <input class="form-input" type="text" id="name" name="name" value="Base waterfall">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="underwriting_scenario_id">Cash from Underwriting scenario</label>
+          <select class="form-input" id="underwriting_scenario_id" name="underwriting_scenario_id" required>
+            {% for s in uw_scenarios %}
+              <option value="{{ s.id }}">{{ s.name }} — {{ s.property_label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="pref_rate_pct">Pref (%)</label>
+          <input class="form-input" type="text" id="pref_rate_pct" name="pref_rate_pct" value="8">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="promote_gp_pct">GP Promote (%)</label>
+          <input class="form-input" type="text" id="promote_gp_pct" name="promote_gp_pct" value="20">
+        </div>
+        <button type="submit" class="btn btn-primary">Create</button>
+      </div>
+    </form>
+  {% endif %}
+</div>
+
+<!-- ── Existing scenarios ─────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Waterfall Scenarios{% if scenarios %} ({{ scenarios|length }}){% endif %}</div>
+  <div class="table-wrap" style="margin-top:12px;">
+    <table class="rent-comps-table">
+      <thead><tr><th>Name</th><th>Pref</th><th>Promote</th><th>Convention</th><th>Updated</th><th></th></tr></thead>
+      <tbody>
+        {% if not scenarios %}
+          <tr><td colspan="6">No waterfall scenarios yet.</td></tr>
+        {% else %}
+          {% for s in scenarios %}
+            <tr>
+              <td>{{ s.name }}</td>
+              <td>{{ '{:,.2f}%'.format(s.pref_rate_pct) }}</td>
+              <td>{{ '{:,.0f}'.format(s.promote_lp_pct) }} / {{ '{:,.0f}'.format(s.promote_gp_pct) }}</td>
+              <td>{{ s.pref_convention }}</td>
+              <td>{{ s.updated_at[:10] }}</td>
+              <td><a href="{{ url_for('investor_report.detail', scenario_id=s.id) }}" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Open</a></td>
+            </tr>
+          {% endfor %}
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Investor register ──────────────────────────────────────────────── -->
+<div class="card" id="investors">
+  <div class="scorecard-section-title">Investors{% if investors %} ({{ investors|length }}){% endif %}</div>
+  <p class="page-subtitle" style="margin:8px 0 12px;">
+    Investors are kept at entity level and reused across deals, so the same person is one
+    record rather than one per property.
+  </p>
+  {% if investors %}
+    <div class="table-wrap" style="margin-bottom:14px;">
+      <table class="rent-comps-table">
+        <thead><tr><th>Name</th><th>Entity type</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for i in investors %}
+            <tr><td>{{ i.name }}</td><td>{{ i.entity_type or '—' }}</td><td>{{ i.notes or '—' }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+  <form method="POST" action="{{ url_for('investor_report.add_investor') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if deal %}<input type="hidden" name="deal_id" value="{{ deal.id }}">{% endif %}
+    <div style="display:grid; grid-template-columns: 2fr 1fr 2fr auto; gap:12px; align-items:end;">
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="inv_name">Name</label>
+        <input class="form-input" type="text" id="inv_name" name="name" required>
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="entity_type">Entity type</label>
+        <input class="form-input" type="text" id="entity_type" name="entity_type" placeholder="LLC, Trust, Individual">
+      </div>
+      <div class="form-group" style="margin-bottom:0;">
+        <label class="form-label" for="inv_notes">Notes</label>
+        <input class="form-input" type="text" id="inv_notes" name="notes">
+      </div>
+      <button type="submit" class="btn btn-ghost">Add Investor</button>
+    </div>
+  </form>
+</div>
+
+{% include "_feedback.html" %}
+{% endblock %}

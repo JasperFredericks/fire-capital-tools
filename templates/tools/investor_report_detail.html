@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block title %}{{ scenario.name }} - Investor Report{% endblock %}
+
+{% macro money(v) %}{{ '${:,.2f}'.format(v) if v is not none else '—' }}{% endmacro %}
+{% macro money0(v) %}{{ '${:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
+{% macro pct(v) %}{{ '{:,.2f}%'.format(v * 100) if v is not none else '—' }}{% endmacro %}
+{% set TIER_LABELS = {'return_of_capital':'Return of Capital','pref':'Preferred Return','promote':'Promote Split'} %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('investor_report.index', deal_id=scenario.deal_id) }}" class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Investor Report
+  </a>
+  <h1 class="page-title">{{ scenario.name }}</h1>
+  <p class="page-subtitle">
+    {{ scenario.property_label }}
+    {%- if deal %} &middot; <a href="{{ url_for('deal_dive.detail', deal_id=deal.id) }}">deal</a>{% endif %}
+    {%- if uw_scenario %} &middot; cash from Underwriting scenario
+      <a href="{{ url_for('underwriting.detail', scenario_id=uw_scenario.id) }}">{{ uw_scenario.name }}</a>{% endif %}
+    &middot; {{ '{:,.2f}%'.format(scenario.pref_rate_pct) }} pref
+    ({{ scenario.pref_convention }}) &middot; promote
+    {{ '{:,.0f}'.format(scenario.promote_lp_pct) }}/{{ '{:,.0f}'.format(scenario.promote_gp_pct) }}
+  </p>
+</div>
+
+{% if error %}
+  <div class="card"><div class="result-note" style="border-left:3px solid #dc2626;">{{ error }}</div></div>
+{% endif %}
+
+{% if result %}
+{# ── Reconciliation ticks: the checks Michelle reads, not just asserted ── #}
+{% set checks = result.invariant_checks %}
+{% set inv1 = (checks | selectattr('n','equalto',1) | list | last) %}
+{% set inv9 = (checks | selectattr('n','equalto',9) | list | last) %}
+<div class="card" id="reconciliation">
+  <div class="scorecard-section-title">Reconciliation</div>
+  <p class="page-subtitle" style="margin:8px 0 12px;">
+    Every waterfall is checked against ten conservation invariants before it is shown. These
+    two are the ones worth reading yourself.
+  </p>
+  <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+    <div class="stat-box" style="border-left:3px solid {{ '#059669' if inv1 and inv1.passed else '#b91c1c' }};">
+      <div class="stat-box-label">Money conserved</div>
+      <div class="stat-box-value" style="font-size:15px; color:{{ '#059669' if inv1 and inv1.passed else '#b91c1c' }};">
+        {% if inv1 and inv1.passed %}&#10003;{% else %}&#10007;{% endif %}
+        Total distributed {{ money(result.totals.distributed) }} = cash available {{ money(result.totals.cash_available) }}
+      </div>
+      <div class="stat-box-sub">Checked to the cent, every period and cumulatively.</div>
+    </div>
+    <div class="stat-box" style="border-left:3px solid {{ '#059669' if inv9 and inv9.passed else '#b91c1c' }};">
+      <div class="stat-box-label">Matches Underwriting scenario</div>
+      <div class="stat-box-value" style="font-size:15px; color:{{ '#059669' if inv9 and inv9.passed else '#b91c1c' }};">
+        {% if inv9 and inv9.passed %}&#10003;{% else %}&#10007;{% endif %}
+        {{ uw_scenario.name if uw_scenario else 'source scenario' }}
+      </div>
+      <div class="stat-box-sub">{{ inv9.detail if inv9 else '' }}</div>
+    </div>
+  </div>
+
+  <details style="margin-top:12px;">
+    <summary style="cursor:pointer; font-size:12px; font-weight:650; color:#2563eb;">
+      All {{ checks|length }} invariant checks
+    </summary>
+    <div class="table-wrap" style="margin-top:10px;">
+      <table class="rent-comps-table">
+        <thead><tr><th>#</th><th>Invariant</th><th>Result</th><th>Detail</th></tr></thead>
+        <tbody>
+          {% for c in checks %}
+            <tr>
+              <td>{{ c.n }}</td><td>{{ c.name }}</td>
+              <td style="color:{{ '#059669' if c.passed else ('#6b7280' if c.passed is none else '#b91c1c') }};">
+                {% if c.passed %}pass{% elif c.passed is none %}n/a{% else %}FAIL{% endif %}
+              </td>
+              <td class="stat-box-sub">{{ c.detail or '' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</div>
+
+<!-- ── Per investor ───────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Per-Investor Distributions</div>
+  <div class="table-wrap" style="margin-top:12px;">
+    <table class="rent-comps-table">
+      <thead><tr><th>Investor</th><th>Contributed</th><th>Ownership</th><th>Distributed</th>
+                 <th>Equity Multiple</th><th>IRR</th><th>Unreturned Capital</th><th>Unpaid Pref</th></tr></thead>
+      <tbody>
+        {% for i in result.investors %}
+          <tr>
+            <td>{{ i.name }}</td>
+            <td>{{ money(i.contributed) }}</td>
+            <td>{{ '{:,.2f}%'.format(i.ownership_pct) }}</td>
+            <td>{{ money(i.distributed) }}</td>
+            <td>{{ '{:,.2f}x'.format(i.equity_multiple) if i.equity_multiple is not none else '—' }}</td>
+            <td>{% if i.irr is not none %}{{ pct(i.irr) }}{% else %}<span class="stat-box-sub">{{ i.irr_reason }}</span>{% endif %}</td>
+            <td{% if i.unreturned_capital %} style="color:#b91c1c;"{% endif %}>{{ money(i.unreturned_capital) }}</td>
+            <td{% if i.unpaid_pref %} style="color:#b91c1c;"{% endif %}>{{ money(i.unpaid_pref) }}</td>
+          </tr>
+        {% endfor %}
+        <tr>
+          <th>LP total</th><th>{{ money(result.lp_aggregate.contributed) }}</th><th>100.00%</th>
+          <th>{{ money(result.lp_aggregate.distributed) }}</th><th></th>
+          <th>{{ pct(result.lp_aggregate.irr) }}</th><th></th><th></th>
+        </tr>
+        <tr>
+          <th>GP promote</th><th>—</th><th>—</th>
+          <th>{{ money(result.gp.distributed) }}</th><th>—</th><th>—</th><th></th><th></th>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Tier flow ──────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Waterfall Tiers</div>
+  <div class="table-wrap" style="margin-top:12px;">
+    <table class="rent-comps-table">
+      <thead><tr><th>Tier</th><th>To LPs</th><th>To GP</th><th>Total through tier</th></tr></thead>
+      <tbody>
+        {% for t in tiers %}
+          {% set tt = result.tier_totals.get(t.tier_type) %}
+          <tr>
+            <td>{{ TIER_LABELS.get(t.tier_type, t.tier_type) }}
+              {%- if t.tier_type == 'promote' %} <span class="stat-box-sub">{{ '{:,.0f}'.format(t.lp_share_pct) }}/{{ '{:,.0f}'.format(t.gp_share_pct) }}</span>{% endif %}</td>
+            <td>{{ money(tt.lp) if tt else '—' }}</td>
+            <td>{{ money(tt.gp) if tt else '—' }}</td>
+            <td>{{ money(tt.total) if tt else '—' }}</td>
+          </tr>
+        {% endfor %}
+        <tr><th>Total</th><th>{{ money(result.totals.lp_distributed) }}</th>
+            <th>{{ money(result.totals.gp_distributed) }}</th>
+            <th>{{ money(result.totals.distributed) }}</th></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── By period ──────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Distributions by Year</div>
+  <div class="table-wrap" style="margin-top:12px;">
+    <table class="rent-comps-table">
+      <thead>
+        <tr><th>Year</th><th>Cash Available</th><th>Pref Accrued</th>
+          {% for i in result.investors %}<th>{{ i.name }}</th>{% endfor %}
+          <th>GP</th><th>Distributed</th><th>Undistributed</th></tr>
+      </thead>
+      <tbody>
+        {% for p in result.periods %}
+          <tr>
+            <td>{{ p.year }}</td>
+            <td>{{ money(p.cash_available) }}</td>
+            <td>{{ money(p.accrued_pref) }}</td>
+            {% for amt in p.lp %}<td>{{ money(amt) }}</td>{% endfor %}
+            <td>{{ money(p.gp) }}</td>
+            <td>{{ money(p.distributed) }}</td>
+            <td{% if p.undistributed %} style="color:#b91c1c;"{% endif %}>{{ money(p.undistributed) }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="page-subtitle" style="margin-top:12px;">
+    Preferred return accrues on unreturned capital <em>plus</em> unpaid pref, so the unpaid
+    balance compounds &mdash; without that, settling the pref late would quietly cost the LP
+    internal rate of return.
+  </p>
+</div>
+{% endif %}
+
+<!-- ── Terms ──────────────────────────────────────────────────────────── -->
+<div class="card" id="terms">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+    <div class="scorecard-section-title">Terms</div>
+    <form method="POST" action="{{ url_for('investor_report.delete', scenario_id=scenario.id) }}"
+          onsubmit="return confirm('Delete this waterfall scenario? Capital contributions and investors are not affected.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-danger">Delete Scenario</button>
+    </form>
+  </div>
+  <form method="POST" action="{{ url_for('investor_report.save', scenario_id=scenario.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid; grid-template-columns: 2fr 1fr 1fr 2fr; gap:12px; margin-top:14px;">
+      <div class="form-group">
+        <label class="form-label" for="name">Name</label>
+        <input class="form-input" type="text" id="name" name="name" value="{{ scenario.name }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="pref_rate_pct">Preferred return (%)</label>
+        <input class="form-input" type="text" id="pref_rate_pct" name="pref_rate_pct" value="{{ scenario.pref_rate_pct }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="promote_gp_pct">GP promote (%)</label>
+        <input class="form-input" type="text" id="promote_gp_pct" name="promote_gp_pct" value="{{ scenario.promote_gp_pct }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="notes">Notes</label>
+        <input class="form-input" type="text" id="notes" name="notes" value="{{ scenario.notes or '' }}">
+      </div>
+    </div>
+    <p class="page-subtitle" style="margin-bottom:10px;">
+      Only the <strong>accrual</strong> preferred-return convention is implemented in this beta.
+      An IRR-lookback pref gives different answers on the same deal, so the convention is
+      recorded on every report rather than assumed.
+    </p>
+    <button type="submit" class="btn btn-primary">Save Terms</button>
+  </form>
+</div>
+
+{% include "_feedback.html" %}
+{% endblock %}
