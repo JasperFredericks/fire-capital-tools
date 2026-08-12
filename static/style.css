@@ -1996,6 +1996,16 @@ hr.divider {
   backdrop-filter: blur(6px);
 }
 
+.fire-city-card.fire-city-card-left {
+  left: 12px;
+  right: auto;
+}
+
+.fire-city-card.fire-city-card-right {
+  right: 12px;
+  left: auto;
+}
+
 .fcc-header {
   display: flex;
   align-items: flex-start;
@@ -2087,6 +2097,12 @@ hr.divider {
     max-width: 100%;
     max-height: 46%;
     overflow-y: auto;
+  }
+
+  .fire-city-card.fire-city-card-left,
+  .fire-city-card.fire-city-card-right {
+    right: 8px;
+    left: 8px;
   }
 }
 

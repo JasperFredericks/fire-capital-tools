@@ -1147,29 +1147,87 @@
     fireCityCard.innerHTML = "";
   }
 
-  function selectedCardPanOffsetX() {
-    if (!mapContainer || !fireCityCard) return 0;
-    if (fireCityCard.style.display === "none") return 0;
+  function setCityCardSide(side) {
+    if (!fireCityCard) return;
+    fireCityCard.classList.remove("fire-city-card-left", "fire-city-card-right");
+    fireCityCard.classList.add(side === "left" ? "fire-city-card-left" : "fire-city-card-right");
+  }
+
+  function markerScreenPositionInMap(marker) {
+    if (!marker || !googleMap || !mapContainer || !window.google || !window.google.maps) return null;
+    const projection = googleMap.getProjection ? googleMap.getProjection() : null;
+    const bounds = googleMap.getBounds ? googleMap.getBounds() : null;
+    if (!projection || !bounds) return null;
 
     const mapRect = mapContainer.getBoundingClientRect();
-    const cardRect = fireCityCard.getBoundingClientRect();
-    if (!mapRect.width || !cardRect.width) return 0;
+    if (!mapRect.width || !mapRect.height) return null;
 
-    // Bottom-sheet style card on mobile should not force horizontal pan.
+    const markerPos = marker.position;
+    if (!markerPos) return null;
+    const latLng = (typeof markerPos.lat === "function" && typeof markerPos.lng === "function")
+      ? markerPos
+      : new google.maps.LatLng(markerPos.lat, markerPos.lng);
+
+    const worldMarker = projection.fromLatLngToPoint(latLng);
+    const worldNE = projection.fromLatLngToPoint(bounds.getNorthEast());
+    const worldSW = projection.fromLatLngToPoint(bounds.getSouthWest());
+    if (!worldMarker || !worldNE || !worldSW) return null;
+
+    let westX = worldSW.x;
+    let eastX = worldNE.x;
+    let markerX = worldMarker.x;
+    if (eastX < westX) eastX += 1;
+    if (markerX < westX) markerX += 1;
+    if (markerX > eastX) markerX -= 1;
+
+    const widthWorld = eastX - westX;
+    const heightWorld = worldSW.y - worldNE.y;
+    if (!widthWorld || !heightWorld) return null;
+
+    return {
+      x: ((markerX - westX) / widthWorld) * mapRect.width,
+      y: ((worldMarker.y - worldNE.y) / heightWorld) * mapRect.height,
+      mapWidth: mapRect.width,
+      mapHeight: mapRect.height,
+    };
+  }
+
+  function chooseDesktopCardSide(marker) {
+    const markerPos = markerScreenPositionInMap(marker);
+    if (!markerPos) return "right";
+    const usableLeft = 12;
+    const usableRight = Math.max(usableLeft + 1, markerPos.mapWidth - 12);
+    const usableMid = (usableLeft + usableRight) / 2;
+    return markerPos.x >= usableMid ? "left" : "right";
+  }
+
+  function minimalOverlapPanOffsetX(marker) {
+    if (!mapContainer || !fireCityCard || fireCityCard.style.display === "none") return 0;
+    const markerPos = markerScreenPositionInMap(marker);
+    if (!markerPos) return 0;
+
+    const cardRect = fireCityCard.getBoundingClientRect();
+    const mapRect = mapContainer.getBoundingClientRect();
+    if (!cardRect.width || !cardRect.height || !mapRect.width || !mapRect.height) return 0;
+
+    // Bottom-sheet card on mobile should not trigger lateral pan.
     if (cardRect.width >= mapRect.width * 0.75) return 0;
 
-    const overlapsMapHorizontally = cardRect.right > mapRect.left && cardRect.left < mapRect.right;
-    if (!overlapsMapHorizontally) return 0;
+    const markerPageX = mapRect.left + markerPos.x;
+    const markerPageY = mapRect.top + markerPos.y;
+    const safeGap = Math.max(16, Math.round(mapRect.width * 0.025));
 
-    const cardOnRight = cardRect.left >= (mapRect.left + mapRect.width * 0.45);
-    if (!cardOnRight) return 0;
+    const overlapsX = markerPageX >= (cardRect.left - safeGap) && markerPageX <= (cardRect.right + safeGap);
+    const overlapsY = markerPageY >= (cardRect.top - safeGap) && markerPageY <= (cardRect.bottom + safeGap);
+    if (!overlapsX || !overlapsY) return 0;
 
-    const safeGap = Math.max(18, Math.round(mapRect.width * 0.03));
-    const maxAllowedMarkerX = (cardRect.left - mapRect.left) - safeGap;
-    const centeredMarkerX = mapRect.width / 2;
-    const requiredOffset = centeredMarkerX - maxAllowedMarkerX;
-    const maxOffset = Math.round(mapRect.width * 0.4);
-    return Math.max(0, Math.min(Math.round(requiredOffset), maxOffset));
+    const cardOnLeft = fireCityCard.classList.contains("fire-city-card-left");
+    if (cardOnLeft) {
+      const targetPageX = cardRect.right + safeGap;
+      return markerPageX - targetPageX;
+    }
+    const targetPageX = cardRect.left - safeGap;
+    return markerPageX - targetPageX;
   }
 
   function openCurrentCityPreview(panMap = false) {
@@ -1184,13 +1242,15 @@
     clearPendingCurrentCityPreview();
     showCityCard(currentCity);
 
+    const side = chooseDesktopCardSide(entry.marker);
+    setCityCardSide(side);
+
     if (panMap && entry.marker.position) {
-      googleMap.panTo(entry.marker.position);
       const zoom = googleMap.getZoom() || 3;
       if (zoom < 4) googleMap.setZoom(4);
       if (zoom > 6) googleMap.setZoom(6);
-      const panOffsetX = selectedCardPanOffsetX();
-      if (panOffsetX > 0) {
+      const panOffsetX = minimalOverlapPanOffsetX(entry.marker);
+      if (Math.abs(panOffsetX) >= 1) {
         googleMap.panBy(panOffsetX, 0);
       }
     }

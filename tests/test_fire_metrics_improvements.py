@@ -1664,19 +1664,32 @@ class TestInMapCityCard(unittest.TestCase):
         self.assertNotIn("openMarkerPreview(", fn_body)
 
     def test_pan_offset_applied_for_right_side_panel(self):
-        """panBy uses computed card-aware offset to keep marker clear of the panel."""
+        """panBy uses minimum overlap-only offset computed from rendered marker/card positions."""
         html = self._template()
         fn_start = html.find("function openCurrentCityPreview(")
         fn_end = html.find("\n  function ", fn_start + 1)
         fn_body = html[fn_start:fn_end]
-        self.assertIn("const panOffsetX = selectedCardPanOffsetX()", fn_body)
+        self.assertIn("const panOffsetX = minimalOverlapPanOffsetX(entry.marker)", fn_body)
         self.assertIn("googleMap.panBy(panOffsetX, 0)", fn_body)
+        self.assertNotIn("googleMap.panTo(entry.marker.position)", fn_body)
 
-    def test_selected_card_pan_offset_helper_exists(self):
+    def test_adaptive_card_side_helpers_exist(self):
         html = self._template()
-        self.assertIn("function selectedCardPanOffsetX()", html)
+        self.assertIn("function markerScreenPositionInMap(", html)
+        self.assertIn("function chooseDesktopCardSide(", html)
+        self.assertIn("function minimalOverlapPanOffsetX(", html)
+        self.assertIn("function setCityCardSide(", html)
         self.assertIn("getBoundingClientRect()", html)
+        self.assertIn("markerPos.x >= usableMid ? \"left\" : \"right\"", html)
         self.assertIn("cardRect.width >= mapRect.width * 0.75", html)
+
+    def test_open_current_city_preview_sets_card_side_from_marker_position(self):
+        html = self._template()
+        fn_start = html.find("function openCurrentCityPreview(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        self.assertIn("const side = chooseDesktopCardSide(entry.marker)", fn_body)
+        self.assertIn("setCityCardSide(side)", fn_body)
 
     def test_advanced_marker_element_remains(self):
         self.assertIn("AdvancedMarkerElement", self._template())
@@ -1722,6 +1735,11 @@ class TestInMapCityCard(unittest.TestCase):
         self.assertIn("width: clamp(300px", block)
         self.assertIn("max-height: calc(100% - 24px)", block)
         self.assertIn("overflow-y: auto", block)
+
+    def test_city_card_desktop_side_classes_exist(self):
+        css = self._css()
+        self.assertIn(".fire-city-card.fire-city-card-left", css)
+        self.assertIn(".fire-city-card.fire-city-card-right", css)
 
     def test_city_card_mobile_panel_scroll_enabled(self):
         css = self._css()
