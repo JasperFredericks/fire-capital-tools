@@ -1026,14 +1026,28 @@
     const row = comparisonBody.querySelector(`[data-city-key="${cssEscapeValue(cityKey)}"]`);
     if (!row) return;
 
-    const rowRect = row.getBoundingClientRect();
-    const wrapRect = comparisonWrap.getBoundingClientRect();
-    const verticallyVisible = rowRect.top >= wrapRect.top && rowRect.bottom <= wrapRect.bottom;
-    const horizontallyVisible = rowRect.left >= wrapRect.left && rowRect.right <= wrapRect.right;
-    if (verticallyVisible && horizontallyVisible) return;
+    const inset = 8;
+    const rowTop = row.offsetTop;
+    const rowBottom = rowTop + row.offsetHeight;
+    const viewTop = comparisonWrap.scrollTop;
+    const viewBottom = viewTop + comparisonWrap.clientHeight;
 
-    const behavior = prefersReducedMotion() ? "auto" : "smooth";
-    row.scrollIntoView({ behavior, block: "nearest", inline: "nearest" });
+    if (rowTop < viewTop + inset) {
+      comparisonWrap.scrollTop = Math.max(0, rowTop - inset);
+    } else if (rowBottom > viewBottom - inset) {
+      comparisonWrap.scrollTop = Math.max(0, rowBottom - comparisonWrap.clientHeight + inset);
+    }
+
+    const rowLeft = row.offsetLeft;
+    const rowRight = rowLeft + row.offsetWidth;
+    const viewLeft = comparisonWrap.scrollLeft;
+    const viewRight = viewLeft + comparisonWrap.clientWidth;
+
+    if (rowLeft < viewLeft + inset) {
+      comparisonWrap.scrollLeft = Math.max(0, rowLeft - inset);
+    } else if (rowRight > viewRight - inset) {
+      comparisonWrap.scrollLeft = Math.max(0, rowRight - comparisonWrap.clientWidth + inset);
+    }
   }
 
   function setPendingCurrentCityPreview(cityKey, panMap) {
@@ -1133,6 +1147,31 @@
     fireCityCard.innerHTML = "";
   }
 
+  function selectedCardPanOffsetX() {
+    if (!mapContainer || !fireCityCard) return 0;
+    if (fireCityCard.style.display === "none") return 0;
+
+    const mapRect = mapContainer.getBoundingClientRect();
+    const cardRect = fireCityCard.getBoundingClientRect();
+    if (!mapRect.width || !cardRect.width) return 0;
+
+    // Bottom-sheet style card on mobile should not force horizontal pan.
+    if (cardRect.width >= mapRect.width * 0.75) return 0;
+
+    const overlapsMapHorizontally = cardRect.right > mapRect.left && cardRect.left < mapRect.right;
+    if (!overlapsMapHorizontally) return 0;
+
+    const cardOnRight = cardRect.left >= (mapRect.left + mapRect.width * 0.45);
+    if (!cardOnRight) return 0;
+
+    const safeGap = Math.max(18, Math.round(mapRect.width * 0.03));
+    const maxAllowedMarkerX = (cardRect.left - mapRect.left) - safeGap;
+    const centeredMarkerX = mapRect.width / 2;
+    const requiredOffset = centeredMarkerX - maxAllowedMarkerX;
+    const maxOffset = Math.round(mapRect.width * 0.4);
+    return Math.max(0, Math.min(Math.round(requiredOffset), maxOffset));
+  }
+
   function openCurrentCityPreview(panMap = false) {
     if (!currentCity) return false;
     const currentKey = stableCityKey(currentCity);
@@ -1143,16 +1182,18 @@
     }
 
     clearPendingCurrentCityPreview();
+    showCityCard(currentCity);
+
     if (panMap && entry.marker.position) {
       googleMap.panTo(entry.marker.position);
       const zoom = googleMap.getZoom() || 3;
       if (zoom < 4) googleMap.setZoom(4);
       if (zoom > 6) googleMap.setZoom(6);
-      // Wider card requires a larger right-panel offset so selected marker remains visible.
-      googleMap.panBy(210, 0);
+      const panOffsetX = selectedCardPanOffsetX();
+      if (panOffsetX > 0) {
+        googleMap.panBy(panOffsetX, 0);
+      }
     }
-
-    showCityCard(currentCity);
     return true;
   }
 

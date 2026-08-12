@@ -1664,12 +1664,19 @@ class TestInMapCityCard(unittest.TestCase):
         self.assertNotIn("openMarkerPreview(", fn_body)
 
     def test_pan_offset_applied_for_right_side_panel(self):
-        """panBy is called to offset marker left of right-side panel."""
+        """panBy uses computed card-aware offset to keep marker clear of the panel."""
         html = self._template()
         fn_start = html.find("function openCurrentCityPreview(")
         fn_end = html.find("\n  function ", fn_start + 1)
         fn_body = html[fn_start:fn_end]
-        self.assertIn("panBy(210, 0)", fn_body)
+        self.assertIn("const panOffsetX = selectedCardPanOffsetX()", fn_body)
+        self.assertIn("googleMap.panBy(panOffsetX, 0)", fn_body)
+
+    def test_selected_card_pan_offset_helper_exists(self):
+        html = self._template()
+        self.assertIn("function selectedCardPanOffsetX()", html)
+        self.assertIn("getBoundingClientRect()", html)
+        self.assertIn("cardRect.width >= mapRect.width * 0.75", html)
 
     def test_advanced_marker_element_remains(self):
         self.assertIn("AdvancedMarkerElement", self._template())
@@ -1731,6 +1738,15 @@ class TestInMapCityCard(unittest.TestCase):
         self.assertGreater(idx, 0)
         vicinity = html[idx:idx + 400]
         self.assertIn("selectCurrentSearchCity", vicinity)
+
+    def test_scroll_analytics_row_uses_container_scroll_not_scroll_into_view(self):
+        html = self._template()
+        fn_start = html.find("function scrollAnalyticsRowIntoView(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        self.assertNotIn("scrollIntoView(", fn_body)
+        self.assertIn("comparisonWrap.scrollTop", fn_body)
+        self.assertIn("comparisonWrap.scrollLeft", fn_body)
 
     def test_coordinates_not_overwritten(self):
         """lat/lng values are never assigned; only read via extractCoordinates."""
