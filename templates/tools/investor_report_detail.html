@@ -214,5 +214,104 @@
   </form>
 </div>
 
+<!-- ── GP partner split ───────────────────────────────────────────────── -->
+{#
+  Strictly downstream. The cascade decides what the GP receives; this
+  divides that number among the people who make up the GP. Adding or
+  changing partners cannot move the promote itself, only who holds it.
+
+  Invariant 11 is asserted on every allocation, so if this section renders
+  at all the split has already reconciled to the cent in every period.
+#}
+<div class="card" id="gp-split">
+  <div class="scorecard-section-title">GP Partner Split</div>
+
+  {% if result and result.gp_split %}
+    {% set split = result.gp_split %}
+    <p class="page-subtitle" style="margin-top:12px;">
+      Total GP promote <strong>{{ money(split.gp_distributed) }}</strong>
+      {%- if split.is_default %}
+        &mdash; no partners configured, so it reports as a single GP bucket.
+      {%- else %}
+        &mdash; divided among {{ split.partner_count }} partners below.
+      {% endif %}
+    </p>
+
+    {% if not split.is_default %}
+      <div class="table-wrap" style="margin-top:12px;">
+        <table class="rent-comps-table">
+          <thead>
+            <tr><th>Partner</th><th>Share</th><th>Promote Received</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            {% for p in split.partners %}
+              <tr>
+                <td><strong>{{ p.name }}</strong></td>
+                <td>{{ '{:,.2f}%'.format(p.share_pct) }}</td>
+                <td>{{ money(p.distributed) }}</td>
+                <td class="stat-box-sub">{{ p.notes or '—' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+          <tfoot>
+            <tr style="font-weight:700;">
+              <td>Total</td><td>100.00%</td>
+              <td>{{ money(split.gp_distributed) }}</td><td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    {% endif %}
+  {% endif %}
+
+  <form method="POST"
+        action="{{ url_for('investor_report.save_gp_partners', scenario_id=scenario.id) }}"
+        style="margin-top:16px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <table class="rent-comps-table" id="partners-table">
+      <thead>
+        <tr><th style="width:30%;">Name</th><th>Share (%)</th>
+            <th style="width:35%;">Notes</th><th></th></tr>
+      </thead>
+      <tbody id="partners-body">
+        {% for p in partners %}
+          <tr>
+            <td><input class="form-input" type="text" name="partner_name" value="{{ p.name }}"></td>
+            <td><input class="form-input" type="text" name="partner_share_pct"
+                       value="{{ p.share_pct if p.share_pct is not none else '' }}"></td>
+            <td><input class="form-input" type="text" name="partner_notes" value="{{ p.notes or '' }}"></td>
+            <td><button type="button" class="btn btn-ghost"
+                        onclick="this.closest('tr').remove();">Remove</button></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap;">
+      <button type="button" class="btn btn-secondary" onclick="addPartnerRow();">Add Partner</button>
+      <button type="submit" class="btn btn-primary">Save GP Split</button>
+    </div>
+    <p class="stat-box-sub" style="margin-top:10px;">
+      Shares must total exactly 100%. A set totalling anything else is refused
+      rather than scaled to fit &mdash; a short total means a partner is missing,
+      and topping the others up would pay each of them more than their
+      agreement says. Saving with no rows returns the promote to a single
+      GP bucket.
+    </p>
+  </form>
+</div>
+
+<script>
+  function addPartnerRow() {
+    var body = document.getElementById('partners-body');
+    var n = body.rows.length + 1;
+    var row = body.insertRow();
+    row.innerHTML =
+      '<td><input class="form-input" type="text" name="partner_name" value="Partner ' + n + '"></td>' +
+      '<td><input class="form-input" type="text" name="partner_share_pct" value=""></td>' +
+      '<td><input class="form-input" type="text" name="partner_notes" value=""></td>' +
+      '<td><button type="button" class="btn btn-ghost" onclick="this.closest(\'tr\').remove();">Remove</button></td>';
+  }
+</script>
+
 {% include "_feedback.html" %}
 {% endblock %}

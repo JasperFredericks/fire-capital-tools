@@ -37,6 +37,7 @@ from tools import deal_dive_db
 from tools import investor_report_db as db
 from tools import underwriting_db as uw_db
 from tools import underwriting_math as um
+from tools import gp_split_math as gps
 from tools import waterfall_math as wm
 from tools.form_utils import to_float, to_int
 
@@ -169,8 +170,8 @@ def new_scenario():
             "property_label": f"{deal['address']}, {deal['city']} {deal['state']}",
             "pref_rate_pct": to_float(request.form.get("pref_rate_pct")) or 8.0,
             "pref_convention": wm.PREF_CONVENTION_ACCRUAL,
-            "promote_lp_pct": to_float(request.form.get("promote_lp_pct")) or 80.0,
-            "promote_gp_pct": to_float(request.form.get("promote_gp_pct")) or 20.0,
+            "promote_lp_pct": to_float(request.form.get("promote_lp_pct")) or db.DEFAULT_PROMOTE_LP_PCT,
+            "promote_gp_pct": to_float(request.form.get("promote_gp_pct")) or db.DEFAULT_PROMOTE_GP_PCT,
         })
     flash("Waterfall scenario created.", "success")
     return redirect(url_for("investor_report.detail", scenario_id=sid))
@@ -184,6 +185,7 @@ def detail(scenario_id):
         if not scenario:
             abort(404)
         tiers = db.list_tiers(conn, scenario_id)
+        partners = db.list_gp_partners(conn, scenario_id)
         contributions = db.list_contributions(conn, scenario["deal_id"])
 
     uw_scenario, uw_result = _underwriting_result(scenario["underwriting_scenario_id"])
@@ -215,10 +217,17 @@ def detail(scenario_id):
             source_levered_irr=None,
             source_levered_cashflows=returns.get("levered_cashflows"))
         result["invariant_checks"] = wm.check_invariants(result) + source_checks
+        # Downstream of the cascade: dividing a number the waterfall has
+        # already fixed. GPSplitInvariantError is intentionally not caught,
+        # for the same reason WaterfallInvariantError is not.
+        gp_split = gps.allocate(result, partners)
+        result["gp_split"] = gp_split
+        result["invariant_checks"] += gp_split["invariant_checks"]
 
     return render_template(
         "tools/investor_report_detail.html",
         scenario=scenario, tiers=tiers, contributions=contributions,
+        partners=partners,
         deal=_deal_for(scenario["deal_id"]),
         uw_scenario=uw_scenario, uw_result=uw_result,
         result=result, error=error,
@@ -234,7 +243,7 @@ def save(scenario_id):
             flash("That waterfall scenario could not be found.", "danger")
             return redirect(url_for("investor_report.index"))
         gp = to_float(request.form.get("promote_gp_pct"))
-        gp = 20.0 if gp is None else gp
+        gp = db.DEFAULT_PROMOTE_GP_PCT if gp is None else gp
         db.update_scenario(conn, scenario_id, {
             "name": (request.form.get("name") or "Base waterfall").strip(),
             "pref_rate_pct": to_float(request.form.get("pref_rate_pct")) or 0.0,
@@ -244,6 +253,60 @@ def save(scenario_id):
         })
     flash("Waterfall terms saved.", "success")
     return redirect(url_for("investor_report.detail", scenario_id=scenario_id))
+
+
+@investor_report_bp.route("/scenario/<int:scenario_id>/partners", methods=["POST"])
+@login_required
+def save_gp_partners(scenario_id):
+    """Rewrite this scenario's GP partner split.
+
+    Posting an empty set is meaningful: it returns the scenario to a
+    single implicit 100% GP bucket, which is the only way back and so
+    must be reachable.
+
+    Validated before storing. A set that does not total 100% cannot be
+    allocated, and storing it would leave a scenario whose detail page
+    raises on open.
+    """
+    with db.get_connection() as conn:
+        if not db.get_scenario(conn, scenario_id):
+            flash("That waterfall scenario could not be found.", "danger")
+            return redirect(url_for("investor_report.index"))
+
+        names = request.form.getlist("partner_name")
+        shares = request.form.getlist("partner_share_pct")
+        notes = request.form.getlist("partner_notes")
+        investor_ids = request.form.getlist("partner_investor_id")
+
+        partners = []
+        for i in range(len(shares)):
+            share = to_float(shares[i])
+            if share is None:
+                continue          # a blank row is an unfilled row, not a 0% partner
+            partners.append({
+                "sort_order": i,
+                "name": (names[i] if i < len(names) else "") or f"Partner {i + 1}",
+                "share_pct": share,
+                "notes": (notes[i] if i < len(notes) else "") or None,
+                "investor_id": to_int(investor_ids[i]) if i < len(investor_ids) else None,
+            })
+
+        if partners:
+            try:
+                gps.validate(gps.normalize(partners))
+            except gps.GPSplitError as exc:
+                flash(str(exc), "danger")
+                return redirect(
+                    url_for("investor_report.detail", scenario_id=scenario_id) + "#gp-split")
+
+        db.replace_gp_partners(conn, scenario_id, partners)
+
+    if partners:
+        flash(f"GP split saved across {len(partners)} partner"
+              f"{'s' if len(partners) != 1 else ''}.", "success")
+    else:
+        flash("GP split cleared — the promote reports as a single GP bucket.", "success")
+    return redirect(url_for("investor_report.detail", scenario_id=scenario_id) + "#gp-split")
 
 
 @investor_report_bp.route("/scenario/<int:scenario_id>/delete", methods=["POST"])
@@ -261,15 +324,73 @@ def delete(scenario_id):
 # ── Cross-tool ───────────────────────────────────────────────────────────
 
 def summary_for_deal(deal_id: int) -> dict | None:
+    """The deal's latest waterfall, with its actual results.
+
+    Previously this returned only the stored scenario row and a
+    contributed total -- everything a caller would want to *show* (LP IRR,
+    GP promote, who gets what) had to be recomputed by the caller, which
+    is why nothing used it for more than a link.
+
+    It now runs the waterfall and returns the figures themselves. Running
+    rather than storing is the same discipline the rest of the report
+    follows: a stored IRR that disagrees with the assumptions beneath it
+    is the worst failure this tool could have.
+
+    Never raises. A summary card is decoration on someone else's page, so
+    a scenario that cannot currently be computed comes back with
+    `computed: False` and a reason rather than taking that page down with
+    it.
+    """
     with db.get_connection() as conn:
         rows = db.list_scenarios(conn, deal_id=deal_id)
         if not rows:
             return None
         latest = rows[0]
         latest["total_count"] = db.count_for_deal(conn, deal_id)
-        latest["contributed"] = sum(
-            c["amount"] or 0.0 for c in db.list_contributions(conn, deal_id))
+        contributions = db.list_contributions(conn, deal_id)
+        latest["contributed"] = sum(c["amount"] or 0.0 for c in contributions)
+        tiers = db.list_tiers(conn, latest["id"])
+        partners = db.list_gp_partners(conn, latest["id"])
+
+    latest.update({"computed": False, "reason": None, "lp_irr": None,
+                   "lp_distributed": None, "gp_promote": None,
+                   "gp_split": None, "partners": []})
+
+    uw_scenario, uw_result = _underwriting_result(latest["underwriting_scenario_id"])
+    if uw_scenario is None:
+        latest["reason"] = "The source Underwriting scenario no longer exists."
         return latest
+    if uw_result is None:
+        latest["reason"] = "The source Underwriting scenario cannot currently be computed."
+        return latest
+    if not contributions:
+        latest["reason"] = "No capital contributions recorded for this deal yet."
+        return latest
+
+    try:
+        returns = uw_result["returns"]
+        result = wm.run_waterfall(
+            contributions, wm.periods_from_underwriting(returns),
+            {"pref_rate_pct": latest["pref_rate_pct"],
+             "pref_convention": latest["pref_convention"], "tiers": tiers})
+        split = gps.allocate(result, partners)
+    except (wm.WaterfallError, wm.WaterfallInvariantError,
+            gps.GPSplitError, gps.GPSplitInvariantError) as exc:
+        latest["reason"] = str(exc)
+        return latest
+
+    latest.update({
+        "computed": True,
+        "lp_contributed": result["lp_aggregate"]["contributed"],
+        "lp_distributed": result["lp_aggregate"]["distributed"],
+        "lp_irr": result["lp_aggregate"]["irr"],
+        "lp_irr_reason": result["lp_aggregate"]["irr_reason"],
+        "gp_promote": result["totals"]["gp_distributed"],
+        "gp_split": split,
+        "partners": split["partners"],
+        "total_distributed": result["totals"]["distributed"],
+    })
+    return latest
 
 
 def purge_for_deal(deal_id: int, upload_root: Path | None = None) -> list[int]:

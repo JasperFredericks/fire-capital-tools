@@ -143,6 +143,28 @@ def _schedule_rows(scenario, assumption_years):
     return rows
 
 
+def _investor_summary(deal_id):
+    """Investor Report's figures for this deal, or None.
+
+    Imported inside the function rather than at module scope: Deal Dive
+    already imports both tools, and a top-level import here would close a
+    cycle (investor_report imports underwriting_db, and underwriting
+    would import investor_report).
+
+    Never raises. This card is a courtesy on someone else's page -- a
+    waterfall that cannot be computed must not take the Underwriting
+    scenario down with it, and summary_for_deal already reports that state
+    rather than throwing.
+    """
+    if deal_id is None:
+        return None
+    try:
+        from tools import investor_report
+        return investor_report.summary_for_deal(deal_id)
+    except Exception:
+        return None
+
+
 # ── Index ────────────────────────────────────────────────────────────────
 
 @underwriting_bp.route("/")
@@ -316,6 +338,7 @@ def detail(scenario_id):
         default_categories=um.DEFAULT_EXPENSE_CATEGORIES,
         acquisition_categories=um.DEFAULT_ACQUISITION_COST_CATEGORIES,
         readiness_rows=readiness_rows,
+        investor_summary=_investor_summary(scenario["deal_id"]),
         readiness_counts=readiness.counts(readiness_rows),
         acquisition_saved={l["category_key"]: l["annual_amount"]
                            for l in expense_lines if um.is_acquisition_line(l)},
