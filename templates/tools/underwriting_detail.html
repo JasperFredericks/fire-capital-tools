@@ -250,6 +250,8 @@
       {% for key, label in [
           ('purchase_price','Purchase Price ($)'), ('closing_costs_pct','Closing Costs (%)'),
           ('acquisition_fee_pct','Acquisition Fee (%)'),
+          ('management_fee_pct','Management Fee (% of EGI/yr)'),
+          ('capital_transaction_fee_pct','Capital Transaction Fee (% of sale)'),
           ('ltv_pct','LTV (%)'), ('interest_rate_pct','Interest Rate (%)'),
           ('amort_years','Amortization (yrs)'), ('hold_years','Hold Period (yrs)'),
           ('exit_cap_pct','Exit Cap Rate (%)'), ('selling_costs_pct','Selling Costs (%)'),
@@ -264,6 +266,31 @@
       {% endfor %}
     </div>
     <button type="submit" class="btn btn-primary">Save Assumptions</button>
+    {#
+      Both fees are property-level costs, deducted here before anything
+      downstream sees the cash -- they are not GP distributions, and the
+      Investor Report waterfall therefore allocates the post-fee vector.
+
+      The double-count warning is not decoration: "Management Fee" is also
+      one of the standard expense categories, so a T12 that already carries
+      a management-fee line plus a percentage here charges it twice.
+    #}
+    {% if result and (result.management_fee_year1 or result.returns.capital_transaction_fee) %}
+      <div class="result-note" style="border-left:3px solid #b45309; margin-top:12px;">
+        <strong>Fees are deducted at the property level, before distributions.</strong>
+        {% if result.management_fee_year1 %}
+          Management fee of {{ money(result.management_fee_year1) }} in year 1 is charged
+          on effective gross income and reduces NOI &mdash; and therefore also the exit
+          value, since the exit capitalizes NOI.
+          <em>Check the expense lines below do not already carry a management-fee line,
+          or it is charged twice.</em>
+        {% endif %}
+        {% if result.returns.capital_transaction_fee %}
+          Capital transaction fee of {{ money(result.returns.capital_transaction_fee) }}
+          is charged on the gross sale price at exit.
+        {% endif %}
+      </div>
+    {% endif %}
   </form>
 </div>
 

@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS underwriting_scenarios (
     name TEXT NOT NULL DEFAULT 'Base case',
     property_label TEXT NOT NULL,
     purchase_price REAL, closing_costs_pct REAL, acquisition_fee_pct REAL,
+    capital_transaction_fee_pct REAL, management_fee_pct REAL,
     ltv_pct REAL,
     interest_rate_pct REAL, amort_years INTEGER,
     hold_years INTEGER, exit_cap_pct REAL, selling_costs_pct REAL,
@@ -82,6 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_uw_unit ON underwriting_unit_lines (scenario_id);
 
 SCENARIO_NUMERIC = (
     "purchase_price", "closing_costs_pct", "acquisition_fee_pct",
+    "capital_transaction_fee_pct", "management_fee_pct",
     "ltv_pct", "interest_rate_pct",
     "hold_years", "exit_cap_pct", "selling_costs_pct", "vacancy_pct",
     "concessions_pct", "bad_debt_pct", "other_income_annual",
@@ -102,6 +104,8 @@ def get_db_path() -> Path:
 # the upgrade would raise "no such column" on read.
 _SCENARIO_ADDED_COLUMNS = (
     ("acquisition_fee_pct", "REAL"),
+    ("capital_transaction_fee_pct", "REAL"),
+    ("management_fee_pct", "REAL"),
 )
 
 

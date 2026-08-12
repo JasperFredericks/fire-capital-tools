@@ -274,19 +274,30 @@ def acquisition_costs(expense_lines: list[dict[str, Any]],
 
 def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
                        hold_years: int, rent_growth_pct: float,
-                       default_expense_growth_pct: float) -> dict[str, Any]:
+                       default_expense_growth_pct: float,
+                       management_fee_pct: float | None = None) -> dict[str, Any]:
     """NOI for years 1..H plus the forward NOI (year H+1) used at exit.
 
     Income grows at one rate. Expenses grow per line, each falling back to
     the scenario default when it has no rate of its own -- that is the point
     of an itemized model: property tax and insurance rarely move at the same
     rate as payroll, and a single blended assumption hides that.
+
+    `management_fee_pct` is charged annually as a percentage of that year's
+    effective gross income, and is deducted with the other operating
+    expenses -- so it reduces NOI, and therefore also the exit value, since
+    the exit capitalizes NOI. It needs no growth rate of its own: being a
+    percentage of income, it already grows with income.
+
+    None or 0 adds nothing at all, not a zero-valued term, so a scenario
+    without a fee is arithmetically untouched.
     """
     if hold_years < 1:
         raise ValidationError("Hold period must be at least 1 year.")
 
     rg = (rent_growth_pct or 0.0) / 100.0
     default_eg = (default_expense_growth_pct or 0.0) / 100.0
+    mgmt = (management_fee_pct or 0.0) / 100.0
     included = operating_expense_lines(expense_lines)
 
     years = []
@@ -298,7 +309,11 @@ def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
             g = l.get("growth_pct")
             g = default_eg if g is None else (float(g) / 100.0)
             expenses += amt * (1 + g) ** (t - 1)
+        management_fee = income * mgmt
+        if mgmt:
+            expenses += management_fee
         years.append({"year": t, "income": income, "expenses": expenses,
+                      "management_fee": management_fee,
                       "noi": income - expenses})
 
     return {
@@ -322,6 +337,7 @@ def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
     proj = project_noi_series(
         egi["effective_gross_income"], expense_lines, hold,
         _f(scenario.get("rent_growth_pct")), _f(scenario.get("expense_growth_pct")),
+        management_fee_pct=scenario.get("management_fee_pct"),
     )
     acq = acquisition_costs(expense_lines, scenario.get("purchase_price"),
                             scenario.get("closing_costs_pct"),
@@ -332,11 +348,21 @@ def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
     # computing returns with byte-identical code.
     engine_inputs = _engine_inputs(scenario, acq["effective_pct"])
     returns = analyze_noi_series(engine_inputs, proj["noi_series"], proj["noi_exit"])
+
+    # The management fee is an operating expense of this model, so the
+    # year-1 headline has to include it -- otherwise the figure quoted as
+    # "operating expenses" would not be the figure actually subtracted to
+    # reach the NOI shown beside it.
+    management_fee_year1 = proj["years"][0]["management_fee"] if proj["years"] else 0.0
+
     return {
         "egi": egi,
         "unit_mix": unit_mix(unit_lines),
         "projection": proj,
-        "operating_expenses_year1": total_operating_expenses(expense_lines),
+        "operating_expenses_year1": (total_operating_expenses(expense_lines)
+                                     + management_fee_year1),
+        "expense_lines_year1": total_operating_expenses(expense_lines),
+        "management_fee_year1": management_fee_year1,
         "acquisition_costs": acq,
         "returns": returns,
     }
@@ -358,6 +384,10 @@ def _engine_inputs(scenario: dict[str, Any],
         "hold_years": int(scenario.get("hold_years") or 0),
         "exit_cap_pct": _f(scenario.get("exit_cap_pct")),
         "selling_costs_pct": _f(scenario.get("selling_costs_pct")),
+        # Charged on the gross sale price at exit, alongside selling costs.
+        # Deal Analyzer has no such field and never sets this key, so its
+        # path through the engine is untouched.
+        "capital_transaction_fee_pct": _f(scenario.get("capital_transaction_fee_pct")),
         "noi_year1": 1.0,
         "noi_growth_pct": 0.0,
     }

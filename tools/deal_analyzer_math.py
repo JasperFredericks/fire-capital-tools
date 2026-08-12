@@ -251,9 +251,16 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
     noi_exit = float(noi_exit)
     gross_sale = noi_exit / exit_cap
     selling_costs = gross_sale * sc_pct
+    # A capital transaction fee is charged on the gross sale price, like
+    # the selling costs beside it, and is absent (0.0) for every Deal
+    # Analyzer call -- that tool has no such field, so .get() keeps its
+    # arithmetic literally unchanged rather than merely equivalent.
+    ctf_pct = float(inputs.get("capital_transaction_fee_pct") or 0.0) / 100.0
+    capital_transaction_fee = gross_sale * ctf_pct
     balance_at_exit = remaining_balance(loan, rate, amort_years, H * 12)
-    net_sale_levered = gross_sale - selling_costs - balance_at_exit
-    net_sale_unlevered = gross_sale - selling_costs
+    net_sale_levered = (gross_sale - selling_costs - capital_transaction_fee
+                        - balance_at_exit)
+    net_sale_unlevered = gross_sale - selling_costs - capital_transaction_fee
 
     # Levered: equity out at t0, operating cash flow, plus sale net of debt.
     levered_flows = [-equity] + operating_cf[:]
@@ -297,6 +304,7 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
         "noi_exit_year": noi_exit,
         "gross_sale_price": gross_sale,
         "selling_costs": selling_costs,
+        "capital_transaction_fee": capital_transaction_fee,
         "loan_balance_at_exit": balance_at_exit,
         "net_sale_proceeds": net_sale_levered,
         "total_distributions": total_distributions,
