@@ -94,6 +94,7 @@ def index():
 
     return render_template(
         "tools/investor_report.html",
+        default_promote_gp_pct=db.DEFAULT_PROMOTE_GP_PCT,
         deal=deal, deal_id=deal_id, deals=deals, investors=investors,
         scenarios=scenarios, contributions=contributions,
         uw_scenarios=uw_scenarios,

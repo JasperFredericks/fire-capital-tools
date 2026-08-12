@@ -166,6 +166,30 @@ class TestSummaryForDeal(TempDatabases):
         self.assertIsNotNone(s["reason"])
 
 
+class TestPromoteDefaultReachesTheForm(unittest.TestCase):
+    """The default a user actually experiences is the one prefilled in the
+    new-waterfall form. It was hardcoded to 20 in the template and so
+    survived the change to 70/30 -- caught in production verification,
+    not by any test, which is why this one exists."""
+
+    def test_template_does_not_hardcode_a_promote_default(self):
+        tpl = (Path(__file__).resolve().parent.parent
+               / "templates" / "tools" / "investor_report.html").read_text(encoding="utf-8")
+        marker = 'name="promote_gp_pct"'
+        i = tpl.index(marker)
+        field = tpl[i:i + 200]
+        self.assertIn("default_promote_gp_pct", field,
+                      "the form must read the default from the module")
+        self.assertNotIn('value="20"', field)
+        self.assertNotIn('value="30"', field,
+                         "even the right number hardcoded will go stale again")
+
+    def test_route_supplies_the_default_to_the_template(self):
+        src = (Path(__file__).resolve().parent.parent
+               / "tools" / "investor_report.py").read_text(encoding="utf-8")
+        self.assertIn("default_promote_gp_pct=db.DEFAULT_PROMOTE_GP_PCT", src)
+
+
 class TestPromoteDefaultDoesNotRewriteHistory(TempDatabases):
     """Part C. The default moves to 70/30; stored scenarios do not move."""
 
