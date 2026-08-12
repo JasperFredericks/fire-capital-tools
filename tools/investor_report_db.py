@@ -38,6 +38,17 @@ from tools import waterfall_math as wm
 BASE_DIR = Path(__file__).resolve().parent.parent
 MAX_NAME_LEN = 255
 
+# Default promote split for a NEW scenario. FIRE Capital's stated
+# standard is 70/30, replacing the 80/20 this shipped with.
+#
+# This is a default, not a rule: every scenario stores its own split and
+# the form stays fully editable. Changing it cannot reach an existing
+# waterfall -- stored rows carry their own promote_lp_pct/promote_gp_pct
+# and their own tier rows, and nothing here rewrites them. A test asserts
+# that directly.
+DEFAULT_PROMOTE_LP_PCT = 70.0
+DEFAULT_PROMOTE_GP_PCT = 30.0
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS investors (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,8 +79,8 @@ CREATE TABLE IF NOT EXISTS waterfall_scenarios (
     property_label TEXT,
     pref_rate_pct REAL NOT NULL DEFAULT 8.0,
     pref_convention TEXT NOT NULL DEFAULT 'accrual',
-    promote_lp_pct REAL NOT NULL DEFAULT 80.0,
-    promote_gp_pct REAL NOT NULL DEFAULT 20.0,
+    promote_lp_pct REAL NOT NULL DEFAULT 70.0,
+    promote_gp_pct REAL NOT NULL DEFAULT 30.0,
     notes TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -87,6 +98,20 @@ CREATE TABLE IF NOT EXISTS waterfall_tiers (
 
 CREATE INDEX IF NOT EXISTS idx_ir_contrib_deal ON capital_contributions (deal_id);
 CREATE INDEX IF NOT EXISTS idx_ir_contrib_inv ON capital_contributions (investor_id);
+-- Named partners making up the GP. Rows here divide the promote the
+-- cascade already computed; no rows means one implicit 100% bucket, which
+-- is what every scenario predating this feature reports.
+CREATE TABLE IF NOT EXISTS gp_partners (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    waterfall_scenario_id INTEGER NOT NULL,
+    investor_id INTEGER,
+    name TEXT NOT NULL DEFAULT 'Partner',
+    share_pct REAL,
+    notes TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_ir_gp_partners ON gp_partners (waterfall_scenario_id);
 CREATE INDEX IF NOT EXISTS idx_ir_scen_deal ON waterfall_scenarios (deal_id);
 CREATE INDEX IF NOT EXISTS idx_ir_tiers ON waterfall_tiers (waterfall_scenario_id);
 """
@@ -196,17 +221,17 @@ def create_scenario(conn, fields: dict[str, Any]) -> int:
          "property_label": fields.get("property_label"),
          "pref_rate_pct": fields.get("pref_rate_pct", 8.0),
          "pref_convention": fields.get("pref_convention") or wm.PREF_CONVENTION_ACCRUAL,
-         "promote_lp_pct": fields.get("promote_lp_pct", 80.0),
-         "promote_gp_pct": fields.get("promote_gp_pct", 20.0),
+         "promote_lp_pct": fields.get("promote_lp_pct", DEFAULT_PROMOTE_LP_PCT),
+         "promote_gp_pct": fields.get("promote_gp_pct", DEFAULT_PROMOTE_GP_PCT),
          "notes": fields.get("notes"), "created_at": now, "updated_at": now})
     conn.commit()
     sid = cur.lastrowid
-    replace_tiers(conn, sid, default_tiers(fields.get("promote_lp_pct", 80.0),
-                                           fields.get("promote_gp_pct", 20.0)))
+    replace_tiers(conn, sid, default_tiers(fields.get("promote_lp_pct", DEFAULT_PROMOTE_LP_PCT),
+                                           fields.get("promote_gp_pct", DEFAULT_PROMOTE_GP_PCT)))
     return sid
 
 
-def default_tiers(lp_pct: float = 80.0, gp_pct: float = 20.0) -> list[dict[str, Any]]:
+def default_tiers(lp_pct: float = DEFAULT_PROMOTE_LP_PCT, gp_pct: float = DEFAULT_PROMOTE_GP_PCT) -> list[dict[str, Any]]:
     """The beta's three tiers. Stored as rows even though there is exactly
     one configuration, so adding an IRR-hurdle band later is data."""
     return [
@@ -236,6 +261,39 @@ def list_tiers(conn, scenario_id: int) -> list[dict[str, Any]]:
         "SELECT * FROM waterfall_tiers WHERE waterfall_scenario_id = ? ORDER BY sort_order, id",
         (scenario_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── GP partners ──────────────────────────────────────────────────────────
+#
+# No rows means one implicit 100% bucket. Nothing writes a default row,
+# because doing so would convert every existing scenario into a
+# "configured" one and make "has a split" unanswerable.
+
+def list_gp_partners(conn, scenario_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM gp_partners WHERE waterfall_scenario_id = ? "
+        "ORDER BY sort_order, id", (scenario_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def replace_gp_partners(conn, scenario_id: int, partners: list[dict[str, Any]]) -> None:
+    """Rewrite the partner set. Whole-list replacement, the same shape as
+    replace_tiers: the form posts every row, and a partner the user
+    removed has to disappear rather than linger."""
+    conn.execute("DELETE FROM gp_partners WHERE waterfall_scenario_id = ?", (scenario_id,))
+    conn.executemany(
+        """INSERT INTO gp_partners
+           (waterfall_scenario_id, investor_id, name, share_pct, notes, sort_order)
+           VALUES (:waterfall_scenario_id,:investor_id,:name,:share_pct,:notes,:sort_order)""",
+        [{"waterfall_scenario_id": scenario_id,
+          "investor_id": p.get("investor_id"),
+          "name": (str(p.get("name") or f"Partner {i + 1}")[:MAX_NAME_LEN]).strip()
+                  or f"Partner {i + 1}",
+          "share_pct": p.get("share_pct"),
+          "notes": (p.get("notes") or None),
+          "sort_order": p.get("sort_order", i)}
+         for i, p in enumerate(partners)])
+    conn.commit()
 
 
 def get_scenario(conn, scenario_id: int) -> dict[str, Any] | None:
@@ -268,17 +326,18 @@ def update_scenario(conn, scenario_id: int, fields: dict[str, Any]) -> None:
         {"name": (fields.get("name") or "Base waterfall")[:MAX_NAME_LEN],
          "pref_rate_pct": fields.get("pref_rate_pct", 8.0),
          "pref_convention": fields.get("pref_convention") or wm.PREF_CONVENTION_ACCRUAL,
-         "promote_lp_pct": fields.get("promote_lp_pct", 80.0),
-         "promote_gp_pct": fields.get("promote_gp_pct", 20.0),
+         "promote_lp_pct": fields.get("promote_lp_pct", DEFAULT_PROMOTE_LP_PCT),
+         "promote_gp_pct": fields.get("promote_gp_pct", DEFAULT_PROMOTE_GP_PCT),
          "notes": fields.get("notes"), "updated_at": _now(), "scenario_id": scenario_id})
     replace_tiers(conn, scenario_id,
-                  default_tiers(fields.get("promote_lp_pct", 80.0),
-                                fields.get("promote_gp_pct", 20.0)))
+                  default_tiers(fields.get("promote_lp_pct", DEFAULT_PROMOTE_LP_PCT),
+                                fields.get("promote_gp_pct", DEFAULT_PROMOTE_GP_PCT)))
     conn.commit()
 
 
 def delete_scenario(conn, scenario_id: int) -> None:
     conn.execute("DELETE FROM waterfall_tiers WHERE waterfall_scenario_id = ?", (scenario_id,))
+    conn.execute("DELETE FROM gp_partners WHERE waterfall_scenario_id = ?", (scenario_id,))
     conn.execute("DELETE FROM waterfall_scenarios WHERE id = ?", (scenario_id,))
     conn.commit()
 

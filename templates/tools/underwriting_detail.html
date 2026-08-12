@@ -75,6 +75,83 @@
   </p>
 </div>
 
+<!-- ── Investor Report summary ────────────────────────────────────────── -->
+{#
+  Read-only view over Investor Report's own output. Nothing is computed
+  here -- every figure comes from summary_for_deal(), which runs the same
+  waterfall the Investor Report page runs, so the two cannot disagree.
+
+  Only rendered for a scenario linked to a real deal: a standalone
+  scenario has no deal_id, so there is no waterfall to summarise.
+#}
+{% if investor_summary %}
+<div class="card" id="investor-summary">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+    <div class="scorecard-section-title">Investor Returns</div>
+    <a class="btn btn-secondary"
+       href="{{ url_for('investor_report.detail', scenario_id=investor_summary.id) }}">
+      Open Full Waterfall
+    </a>
+  </div>
+
+  {% if not investor_summary.computed %}
+    <div class="result-note" style="border-left:3px solid #b45309; margin-top:12px;">
+      <strong>{{ investor_summary.name }}</strong> exists for this deal but has no
+      figures yet &mdash; {{ investor_summary.reason }}
+    </div>
+  {% else %}
+    <div class="stats-grid" style="margin:14px 0 8px;">
+      <div class="stat-box"><div class="stat-box-label">LP Contributed</div>
+        <div class="stat-box-value">{{ money(investor_summary.lp_contributed) }}</div></div>
+      <div class="stat-box"><div class="stat-box-label">LP Distributed</div>
+        <div class="stat-box-value">{{ money(investor_summary.lp_distributed) }}</div></div>
+      <div class="stat-box"><div class="stat-box-label">LP IRR</div>
+        <div class="stat-box-value">
+          {{ pct(investor_summary.lp_irr) }}
+        </div>
+        {% if investor_summary.lp_irr_reason %}
+          <div class="stat-box-sub">{{ investor_summary.lp_irr_reason }}</div>
+        {% endif %}
+      </div>
+      <div class="stat-box"><div class="stat-box-label">GP Promote</div>
+        <div class="stat-box-value">{{ money(investor_summary.gp_promote) }}</div>
+        <div class="stat-box-sub">
+          {{ '{:,.0f}'.format(investor_summary.promote_lp_pct) }}/{{ '{:,.0f}'.format(investor_summary.promote_gp_pct) }} split
+        </div></div>
+    </div>
+
+    {% if investor_summary.gp_split and not investor_summary.gp_split.is_default %}
+      <div class="table-wrap" style="margin-top:10px;">
+        <table class="rent-comps-table">
+          <thead><tr><th>GP Partner</th><th>Share</th><th>Promote Received</th></tr></thead>
+          <tbody>
+            {% for p in investor_summary.partners %}
+              <tr>
+                <td><strong>{{ p.name }}</strong></td>
+                <td>{{ '{:,.2f}%'.format(p.share_pct) }}</td>
+                <td>{{ money(p.distributed) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="stat-box-sub" style="margin-top:10px;">
+        No GP partner split configured &mdash; the promote reports as a single bucket.
+      </p>
+    {% endif %}
+
+    <p class="page-subtitle" style="margin-top:12px;">
+      From <strong>{{ investor_summary.name }}</strong>
+      {%- if investor_summary.total_count > 1 %}
+        (the latest of {{ investor_summary.total_count }} waterfalls for this deal)
+      {%- endif %}.
+      Computed on load by Investor Report, never stored.
+    </p>
+  {% endif %}
+</div>
+{% endif %}
+
 <!-- ── Deal readiness ─────────────────────────────────────────────────── -->
 {#
   Compares figures already computed above against reference targets.
