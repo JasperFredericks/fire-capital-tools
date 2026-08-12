@@ -5,10 +5,11 @@
 <div class="dashboard-hero">
   <div class="dashboard-hero-inner">
     <div class="dashboard-hero-text">
-      <h1 class="dashboard-hero-title">FIRE Capital Tools</h1>
-      <p class="dashboard-hero-sub">Internal platform for acquisitions, market research, and property operations.</p>
+      <h1 class="dashboard-hero-title">FIRE Capital AI Analytics</h1>
     </div>
-    <div class="dashboard-hero-accent" aria-hidden="true"></div>
+    <div class="dashboard-hero-logo" aria-hidden="true">
+      <img src="{{ url_for('static', filename='img/logo-mark.svg') }}" alt="">
+    </div>
   </div>
 </div>
 
@@ -16,7 +17,7 @@
 <p class="section-label">Operations</p>
 <div class="tool-grid">
 
-  <a href="{{ url_for('mmr.index') }}" class="tool-card tool-card--slate">
+  <a href="{{ url_for('mmr.index') }}" class="tool-card tool-card--amber">
     <div class="tool-card-icon">
       <svg viewBox="0 0 20 20" fill="currentColor">
         <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"/>
@@ -28,7 +29,7 @@
     <span class="tool-tag tag-live">Live</span>
   </a>
 
-  <a href="{{ url_for('scorecard.index') }}" class="tool-card tool-card--slate">
+  <a href="{{ url_for('scorecard.index') }}" class="tool-card tool-card--amber">
     <div class="tool-card-icon">
       <svg viewBox="0 0 20 20" fill="currentColor">
         <path fill-rule="evenodd" d="M3 3a1 1 0 000 2v8a2 2 0 002 2h2.586l-1.293 1.293a1 1 0 101.414 1.414L10 15.414l2.293 2.293a1 1 0 001.414-1.414L12.414 15H15a2 2 0 002-2V5a1 1 0 100-2H3zm11 4a1 1 0 10-2 0v4a1 1 0 102 0V7zm-3 1a1 1 0 10-2 0v3a1 1 0 102 0V8zM8 9a1 1 0 00-2 0v2a1 1 0 102 0V9z" clip-rule="evenodd"/>
@@ -97,7 +98,7 @@
 <p class="section-label">Markets</p>
 <div class="tool-grid">
 
-  <a href="{{ url_for('rent_comps.index') }}" class="tool-card tool-card--teal">
+  <a href="{{ url_for('rent_comps.index') }}" class="tool-card tool-card--navy">
     <div class="tool-card-icon">
       <svg viewBox="0 0 20 20" fill="currentColor">
         <path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/>
@@ -115,7 +116,7 @@
       </svg>
     </div>
     <div class="tool-card-title">FIRE Metrics</div>
-    <div class="tool-card-desc">City-level market screening — employment, population, income, crime, climate, and AI-powered CRE research from institutional sources.</div>
+    <div class="tool-card-desc">City level market economic indicators</div>
     <span class="tool-tag tag-live">Live</span>
   </a>
 
@@ -125,7 +126,7 @@
 <p class="section-label">Investors</p>
 <div class="tool-grid">
 
-  <a href="{{ url_for('investor_report.index') }}" class="tool-card tool-card--gold">
+  <a href="{{ url_for('investor_report.index') }}" class="tool-card tool-card--orange">
     <div class="tool-card-icon">
       <svg viewBox="0 0 20 20" fill="currentColor">
         <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z"/>

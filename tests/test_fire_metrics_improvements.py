@@ -1419,5 +1419,169 @@ class TestExistingBehaviorPreserved(unittest.TestCase):
         self.assertEqual(summary.CRE_RESEARCH_TTL_DAYS, 7)
 
 
+# ---------------------------------------------------------------------------
+# UI Redesign tests — dashboard, MMR gauge, brand system
+# ---------------------------------------------------------------------------
+
+class TestUIRedesign(unittest.TestCase):
+    """Static assertions against templates and CSS for the UI redesign pass."""
+
+    def _read(self, *parts: str) -> str:
+        from pathlib import Path
+        return (Path(__file__).parent.parent.joinpath(*parts)).read_text(encoding="utf-8")
+
+    def _dashboard(self) -> str:
+        return self._read("templates", "dashboard.html")
+
+    def _css(self) -> str:
+        return self._read("static", "style.css")
+
+    def _mmr(self) -> str:
+        return self._read("templates", "tools", "mmr_summary.html")
+
+    # ── Dashboard hero ─────────────────────────────────────────────────────
+    def test_hero_title_is_fire_capital_ai_analytics(self):
+        self.assertIn("FIRE Capital AI Analytics", self._dashboard())
+
+    def test_hero_old_title_removed(self):
+        self.assertNotIn(">FIRE Capital Tools<", self._dashboard())
+
+    def test_hero_subtitle_removed(self):
+        self.assertNotIn("Internal platform for acquisitions", self._dashboard())
+
+    def test_hero_logo_present_on_right(self):
+        html = self._dashboard()
+        self.assertIn("dashboard-hero-logo", html)
+        self.assertIn("logo-mark.svg", html)
+
+    # ── FIRE Metrics card description ──────────────────────────────────────
+    def test_fire_metrics_description_exact(self):
+        self.assertIn("City level market economic indicators", self._dashboard())
+
+    # ── Card color families ────────────────────────────────────────────────
+    def test_operations_cards_use_amber_theme(self):
+        html = self._dashboard()
+        # Both Operations links must carry --amber
+        amber_count = html.count("tool-card--amber")
+        self.assertGreaterEqual(amber_count, 2, "Both Operations cards should use --amber")
+
+    def test_investor_card_uses_orange_theme(self):
+        self.assertIn("tool-card--orange", self._dashboard())
+
+    def test_rent_comps_uses_navy_family(self):
+        html = self._dashboard()
+        # Rent Comps must use --navy (same family as FIRE Metrics)
+        import re
+        rent_comps_block = re.search(
+            r'rent_comps\.index.*?</a>', html, re.DOTALL
+        )
+        self.assertIsNotNone(rent_comps_block)
+        self.assertIn("tool-card--navy", rent_comps_block.group())
+
+    def test_no_teal_on_rent_comps(self):
+        """Rent Comps must not use --teal after redesign."""
+        html = self._dashboard()
+        import re
+        rent_comps_block = re.search(
+            r'rent_comps\.index.*?</a>', html, re.DOTALL
+        )
+        if rent_comps_block:
+            self.assertNotIn("tool-card--teal", rent_comps_block.group())
+
+    # ── Section labels ─────────────────────────────────────────────────────
+    def test_section_labels_are_larger(self):
+        css = self._css()
+        idx = css.find(".section-label {")
+        block_end = css.find("}", idx)
+        block = css[idx:block_end]
+        # Must be at least 14px (was 11px)
+        import re
+        size_match = re.search(r"font-size:\s*(\d+)px", block)
+        self.assertIsNotNone(size_match, "section-label must have a font-size")
+        self.assertGreaterEqual(int(size_match.group(1)), 14)
+
+    def test_section_labels_use_brand_color(self):
+        css = self._css()
+        idx = css.find(".section-label {")
+        block_end = css.find("}", idx)
+        block = css[idx:block_end]
+        self.assertTrue(
+            "var(--fire-navy)" in block or "#1a2744" in block,
+            "section-label should use FIRE navy color",
+        )
+
+    # ── CSS tokens ─────────────────────────────────────────────────────────
+    def test_css_custom_properties_defined(self):
+        css = self._css()
+        for token in ("--fire-navy", "--fire-blue", "--fire-orange", "--fire-gold",
+                      "--fire-surface", "--fire-text", "--fire-muted", "--fire-border"):
+            self.assertIn(token, css, f"CSS token {token} missing")
+
+    def test_tool_card_amber_theme_exists(self):
+        self.assertIn(".tool-card--amber {", self._css())
+
+    def test_tool_card_orange_theme_exists(self):
+        self.assertIn(".tool-card--orange {", self._css())
+
+    # ── btn-success no longer green ────────────────────────────────────────
+    def test_btn_success_not_green(self):
+        css = self._css()
+        idx = css.find(".btn-success")
+        block_end = css.find("}", idx)
+        block = css[idx:block_end].lower()
+        self.assertNotIn("#059669", block)
+        self.assertNotIn("#10b981", block)
+        self.assertNotIn("#047857", block)
+
+    # ── MMR occupancy gauge ────────────────────────────────────────────────
+    def test_mmr_gauge_html_present(self):
+        html = self._mmr()
+        self.assertIn("occ-gauge", html)
+        self.assertIn("occ-gauge-fill", html)
+
+    def test_mmr_gauge_css_exists(self):
+        css = self._css()
+        self.assertIn(".occ-gauge {", css)
+        self.assertIn(".occ-gauge-fill {", css)
+        self.assertIn("pointer-events: none", css)
+
+    def test_mmr_occupancy_value_remains_visible(self):
+        """Numeric occupancy text element must still exist alongside gauge."""
+        html = self._mmr()
+        self.assertIn('id="res-occupancy"', html)
+
+    def test_mmr_gauge_js_sets_occ_deg(self):
+        """Gauge JS must set --occ-deg to drive the conic-gradient."""
+        html = self._mmr()
+        self.assertIn("--occ-deg", html)
+
+    def test_mmr_download_button_not_green(self):
+        """Download button should use btn-primary, not btn-success."""
+        html = self._mmr()
+        import re
+        btn_match = re.search(r'id="download-btn"[^>]*class="([^"]+)"', html)
+        if btn_match is None:
+            btn_match = re.search(r'class="([^"]+)"[^>]*id="download-btn"', html)
+        self.assertIsNotNone(btn_match, "download-btn not found")
+        classes = btn_match.group(1)
+        self.assertNotIn("btn-success", classes)
+
+    # ── Delinquency: dollar only (GSR not available) ───────────────────────
+    def test_delinquency_dollar_element_still_present(self):
+        self.assertIn('id="res-delinquency"', self._mmr())
+
+    # ── Routes unchanged ───────────────────────────────────────────────────
+    def test_dashboard_routes_unchanged(self):
+        html = self._dashboard()
+        for route in ("mmr.index", "scorecard.index", "deal_analyzer.index",
+                      "underwriting.index", "deal_dive.index", "site_dd.index",
+                      "rent_comps.index", "fire_metrics.index", "investor_report.index"):
+            self.assertIn(route, html, f"Route {route} missing from dashboard")
+
+    # ── Hero and hero class still present ─────────────────────────────────
+    def test_dashboard_hero_element_still_present(self):
+        self.assertIn("dashboard-hero", self._dashboard())
+
+
 if __name__ == "__main__":
     unittest.main()

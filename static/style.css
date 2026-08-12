@@ -1,3 +1,16 @@
+/* ── FIRE Capital design tokens ───────────────────────────────────────── */
+:root {
+  --fire-navy:         #1a2744;
+  --fire-blue:         #1e3a6e;
+  --fire-orange:       #e8590c;
+  --fire-gold:         #f59e0b;
+  --fire-surface:      #ffffff;
+  --fire-surface-blue: #eef2f8;
+  --fire-text:         #1a1a2e;
+  --fire-muted:        #6b7280;
+  --fire-border:       #e5e7eb;
+}
+
 /* ── Reset & base ──────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -210,11 +223,12 @@ a { color: inherit; text-decoration: none; }
 .dashboard-hero-text { flex: 1; }
 
 .dashboard-hero-title {
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 800;
   color: #ffffff;
-  letter-spacing: -0.3px;
-  margin-bottom: 4px;
+  letter-spacing: -0.4px;
+  margin-bottom: 0;
+  line-height: 1.2;
 }
 
 .dashboard-hero-sub {
@@ -223,33 +237,47 @@ a { color: inherit; text-decoration: none; }
   max-width: 540px;
 }
 
-.dashboard-hero-accent {
-  width: 4px;
-  height: 44px;
-  border-radius: 2px;
-  background: linear-gradient(180deg, #e8590c 0%, #f59e0b 100%);
+/* Logo slot on the right side of the hero */
+.dashboard-hero-logo {
   flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.92;
+}
+
+.dashboard-hero-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.dashboard-hero-accent {
+  display: none; /* replaced by logo */
 }
 
 /* ── Dashboard section labels ─────────────────────────────────────────────── */
 .section-label {
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: 1.2px;
+  letter-spacing: 0.2px;
   text-transform: uppercase;
-  color: #1a2744;
-  margin: 28px 0 12px;
+  color: var(--fire-navy);
+  margin: 32px 0 14px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .section-label::before {
   content: '';
   display: inline-block;
-  width: 3px;
-  height: 12px;
-  background: #e8590c;
+  width: 4px;
+  height: 16px;
+  background: var(--fire-orange);
   border-radius: 2px;
   flex-shrink: 0;
 }
@@ -324,14 +352,14 @@ a { color: inherit; text-decoration: none; }
 .tool-card-icon svg { width: 20px; height: 20px; color: #2563eb; fill: #2563eb; }
 
 .tool-card-title {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   color: #1a2744;
   margin-bottom: 5px;
 }
 
 .tool-card-desc {
-  font-size: 12px;
+  font-size: 12.5px;
   color: #6b7280;
   line-height: 1.55;
 }
@@ -417,6 +445,32 @@ a { color: inherit; text-decoration: none; }
 .tool-card--teal .tool-tag        { background: rgba(255,255,255,0.14); color: #ccfbf1; }
 .tool-card--teal:hover             { box-shadow: 0 6px 22px rgba(15,118,110,0.4); }
 
+/* Amber \u2014 Operations tools (warm gold/amber, FIRE brand mid-tone) */
+.tool-card--amber {
+  background: linear-gradient(135deg, #b45309 0%, #d97706 100%);
+  border-color: transparent;
+  color: #fff;
+}
+.tool-card--amber .tool-card-title { color: #fff; }
+.tool-card--amber .tool-card-desc  { color: rgba(255,255,255,0.72); }
+.tool-card--amber .tool-card-icon  { background: rgba(255,255,255,0.14); }
+.tool-card--amber .tool-card-icon svg { color: #fde68a; fill: #fde68a; }
+.tool-card--amber .tool-tag        { background: rgba(255,255,255,0.16); color: #fff8e1; }
+.tool-card--amber:hover             { box-shadow: 0 6px 22px rgba(180,83,9,0.45); }
+
+/* Orange \u2014 Investor Report (FIRE signature orange) */
+.tool-card--orange {
+  background: linear-gradient(135deg, #c94d0a 0%, #e8590c 100%);
+  border-color: transparent;
+  color: #fff;
+}
+.tool-card--orange .tool-card-title { color: #fff; }
+.tool-card--orange .tool-card-desc  { color: rgba(255,255,255,0.72); }
+.tool-card--orange .tool-card-icon  { background: rgba(255,255,255,0.14); }
+.tool-card--orange .tool-card-icon svg { color: #fed7aa; fill: #fed7aa; }
+.tool-card--orange .tool-tag        { background: rgba(255,255,255,0.16); color: #fff; }
+.tool-card--orange:hover             { box-shadow: 0 6px 22px rgba(232,89,12,0.5); }
+
 /* Backward-compat alias for the old fire-metrics class */
 .tool-card-fire-metrics {
   background: linear-gradient(135deg, #1a2744 0%, #1e3a6e 100%);
@@ -453,8 +507,8 @@ a { color: inherit; text-decoration: none; }
 .btn-primary:hover { background: #1d4ed8; }
 .btn-primary:disabled { background: #93c5fd; cursor: not-allowed; transform: none; }
 
-.btn-success   { background: #059669; color: #fff; }
-.btn-success:hover { background: #047857; }
+.btn-success   { background: var(--fire-navy); color: #fff; }
+.btn-success:hover { background: var(--fire-blue); }
 
 .btn-ghost {
   background: transparent;
@@ -1927,6 +1981,68 @@ hr.divider {
   font-size: 11px;
   color: #9ca3af;
   margin-top: 4px;
+}
+
+/* ── Occupancy gauge (CSS arc, no SVG library needed) ────────────────────── */
+.occ-gauge-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.occ-gauge {
+  width: 100px;
+  height: 54px;          /* half of a 100px circle */
+  position: relative;
+  overflow: hidden;
+}
+
+.occ-gauge-bg,
+.occ-gauge-fill {
+  position: absolute;
+  inset: 0;
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+}
+
+.occ-gauge-bg {
+  background: conic-gradient(#e5e7eb 0deg 180deg, transparent 180deg 360deg);
+}
+
+/* --occ-deg is set via JS; default 0 */
+.occ-gauge-fill {
+  background: conic-gradient(
+    var(--fire-orange) 0deg var(--occ-deg, 0deg),
+    transparent var(--occ-deg, 0deg) 180deg,
+    transparent 180deg 360deg
+  );
+  transition: background 0.6s ease;
+}
+
+/* white center cutout */
+.occ-gauge::after {
+  content: '';
+  position: absolute;
+  left: 14px; right: 14px;
+  top: 14px; bottom: 14px;
+  background: #fff;
+  border-radius: 50%;
+}
+
+.occ-gauge-value {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--fire-navy);
+  letter-spacing: -0.5px;
+}
+
+.occ-gauge-label {
+  font-size: 10.5px;
+  color: var(--fire-muted);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
 }
 
 /* ── Responsive ──────────────────────────────────────────────────────────── */

@@ -65,7 +65,7 @@
       </div>
       <div class="result-period" id="res-period"></div>
     </div>
-    <button id="download-btn" class="btn btn-success" type="button">
+    <button id="download-btn" class="btn btn-primary" type="button">
       <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
         <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
       </svg>
@@ -78,7 +78,14 @@
   <div class="stats-grid">
     <div class="stat-box">
       <div class="stat-box-label">Occupancy</div>
-      <div class="stat-box-value" id="res-occupancy">&mdash;</div>
+      <div class="occ-gauge-wrap">
+        <div class="occ-gauge" id="occ-gauge-arc">
+          <div class="occ-gauge-bg"></div>
+          <div class="occ-gauge-fill" id="occ-gauge-fill"></div>
+        </div>
+        <div class="occ-gauge-value" id="res-occupancy">&mdash;</div>
+        <div class="occ-gauge-label">occupancy</div>
+      </div>
       <div class="stat-box-sub" id="res-units-sub"></div>
     </div>
     <div class="stat-box">
@@ -325,12 +332,17 @@
           : "source-badge-unknown"
     );
 
-    // Occupancy
+    // Occupancy — text value + conic-gradient gauge arc
     resOccupancy.textContent = fmtPct(s.physical_occupancy_pct);
     const occ = s.occupied_units != null && s.total_units != null
       ? `${s.occupied_units} / ${s.total_units} units`
       : "";
     resUnitsSub.textContent  = occ;
+    const occFill = document.getElementById("occ-gauge-fill");
+    if (occFill && s.physical_occupancy_pct != null) {
+      const deg = Math.max(0, Math.min(180, (s.physical_occupancy_pct / 100) * 180));
+      occFill.style.setProperty("--occ-deg", deg + "deg");
+    }
 
     // Delinquency
     resDelin.textContent     = fmtCurrency(s.delinquency_total);
