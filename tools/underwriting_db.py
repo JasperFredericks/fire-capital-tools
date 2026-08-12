@@ -75,9 +75,27 @@ CREATE TABLE IF NOT EXISTS underwriting_unit_lines (
     lease_start TEXT, lease_end TEXT
 );
 
+-- Loans are a list, not columns on the scenario: a debt stack has an
+-- arbitrary number of tranches, and widening the scenario row for a
+-- second mortgage would need widening again for a third.
+--
+-- A scenario with no rows here is in single-loan mode and is financed by
+-- its own ltv_pct/interest_rate_pct/amort_years exactly as before, which
+-- is what makes multi-loan opt-in rather than a migration.
+CREATE TABLE IF NOT EXISTS underwriting_loans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scenario_id INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    name TEXT NOT NULL DEFAULT 'Mortgage',
+    amount REAL,
+    rate_pct REAL,
+    amort_years INTEGER
+);
+
 CREATE INDEX IF NOT EXISTS idx_uw_deal ON underwriting_scenarios (deal_id);
 CREATE INDEX IF NOT EXISTS idx_uw_exp ON underwriting_expense_lines (scenario_id);
 CREATE INDEX IF NOT EXISTS idx_uw_unit ON underwriting_unit_lines (scenario_id);
+CREATE INDEX IF NOT EXISTS idx_uw_loan ON underwriting_loans (scenario_id);
 """
 
 SCENARIO_NUMERIC = (
@@ -193,6 +211,7 @@ def update_scenario(conn, scenario_id: int, fields: dict[str, Any]) -> None:
 def delete_scenario(conn, scenario_id: int) -> None:
     conn.execute("DELETE FROM underwriting_expense_lines WHERE scenario_id = ?", (scenario_id,))
     conn.execute("DELETE FROM underwriting_unit_lines WHERE scenario_id = ?", (scenario_id,))
+    conn.execute("DELETE FROM underwriting_loans WHERE scenario_id = ?", (scenario_id,))
     conn.execute("DELETE FROM underwriting_scenarios WHERE id = ?", (scenario_id,))
     conn.commit()
 
@@ -264,3 +283,44 @@ def list_unit_lines(conn, scenario_id: int) -> list[dict[str, Any]]:
         "SELECT * FROM underwriting_unit_lines WHERE scenario_id = ? ORDER BY id",
         (scenario_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Loans ────────────────────────────────────────────────────────────────
+#
+# An empty list means single-loan mode -- see the schema comment. Nothing
+# here writes a default row, because creating one would silently convert
+# every existing scenario to multi-loan mode.
+
+def list_loans(conn, scenario_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM underwriting_loans WHERE scenario_id = ? ORDER BY sort_order, id",
+        (scenario_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def replace_loans(conn, scenario_id: int, loans: list[dict[str, Any]]) -> None:
+    """Rewrite the whole stack for a scenario.
+
+    Whole-list replacement rather than per-row updates, the same shape as
+    replace_expense_lines: the Loans form posts the entire stack, and a
+    row the user deleted has to disappear rather than linger.
+    """
+    conn.execute("DELETE FROM underwriting_loans WHERE scenario_id = ?", (scenario_id,))
+    conn.executemany(
+        """INSERT INTO underwriting_loans
+           (scenario_id, sort_order, name, amount, rate_pct, amort_years)
+           VALUES (:scenario_id,:sort_order,:name,:amount,:rate_pct,:amort_years)""",
+        [{"scenario_id": scenario_id,
+          "sort_order": l.get("sort_order", i),
+          "name": (str(l.get("name") or f"Loan {i + 1}")[:MAX_LABEL_LEN]).strip()
+                  or f"Loan {i + 1}",
+          "amount": l.get("amount"),
+          "rate_pct": l.get("rate_pct"),
+          "amort_years": l.get("amort_years")}
+         for i, l in enumerate(loans)])
+    conn.commit()
+
+
+def delete_loans_for_scenario(conn, scenario_id: int) -> None:
+    conn.execute("DELETE FROM underwriting_loans WHERE scenario_id = ?", (scenario_id,))
+    conn.commit()
