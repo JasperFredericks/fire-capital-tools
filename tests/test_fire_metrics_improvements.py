@@ -1583,5 +1583,223 @@ class TestUIRedesign(unittest.TestCase):
         self.assertIn("dashboard-hero", self._dashboard())
 
 
+# ---------------------------------------------------------------------------
+# In-map city card (Pass 1: clipping fix)
+# ---------------------------------------------------------------------------
+
+class TestInMapCityCard(unittest.TestCase):
+    def _template(self) -> str:
+        from pathlib import Path
+        return (Path(__file__).parent.parent / "templates" / "tools" / "fire_metrics.html").read_text()
+
+    def _css(self) -> str:
+        from pathlib import Path
+        return (Path(__file__).parent.parent / "static" / "style.css").read_text()
+
+    def test_fire_city_card_element_in_map_frame(self):
+        html = self._template()
+        self.assertIn('id="fire-city-card"', html)
+        # Card must appear inside the fire-map-frame div (order check)
+        frame_pos = html.find('class="fire-map-frame"')
+        card_pos = html.find('id="fire-city-card"')
+        self.assertGreater(card_pos, frame_pos)
+
+    def test_fire_city_card_css_exists(self):
+        css = self._css()
+        self.assertIn(".fire-city-card {", css)
+
+    def test_fire_city_card_is_absolutely_positioned(self):
+        css = self._css()
+        idx = css.find(".fire-city-card {")
+        block = css[idx:css.find("}", idx) + 1]
+        self.assertIn("position: absolute", block)
+
+    def test_fire_city_card_has_max_width_bound(self):
+        css = self._css()
+        idx = css.find(".fire-city-card {")
+        block = css[idx:css.find("}", idx) + 1]
+        self.assertIn("max-width", block)
+
+    def test_fire_city_card_pointer_events_auto(self):
+        """Panel itself receives pointer events (user can click close button)."""
+        css = self._css()
+        idx = css.find(".fire-city-card {")
+        block = css[idx:css.find("}", idx) + 1]
+        self.assertIn("pointer-events: auto", block)
+
+    def test_vignette_overlay_pointer_events_none(self):
+        """Decorative vignette must not block map interaction."""
+        css = self._css()
+        idx = css.find(".fire-map-vignette")
+        block = css[idx:css.find("}", idx) + 1]
+        self.assertIn("pointer-events: none", block)
+
+    def test_show_city_card_function_exists(self):
+        html = self._template()
+        self.assertIn("function showCityCard(", html)
+
+    def test_hide_city_card_function_exists(self):
+        html = self._template()
+        self.assertIn("function hideCityCard(", html)
+
+    def test_open_current_city_preview_calls_show_city_card(self):
+        html = self._template()
+        self.assertIn("showCityCard(currentCity)", html)
+
+    def test_open_current_city_preview_uses_city_card_only(self):
+        """Selected-city preview uses card rendering and no InfoWindow calls."""
+        html = self._template()
+        fn_start = html.find("function openCurrentCityPreview(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        self.assertIn("showCityCard(currentCity)", fn_body)
+        self.assertNotIn("googleInfoWindow", fn_body)
+
+    def test_open_current_city_preview_no_longer_calls_open_marker_preview_for_click(self):
+        """openCurrentCityPreview must not call openMarkerPreview (that opened InfoWindow)."""
+        html = self._template()
+        fn_start = html.find("function openCurrentCityPreview(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        self.assertNotIn("openMarkerPreview(", fn_body)
+
+    def test_pan_offset_applied_for_right_side_panel(self):
+        """panBy uses minimum overlap-only offset computed from rendered marker/card positions."""
+        html = self._template()
+        fn_start = html.find("function openCurrentCityPreview(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        self.assertIn("const panOffsetX = minimalOverlapPanOffsetX(entry.marker)", fn_body)
+        self.assertIn("googleMap.panBy(panOffsetX, 0)", fn_body)
+        self.assertNotIn("googleMap.panTo(entry.marker.position)", fn_body)
+
+    def test_adaptive_card_side_helpers_exist(self):
+        html = self._template()
+        self.assertIn("function markerScreenPositionInMap(", html)
+        self.assertIn("function chooseDesktopCardSide(", html)
+        self.assertIn("function minimalOverlapPanOffsetX(", html)
+        self.assertIn("function setCityCardSide(", html)
+        self.assertIn("getBoundingClientRect()", html)
+        self.assertIn("markerPos.x >= usableMid ? \"left\" : \"right\"", html)
+        self.assertIn("cardRect.width >= mapRect.width * 0.75", html)
+
+    def test_open_current_city_preview_sets_card_side_from_marker_position(self):
+        html = self._template()
+        fn_start = html.find("function openCurrentCityPreview(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        self.assertIn("const side = chooseDesktopCardSide(entry.marker)", fn_body)
+        self.assertIn("setCityCardSide(side)", fn_body)
+
+    def test_advanced_marker_element_remains(self):
+        self.assertIn("AdvancedMarkerElement", self._template())
+
+    def test_city_key_identity_preserved(self):
+        html = self._template()
+        self.assertIn("stableCityKey", html)
+        self.assertIn("city_key", html)
+
+    def test_select_current_search_city_still_exists(self):
+        self.assertIn("function selectCurrentSearchCity(", self._template())
+
+    def test_google_info_window_removed_entirely(self):
+        """No Google InfoWindow code remains; city card is sole detail UI."""
+        html = self._template()
+        self.assertNotIn("new InfoWindow(", html)
+        self.assertNotIn("googleInfoWindow", html)
+        self.assertNotIn("function openMarkerPreview(", html)
+
+    def test_city_card_metric_set_expanded(self):
+        """Card includes all existing city metrics shown elsewhere in payload/UI."""
+        html = self._template()
+        fn_start = html.find("function showCityCard(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        for label in (
+            "Coverage",
+            "Population",
+            "Median Income",
+            "Home Value",
+            "Employment",
+            "Crime",
+            "Density-Adj. Crime",
+            "Climate Risk",
+            "Landlord",
+        ):
+            self.assertIn(label, fn_body)
+
+    def test_city_card_desktop_width_and_scroll_constraints(self):
+        css = self._css()
+        idx = css.find(".fire-city-card {")
+        block = css[idx:css.find("}", idx) + 1]
+        self.assertIn("width: clamp(300px", block)
+        self.assertIn("max-height: calc(100% - 24px)", block)
+        self.assertIn("overflow-y: auto", block)
+
+    def test_city_card_desktop_side_classes_exist(self):
+        css = self._css()
+        self.assertIn(".fire-city-card.fire-city-card-left", css)
+        self.assertIn(".fire-city-card.fire-city-card-right", css)
+
+    def test_city_card_mobile_panel_scroll_enabled(self):
+        css = self._css()
+        media_idx = css.find("@media (max-width: 768px)")
+        card_idx = css.find(".fire-city-card {", media_idx)
+        block = css[card_idx:css.find("}", card_idx) + 1]
+        self.assertIn("bottom: 12px", block)
+        self.assertIn("max-height: 46%", block)
+        self.assertIn("overflow-y: auto", block)
+
+    def test_city_analytics_row_uses_select_current_search_city(self):
+        html = self._template()
+        idx = html.find("activateRowCity")
+        self.assertGreater(idx, 0)
+        vicinity = html[idx:idx + 400]
+        self.assertIn("selectCurrentSearchCity", vicinity)
+
+    def test_scroll_analytics_row_uses_container_scroll_not_scroll_into_view(self):
+        html = self._template()
+        fn_start = html.find("function scrollAnalyticsRowIntoView(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        self.assertNotIn("scrollIntoView(", fn_body)
+        self.assertIn("comparisonWrap.scrollTop", fn_body)
+        self.assertIn("comparisonWrap.scrollLeft", fn_body)
+
+    def test_coordinates_not_overwritten(self):
+        """lat/lng values are never assigned; only read via extractCoordinates."""
+        html = self._template()
+        self.assertIn("function extractCoordinates(", html)
+        self.assertNotIn("city.latitude =", html)
+        self.assertNotIn("city.longitude =", html)
+
+    def test_nationwide_fitbounds_remains(self):
+        html = self._template()
+        self.assertIn("fitBounds(usBounds", html)
+
+    def test_responsive_mobile_css_for_card(self):
+        css = self._css()
+        self.assertIn(".fire-city-card", css)
+        media_idx = css.find("@media (max-width: 768px)")
+        card_in_media = css.find(".fire-city-card", media_idx)
+        self.assertGreater(card_in_media, media_idx)
+
+    def test_close_marker_preview_force_hides_city_card(self):
+        """closeMarkerPreview(force=true) must call hideCityCard."""
+        html = self._template()
+        fn_start = html.find("function closeMarkerPreview(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        self.assertIn("hideCityCard()", fn_body)
+
+    def test_clear_workspace_hides_city_card(self):
+        """Clearing all searched cities must hide the city card."""
+        html = self._template()
+        fn_start = html.find("function clearSearchedCitiesWorkspace(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        self.assertIn("hideCityCard()", fn_body)
+
+
 if __name__ == "__main__":
     unittest.main()

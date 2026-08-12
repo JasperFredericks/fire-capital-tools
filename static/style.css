@@ -1977,6 +1977,135 @@ hr.divider {
   border: 1.5px solid rgba(255,255,255,0.5);
 }
 
+/* ── In-map selected-city card (replaces floating InfoWindow for click) ───── */
+.fire-city-card {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;  /* above map canvas, below Google attribution */
+  width: clamp(300px, 25vw, 330px);
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+  background: rgba(255,255,255,0.97);
+  border: 1.5px solid rgba(26,39,68,0.18);
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(26,39,68,0.22);
+  padding: 12px 14px;
+  pointer-events: auto;
+  backdrop-filter: blur(6px);
+}
+
+.fire-city-card.fire-city-card-left {
+  left: 12px;
+  right: auto;
+}
+
+.fire-city-card.fire-city-card-right {
+  right: 12px;
+  left: auto;
+}
+
+.fcc-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.fcc-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1a2744;
+  line-height: 1.3;
+  flex: 1;
+  min-width: 0;
+}
+
+.fcc-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+  color: #9ca3af;
+  padding: 0 0 0 4px;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.fcc-close:hover { color: #1a2744; }
+
+.fcc-score {
+  font-size: 20px;
+  font-weight: 800;
+  color: #e8590c;
+  letter-spacing: -0.5px;
+  margin-bottom: 2px;
+}
+
+.fcc-score-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #6b7280;
+  letter-spacing: 0px;
+}
+
+.fcc-metrics {
+  margin-top: 8px;
+  border-top: 1px solid #f1f5f9;
+  padding-top: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.fcc-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.fcc-label {
+  font-size: 11px;
+  color: #6b7280;
+  white-space: nowrap;
+  line-height: 1.25;
+}
+
+.fcc-value {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #1a2744;
+  text-align: right;
+  line-height: 1.25;
+}
+
+.fcc-subvalue {
+  font-weight: 500;
+  color: #6b7280;
+}
+
+@media (max-width: 768px) {
+  .fire-city-card {
+    top: auto;
+    bottom: 12px;
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-width: 100%;
+    max-height: 46%;
+    overflow-y: auto;
+  }
+
+  .fire-city-card.fire-city-card-left,
+  .fire-city-card.fire-city-card-right {
+    right: 8px;
+    left: 8px;
+  }
+}
+
 .stat-box-freshness {
   font-size: 11px;
   color: #9ca3af;

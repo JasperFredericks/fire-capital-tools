@@ -104,6 +104,7 @@
     <div class="fire-map-frame">
       <div id="fire-google-map" class="fire-google-map" aria-label="Current and compared city locations on a United States map"></div>
       <div class="fire-map-vignette" aria-hidden="true"></div>
+      <div id="fire-city-card" class="fire-city-card" style="display:none;" role="region" aria-label="Selected city details" aria-live="polite"></div>
       <div id="fire-map-fallback" class="fire-map-fallback" style="display:none;">Map unavailable. Google Maps configuration is missing.</div>
     </div>
     <div class="fire-map-legend">
@@ -292,6 +293,7 @@
   const mapContainer = document.getElementById("fire-google-map");
   const mapFallback = document.getElementById("fire-map-fallback");
   const mapNote = document.getElementById("fire-map-note");
+  const fireCityCard = document.getElementById("fire-city-card");
 
   const payloadFromServer = {{ search_payload|tojson }};
   const initiallyRunning = {{ 'true' if status.running else 'false' }};
@@ -362,16 +364,11 @@
   const selectedMarkerRegistryKey = "__selected__";
   const comparisonMarkerPrefix = "compare::";
   let googleMap = null;
-  let googleInfoWindow = null;
   let markerLibrary = null;
   let markersReady = false;
   let markersNeedRender = false;
   let markerRegistry = new Map();
   const markerPreviewState = {
-    openKey: "",
-    pinnedKey: "",
-    hoverOpenTimer: null,
-    hoverCloseTimer: null,
     suppressHoverUntil: 0,
   };
   let lastViewportSignature = "";
@@ -780,9 +777,7 @@
     currentCity = null;
     clearPendingCurrentCityPreview();
     setActiveRankingMetric("");
-    if (googleInfoWindow) {
-      googleInfoWindow.close();
-    }
+    hideCityCard();
     clearOverviewImmediate();
     resetComparisonAddButton();
     renderActiveCityMeta(null);
@@ -1031,14 +1026,28 @@
     const row = comparisonBody.querySelector(`[data-city-key="${cssEscapeValue(cityKey)}"]`);
     if (!row) return;
 
-    const rowRect = row.getBoundingClientRect();
-    const wrapRect = comparisonWrap.getBoundingClientRect();
-    const verticallyVisible = rowRect.top >= wrapRect.top && rowRect.bottom <= wrapRect.bottom;
-    const horizontallyVisible = rowRect.left >= wrapRect.left && rowRect.right <= wrapRect.right;
-    if (verticallyVisible && horizontallyVisible) return;
+    const inset = 8;
+    const rowTop = row.offsetTop;
+    const rowBottom = rowTop + row.offsetHeight;
+    const viewTop = comparisonWrap.scrollTop;
+    const viewBottom = viewTop + comparisonWrap.clientHeight;
 
-    const behavior = prefersReducedMotion() ? "auto" : "smooth";
-    row.scrollIntoView({ behavior, block: "nearest", inline: "nearest" });
+    if (rowTop < viewTop + inset) {
+      comparisonWrap.scrollTop = Math.max(0, rowTop - inset);
+    } else if (rowBottom > viewBottom - inset) {
+      comparisonWrap.scrollTop = Math.max(0, rowBottom - comparisonWrap.clientHeight + inset);
+    }
+
+    const rowLeft = row.offsetLeft;
+    const rowRight = rowLeft + row.offsetWidth;
+    const viewLeft = comparisonWrap.scrollLeft;
+    const viewRight = viewLeft + comparisonWrap.clientWidth;
+
+    if (rowLeft < viewLeft + inset) {
+      comparisonWrap.scrollLeft = Math.max(0, rowLeft - inset);
+    } else if (rowRight > viewRight - inset) {
+      comparisonWrap.scrollLeft = Math.max(0, rowRight - comparisonWrap.clientWidth + inset);
+    }
   }
 
   function setPendingCurrentCityPreview(cityKey, panMap) {
@@ -1081,24 +1090,170 @@
     };
   }
 
+  // ── In-map city detail card (replaces floating InfoWindow for selected city) ─
+  function showCityCard(city) {
+    if (!fireCityCard || !city) return;
+    const title = cleanDisplayFromCityObject(city);
+    const fireScore = formatFireScore(city);
+    const fireLabel = fireScoreLabelForCity(city);
+    const coverageValue = `${fireScoreCoverageForCity(city).toFixed(1)}%`;
+    const coverageLabel = fireScoreCoverageLabelForCity(city);
+    const population = previewNum(city.population_current);
+    const populationGrowth = previewPct(city.population_growth_recent);
+    const income = previewMoney(city.median_income_current);
+    const incomeGrowth = previewPct(city.median_income_growth_recent);
+    const homeValue = previewMoney(city.median_home_value_current);
+    const homeGrowth = previewPct(city.median_home_value_growth_recent);
+    const employment = previewNum(city.employment_current);
+    const employmentGrowth = previewPct(city.employment_growth_recent);
+    const crime = previewScoreWithRating(city.crime_index_score, city.crime_rating);
+    const densityCrime = previewScoreWithRating(city.density_adjusted_crime_score, city.density_adjusted_crime_rating);
+    const climate = previewScoreWithRating(city.climate_risk_score, city.climate_risk_rating);
+    const landlordLabel = String(city.landlord_friendliness_label || "").trim() || "—";
+    const landlordScore = previewNum(city.landlord_friendliness_score);
+
+    const metricRows = [
+      `<div class="fcc-row"><span class="fcc-label">Coverage</span><span class="fcc-value">${escapeHtml(coverageValue)} <span class="fcc-subvalue">(${escapeHtml(coverageLabel)})</span></span></div>`,
+      `<div class="fcc-row"><span class="fcc-label">Population</span><span class="fcc-value">${escapeHtml(population)} <span class="fcc-subvalue">(${escapeHtml(populationGrowth)})</span></span></div>`,
+      `<div class="fcc-row"><span class="fcc-label">Median Income</span><span class="fcc-value">${escapeHtml(income)} <span class="fcc-subvalue">(${escapeHtml(incomeGrowth)})</span></span></div>`,
+      `<div class="fcc-row"><span class="fcc-label">Home Value</span><span class="fcc-value">${escapeHtml(homeValue)} <span class="fcc-subvalue">(${escapeHtml(homeGrowth)})</span></span></div>`,
+      `<div class="fcc-row"><span class="fcc-label">Employment</span><span class="fcc-value">${escapeHtml(employment)} <span class="fcc-subvalue">(${escapeHtml(employmentGrowth)})</span></span></div>`,
+      `<div class="fcc-row"><span class="fcc-label">Crime</span><span class="fcc-value">${crime}</span></div>`,
+      `<div class="fcc-row"><span class="fcc-label">Density-Adj. Crime</span><span class="fcc-value">${densityCrime}</span></div>`,
+      `<div class="fcc-row"><span class="fcc-label">Climate Risk</span><span class="fcc-value">${climate}</span></div>`,
+      `<div class="fcc-row"><span class="fcc-label">Landlord</span><span class="fcc-value">${escapeHtml(landlordLabel)} <span class="fcc-subvalue">(${escapeHtml(landlordScore)})</span></span></div>`,
+    ].join("");
+
+    fireCityCard.innerHTML = `
+      <div class="fcc-header">
+        <div class="fcc-title">${escapeHtml(title)}</div>
+        <button class="fcc-close" type="button" aria-label="Dismiss city detail" id="fire-city-card-close">&times;</button>
+      </div>
+      <div class="fcc-score">${escapeHtml(fireScore)}<span class="fcc-score-label"> ${escapeHtml(fireLabel)}</span></div>
+      <div class="fcc-metrics">${metricRows}</div>
+    `;
+    fireCityCard.style.display = "block";
+    const closeBtn = document.getElementById("fire-city-card-close");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () => {
+        hideCityCard();
+      }, { once: true });
+    }
+  }
+
+  function hideCityCard() {
+    if (!fireCityCard) return;
+    fireCityCard.style.display = "none";
+    fireCityCard.innerHTML = "";
+  }
+
+  function setCityCardSide(side) {
+    if (!fireCityCard) return;
+    fireCityCard.classList.remove("fire-city-card-left", "fire-city-card-right");
+    fireCityCard.classList.add(side === "left" ? "fire-city-card-left" : "fire-city-card-right");
+  }
+
+  function markerScreenPositionInMap(marker) {
+    if (!marker || !googleMap || !mapContainer || !window.google || !window.google.maps) return null;
+    const projection = googleMap.getProjection ? googleMap.getProjection() : null;
+    const bounds = googleMap.getBounds ? googleMap.getBounds() : null;
+    if (!projection || !bounds) return null;
+
+    const mapRect = mapContainer.getBoundingClientRect();
+    if (!mapRect.width || !mapRect.height) return null;
+
+    const markerPos = marker.position;
+    if (!markerPos) return null;
+    const latLng = (typeof markerPos.lat === "function" && typeof markerPos.lng === "function")
+      ? markerPos
+      : new google.maps.LatLng(markerPos.lat, markerPos.lng);
+
+    const worldMarker = projection.fromLatLngToPoint(latLng);
+    const worldNE = projection.fromLatLngToPoint(bounds.getNorthEast());
+    const worldSW = projection.fromLatLngToPoint(bounds.getSouthWest());
+    if (!worldMarker || !worldNE || !worldSW) return null;
+
+    let westX = worldSW.x;
+    let eastX = worldNE.x;
+    let markerX = worldMarker.x;
+    if (eastX < westX) eastX += 1;
+    if (markerX < westX) markerX += 1;
+    if (markerX > eastX) markerX -= 1;
+
+    const widthWorld = eastX - westX;
+    const heightWorld = worldSW.y - worldNE.y;
+    if (!widthWorld || !heightWorld) return null;
+
+    return {
+      x: ((markerX - westX) / widthWorld) * mapRect.width,
+      y: ((worldMarker.y - worldNE.y) / heightWorld) * mapRect.height,
+      mapWidth: mapRect.width,
+      mapHeight: mapRect.height,
+    };
+  }
+
+  function chooseDesktopCardSide(marker) {
+    const markerPos = markerScreenPositionInMap(marker);
+    if (!markerPos) return "right";
+    const usableLeft = 12;
+    const usableRight = Math.max(usableLeft + 1, markerPos.mapWidth - 12);
+    const usableMid = (usableLeft + usableRight) / 2;
+    return markerPos.x >= usableMid ? "left" : "right";
+  }
+
+  function minimalOverlapPanOffsetX(marker) {
+    if (!mapContainer || !fireCityCard || fireCityCard.style.display === "none") return 0;
+    const markerPos = markerScreenPositionInMap(marker);
+    if (!markerPos) return 0;
+
+    const cardRect = fireCityCard.getBoundingClientRect();
+    const mapRect = mapContainer.getBoundingClientRect();
+    if (!cardRect.width || !cardRect.height || !mapRect.width || !mapRect.height) return 0;
+
+    // Bottom-sheet card on mobile should not trigger lateral pan.
+    if (cardRect.width >= mapRect.width * 0.75) return 0;
+
+    const markerPageX = mapRect.left + markerPos.x;
+    const markerPageY = mapRect.top + markerPos.y;
+    const safeGap = Math.max(16, Math.round(mapRect.width * 0.025));
+
+    const overlapsX = markerPageX >= (cardRect.left - safeGap) && markerPageX <= (cardRect.right + safeGap);
+    const overlapsY = markerPageY >= (cardRect.top - safeGap) && markerPageY <= (cardRect.bottom + safeGap);
+    if (!overlapsX || !overlapsY) return 0;
+
+    const cardOnLeft = fireCityCard.classList.contains("fire-city-card-left");
+    if (cardOnLeft) {
+      const targetPageX = cardRect.right + safeGap;
+      return markerPageX - targetPageX;
+    }
+    const targetPageX = cardRect.left - safeGap;
+    return markerPageX - targetPageX;
+  }
+
   function openCurrentCityPreview(panMap = false) {
     if (!currentCity) return false;
     const currentKey = stableCityKey(currentCity);
     const entry = markerRegistry.get(selectedMarkerRegistryKey);
-    if (!entry || !entry.marker || !googleMap || !googleInfoWindow) {
+    if (!entry || !entry.marker || !googleMap) {
       setPendingCurrentCityPreview(currentKey, panMap);
       return false;
     }
 
     clearPendingCurrentCityPreview();
+    showCityCard(currentCity);
+
+    const side = chooseDesktopCardSide(entry.marker);
+    setCityCardSide(side);
+
     if (panMap && entry.marker.position) {
-      googleMap.panTo(entry.marker.position);
       const zoom = googleMap.getZoom() || 3;
       if (zoom < 4) googleMap.setZoom(4);
       if (zoom > 6) googleMap.setZoom(6);
+      const panOffsetX = minimalOverlapPanOffsetX(entry.marker);
+      if (Math.abs(panOffsetX) >= 1) {
+        googleMap.panBy(panOffsetX, 0);
+      }
     }
-
-    openMarkerPreview(selectedMarkerRegistryKey, entry.marker, "click");
     return true;
   }
 
@@ -1228,104 +1383,10 @@
     return node;
   }
 
-  function markerInfoContent(city) {
-    const title = markerTitleForCity(city);
-    const fireScore = formatFireScore(city);
-    const fireLabel = fireScoreLabelForCity(city);
-    const fireCoverage = fireScoreCoverageForCity(city).toFixed(1);
-    const fireCoverageLabel = fireScoreCoverageLabelForCity(city);
-    const population = previewNum(city.population_current);
-    const populationGrowth = `Growth: ${previewPct(city.population_growth_recent)}`;
-    const income = previewMoney(city.median_income_current);
-    const incomeGrowth = `Growth: ${previewPct(city.median_income_growth_recent)}`;
-    const homeValue = previewMoney(city.median_home_value_current);
-    const homeGrowth = `Growth: ${previewPct(city.median_home_value_growth_recent)}`;
-    const employment = previewNum(city.employment_current);
-    const employmentGrowth = `Growth: ${previewPct(city.employment_growth_recent)}`;
-    const crime = previewScoreWithRating(city.crime_index_score, city.crime_rating);
-    const densityCrime = previewScoreWithRating(city.density_adjusted_crime_score, city.density_adjusted_crime_rating);
-    const climate = previewScoreWithRating(city.climate_risk_score, city.climate_risk_rating);
-    const landlordValue = String(city.landlord_friendliness_label || "").trim() || previewNum(city.landlord_friendliness_score);
-
-    return `
-      <div class="fire-map-infowindow">
-        <div class="fire-map-preview-title">${escapeHtml(title)}</div>
-        <div class="fire-map-preview-fire">FIRE Score: ${escapeHtml(fireScore)}</div>
-        <div class="fire-map-preview-fire-sub">${escapeHtml(fireLabel)}</div>
-        <div class="fire-map-preview-fire-sub">Data coverage: ${escapeHtml(fireCoverage)}% (${escapeHtml(fireCoverageLabel)})</div>
-        <div class="fire-map-preview-grid">
-          ${previewMetricRow("Population", escapeHtml(population), populationGrowth)}
-          ${previewMetricRow("Median Income", escapeHtml(income), incomeGrowth)}
-          ${previewMetricRow("Home Value", escapeHtml(homeValue), homeGrowth)}
-          ${previewMetricRow("Employment", escapeHtml(employment), employmentGrowth)}
-          ${previewMetricRow("Crime", crime)}
-          ${previewMetricRow("Density-Adj. Crime", densityCrime)}
-          ${previewMetricRow("Climate", climate)}
-          ${previewMetricRow("Landlord", escapeHtml(landlordValue || "—"))}
-        </div>
-      </div>
-    `;
-  }
-
-  function clearMarkerHoverTimers() {
-    if (markerPreviewState.hoverOpenTimer) {
-      clearTimeout(markerPreviewState.hoverOpenTimer);
-      markerPreviewState.hoverOpenTimer = null;
-    }
-    if (markerPreviewState.hoverCloseTimer) {
-      clearTimeout(markerPreviewState.hoverCloseTimer);
-      markerPreviewState.hoverCloseTimer = null;
-    }
-  }
-
   function closeMarkerPreview(force = false) {
-    clearMarkerHoverTimers();
-    if (!force && markerPreviewState.pinnedKey) return;
-    markerPreviewState.openKey = "";
-    markerPreviewState.pinnedKey = force ? "" : markerPreviewState.pinnedKey;
-    if (googleInfoWindow) {
-      googleInfoWindow.close();
+    if (force) {
+      hideCityCard();
     }
-  }
-
-  function openMarkerPreview(registryKey, marker, trigger = "hover") {
-    if (!googleInfoWindow || !googleMap) return;
-    const entry = markerRegistry.get(registryKey);
-    if (!entry) return;
-
-    clearMarkerHoverTimers();
-    markerPreviewState.openKey = registryKey;
-    if (trigger === "click" || trigger === "focus") {
-      markerPreviewState.pinnedKey = registryKey;
-    }
-
-    googleInfoWindow.setContent(markerInfoContent(entry.city));
-    googleInfoWindow.open({ map: googleMap, anchor: marker });
-  }
-
-  function scheduleHoverOpen(registryKey, marker) {
-    if (!supportsHoverPreview()) return;
-    if (Date.now() < markerPreviewState.suppressHoverUntil) return;
-    clearMarkerHoverTimers();
-    markerPreviewState.hoverOpenTimer = setTimeout(() => {
-      markerPreviewState.hoverOpenTimer = null;
-      openMarkerPreview(registryKey, marker, "hover");
-    }, 120);
-  }
-
-  function scheduleHoverClose(registryKey) {
-    if (!supportsHoverPreview()) return;
-    if (markerPreviewState.pinnedKey === registryKey) return;
-    clearMarkerHoverTimers();
-    markerPreviewState.hoverCloseTimer = setTimeout(() => {
-      markerPreviewState.hoverCloseTimer = null;
-      if (markerPreviewState.openKey === registryKey && !markerPreviewState.pinnedKey) {
-        markerPreviewState.openKey = "";
-        if (googleInfoWindow) {
-          googleInfoWindow.close();
-        }
-      }
-    }, 220);
   }
 
   function showMapFallback(message) {
@@ -1377,18 +1438,21 @@
       });
     });
 
-    markerContent.addEventListener("mouseenter", () => scheduleHoverOpen(registryKey, marker));
-    markerContent.addEventListener("mouseleave", () => scheduleHoverClose(registryKey));
-    markerContent.addEventListener("focus", () => openMarkerPreview(registryKey, marker, "focus"));
-    markerContent.addEventListener("blur", () => scheduleHoverClose(registryKey));
     markerContent.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        openMarkerPreview(registryKey, marker, "focus");
+        markerPreviewState.suppressHoverUntil = Date.now() + 500;
+        selectCurrentSearchCity(stableCityKey(city), {
+          city,
+          ensureAnalyticsRow: false,
+          openMapPreview: true,
+          panMap: true,
+          requestOverview: true,
+          scrollAnalyticsRow: true,
+        });
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        markerPreviewState.pinnedKey = "";
         closeMarkerPreview(true);
       }
     });
@@ -1403,13 +1467,6 @@
       const entry = markerRegistry.get(key);
       if (entry && entry.marker) {
         entry.marker.map = null;
-      }
-      if (markerPreviewState.openKey === key || markerPreviewState.pinnedKey === key) {
-        markerPreviewState.openKey = "";
-        markerPreviewState.pinnedKey = "";
-        if (googleInfoWindow) {
-          googleInfoWindow.close();
-        }
       }
       markerRegistry.delete(key);
     });
@@ -1567,10 +1624,9 @@
 
     try {
       await loadGoogleMapsApi();
-      const { Map, InfoWindow } = await google.maps.importLibrary("maps");
+      const { Map } = await google.maps.importLibrary("maps");
       const markerLib = await google.maps.importLibrary("marker");
       markerLibrary = markerLib;
-      googleInfoWindow = new InfoWindow();
       googleMap = new Map(mapContainer, {
         center: { lat: 39.5, lng: -98.35 },
         zoom: 3,
@@ -1591,12 +1647,7 @@
       markersReady = true;
 
       googleMap.addListener("click", () => {
-        markerPreviewState.pinnedKey = "";
         closeMarkerPreview(true);
-      });
-      googleInfoWindow.addListener("closeclick", () => {
-        markerPreviewState.openKey = "";
-        markerPreviewState.pinnedKey = "";
       });
 
       if (markersNeedRender) {
