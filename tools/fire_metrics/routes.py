@@ -318,16 +318,27 @@ def city_summary():
                 cache_row = None
             if cache_row:
                 cached_cre_version = cache_row.get("cre_research_version")
-                cre_fresh = ai_summary.is_cre_cache_current(
+                cre_fresh_base = ai_summary.is_cre_cache_current(
                     cache_row.get("cre_generated_at"),
                     cached_cre_version,
                 )
+                cached_cre_result_type = str(cache_row.get("cre_result_type") or "").strip().lower()
                 cre_sentences = str(cache_row.get("cre_sentences_text") or "").strip()
                 research_sources: list[dict] = []
                 try:
                     research_sources = json.loads(cache_row.get("research_sources_json") or "[]") or []
                 except (json.JSONDecodeError, ValueError):
                     research_sources = []
+
+                # Interpret freshness based on known result semantics.
+                # Legacy rows without result type must include visible CRE payload
+                # to be considered fresh; otherwise force a one-time refresh.
+                if cached_cre_result_type == "success":
+                    cre_fresh = cre_fresh_base and bool(cre_sentences) and bool(research_sources)
+                elif cached_cre_result_type in ("no_data", "failure"):
+                    cre_fresh = cre_fresh_base
+                else:
+                    cre_fresh = cre_fresh_base and (bool(cre_sentences) or bool(research_sources))
 
                 current_app.logger.info(
                     "FIRE CRE cache state: city=%s|%s version=%s expected=%s fresh=%s",
@@ -399,6 +410,7 @@ def city_summary():
                         research_sources_json=json.dumps(store_sources),
                         cre_generated_at=store_at,
                         cre_research_version=store_version,
+                        cre_result_type=result_type,
                     )
 
                 full_summary = cache_row["summary_text"]
@@ -462,6 +474,7 @@ def city_summary():
             research_sources: list[dict] = []
             cre_generated_at = ai_summary.utc_now_iso()
             cre_research_version_stored: str | None = None
+            cre_result_type_stored: str | None = None
             if cre_generation_allowed:
                 cre_model = _cre_research_model_name()
                 current_app.logger.info(
@@ -476,6 +489,7 @@ def city_summary():
                     display_name=str(selected_city.get("display_name") or ""),
                 )
                 result_type = cre_result.get("result_type", "failure")
+                cre_result_type_stored = result_type
                 current_app.logger.info(
                     "FIRE CRE complete: city=%s state=%s result_type=%s sources=%d",
                     selected_city["city"], selected_city["state"],
@@ -526,6 +540,7 @@ def city_summary():
                 "research_sources_json": json.dumps(research_sources),
                 "cre_generated_at": cre_generated_at,
                 "cre_research_version": cre_research_version_stored,
+                "cre_result_type": cre_result_type_stored,
             }
 
             try:
