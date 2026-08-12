@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}Pro-Forma P&amp;L - Underwriting{% endblock %}
+
+{#
+  Read-only view over one scenario. Every figure on this page came from the
+  same analyze_scenario() call the detail page uses -- underwriting_pnl
+  refuses to build a statement that does not reconcile to it, so this
+  template can render its numbers without qualifying them.
+
+  Rows arrive pre-flattened (underwriting_pnl_export.flatten_rows) rather
+  than being assembled in Jinja, so the screen, the PDF and the workbook
+  are provably the same statement in three renderings.
+
+  Pro forma, not actuals: trailing performance is Scorecard Pro's job, and
+  the subtitle says so rather than leaving it to be inferred.
+#}
+
+{% macro money(v) %}
+  {%- if v is none -%}<span class="muted">&mdash;</span>
+  {%- elif v < 0 -%}<span style="color:#b91c1c;">({{ '{:,.0f}'.format(v | abs) }})</span>
+  {%- else -%}{{ '{:,.0f}'.format(v) }}
+  {%- endif -%}
+{% endmacro %}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('underwriting.detail', scenario_id=scenario.id) }}"
+     class="btn btn-ghost" style="margin-bottom:14px; display:inline-flex;">
+    <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+      <path fill-rule="evenodd" d="M9.707 14.707a1 1 0 01-1.414 0L3.586 10l4.707-4.707a1 1 0 011.414 1.414L6.414 10l3.293 3.293a1 1 0 010 1.414z" clip-rule="evenodd"/>
+    </svg>
+    Back to Scenario
+  </a>
+  <h1 class="page-title">Pro-Forma Profit &amp; Loss</h1>
+  <p class="page-subtitle">
+    {{ pnl.property_label }} &middot; {{ pnl.scenario_name }}
+    {%- if deal %} &middot; {{ deal.address }}, {{ deal.city }} {{ deal.state }}{% endif %}
+    <br>
+    A projection of this scenario's model &mdash; <strong>not trailing actuals</strong>.
+    For what a property has actually done, use Scorecard Pro.
+  </p>
+</div>
+
+<!-- ── Headline figures ───────────────────────────────────────────────── -->
+<div class="card">
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:18px;">
+    <div>
+      <div class="scorecard-metric-label">Effective Gross Income (Yr 1)</div>
+      <div class="scorecard-metric-value">${{ '{:,.0f}'.format(pnl.revenue_totals[0]) }}</div>
+    </div>
+    <div>
+      <div class="scorecard-metric-label">Operating Expenses (Yr 1)</div>
+      <div class="scorecard-metric-value">${{ '{:,.0f}'.format(pnl.expense_totals[0]) }}</div>
+    </div>
+    <div>
+      <div class="scorecard-metric-label">Net Operating Income (Yr 1)</div>
+      <div class="scorecard-metric-value">${{ '{:,.2f}'.format(pnl.noi[0]) }}</div>
+    </div>
+    <div>
+      <div class="scorecard-metric-label">Operating Margin (Yr 1)</div>
+      <div class="scorecard-metric-value">
+        {{ '{:,.1f}%'.format(pnl.margin[0] * 100) if pnl.margin[0] is not none else '—' }}
+      </div>
+    </div>
+  </div>
+  <p class="muted" style="margin-top:14px; font-size:0.85rem;">
+    {{ pnl.unit_count }} units &middot; {{ pnl.hold_years }}-year hold &middot;
+    rent growth {{ '{:g}'.format(pnl.rent_growth_pct or 0) }}% &middot;
+    expense growth {{ '{:g}'.format(pnl.expense_growth_pct or 0) }}%
+  </p>
+</div>
+
+<!-- ── Export ─────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Export</div>
+  <p class="muted" style="margin:8px 0 14px; font-size:0.88rem;">
+    Both exports carry the same statement shown below. The workbook writes
+    numbers as numbers, and includes the reconciliation on a second sheet.
+  </p>
+  <div style="display:flex; gap:10px; flex-wrap:wrap;">
+    <a class="btn btn-primary"
+       href="{{ url_for('underwriting.pnl_pdf', scenario_id=scenario.id) }}">Download PDF</a>
+    <a class="btn btn-secondary"
+       href="{{ url_for('underwriting.pnl_xlsx', scenario_id=scenario.id) }}">Download Excel</a>
+  </div>
+</div>
+
+<!-- ── The statement ──────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Statement</div>
+  <div style="overflow-x:auto; margin-top:12px;">
+    <table class="data-table" style="width:100%; min-width:640px;">
+      <thead>
+        <tr>
+          <th style="text-align:left;">&nbsp;</th>
+          {% for y in pnl.years %}
+            <th style="text-align:right; white-space:nowrap;">Year {{ y }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          {% if row.kind == 'spacer' %}
+            <tr><td colspan="{{ pnl.years | length + 1 }}" style="height:10px; border:none;"></td></tr>
+          {% elif row.kind == 'section' %}
+            <tr>
+              <td colspan="{{ pnl.years | length + 1 }}"
+                  style="font-weight:700; letter-spacing:0.04em; padding-top:10px;">
+                {{ row.label }}
+              </td>
+            </tr>
+          {% elif row.kind == 'subheading' %}
+            <tr>
+              <td colspan="{{ pnl.years | length + 1 }}"
+                  style="font-weight:600; padding-left:14px; padding-top:8px;">
+                {{ row.label }}
+              </td>
+            </tr>
+          {% else %}
+            <tr {% if row.kind in ('total', 'subtotal') %}style="font-weight:700;"{% endif %}>
+              <td style="padding-left:{{ '14px' if row.kind == 'subtotal' else ('28px' if row.kind == 'line' else '0') }};
+                         {% if row.muted %}color:#6b7280;{% endif %}">
+                {{ row.label }}
+              </td>
+              {% for i in range(pnl.years | length) %}
+                {% set val = row.amounts[i] if row.amounts and i < (row.amounts | length) else none %}
+                <td style="text-align:right; white-space:nowrap;
+                           {% if row.muted %}color:#6b7280;{% endif %}">
+                  {%- if val is none -%}
+                    <span class="muted">&mdash;</span>
+                  {%- elif row.is_pct -%}
+                    {{ '{:,.1f}%'.format(val * 100) }}
+                  {%- else -%}
+                    {{ money(val) }}
+                  {%- endif -%}
+                </td>
+              {% endfor %}
+            </tr>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Reconciliation ─────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Reconciliation</div>
+  <p class="muted" style="margin:8px 0 12px; font-size:0.88rem;">
+    This page is a formatting layer, not a second calculation. Every year's
+    detail is checked against the scenario's own projection before the
+    statement is rendered &mdash; if any column failed to tie, this page would
+    not display at all.
+  </p>
+  <p style="font-weight:600; color:#059669;">
+    All {{ pnl.reconciliation | length }} checks tie to the scenario, to the cent.
+  </p>
+</div>
+
+{% include "_feedback.html" %}
+{% endblock %}

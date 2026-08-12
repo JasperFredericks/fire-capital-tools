@@ -33,6 +33,17 @@
     {%- if scenario.rentroll_source %} &middot; rent roll: {{ scenario.rentroll_source }}{% endif %}
     {%- if scenario.t12_source %} &middot; T12: {{ scenario.t12_source }}{% endif %}
   </p>
+  {#
+    Offered only when the scenario actually computes: the P&L is a view over
+    result, so with no result there is nothing to format and the link would
+    lead to a redirect straight back here.
+  #}
+  {% if result %}
+    <a href="{{ url_for('underwriting.pnl', scenario_id=scenario.id) }}"
+       class="btn btn-secondary" style="margin-top:12px; display:inline-flex;">
+      View Pro-Forma P&amp;L
+    </a>
+  {% endif %}
 </div>
 
 {% if error %}
