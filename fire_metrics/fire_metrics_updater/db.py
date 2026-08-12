@@ -157,6 +157,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE fire_metrics_city_summaries ADD COLUMN cre_research_version TEXT")
     if "cre_result_type" not in summaries_existing:
         conn.execute("ALTER TABLE fire_metrics_city_summaries ADD COLUMN cre_result_type TEXT")
+    if "cre_failure_category" not in summaries_existing:
+        conn.execute("ALTER TABLE fire_metrics_city_summaries ADD COLUMN cre_failure_category TEXT")
     conn.commit()
 
 
@@ -468,12 +470,12 @@ def upsert_city_summary_cache(conn: sqlite3.Connection, row: dict[str, Any]) -> 
             city, state, city_key, data_fingerprint, model_name, prompt_version,
             summary_text, strength_sentence, weakness_sentence, comparison_sentence,
             generated_at, cre_sentences_text, research_sources_json, cre_generated_at,
-            cre_research_version, cre_result_type
+            cre_research_version, cre_result_type, cre_failure_category
         ) VALUES (
             :city, :state, :city_key, :data_fingerprint, :model_name, :prompt_version,
             :summary_text, :strength_sentence, :weakness_sentence, :comparison_sentence,
             :generated_at, :cre_sentences_text, :research_sources_json, :cre_generated_at,
-            :cre_research_version, :cre_result_type
+            :cre_research_version, :cre_result_type, :cre_failure_category
         )
         ON CONFLICT(city, state, data_fingerprint, model_name, prompt_version)
         DO UPDATE SET
@@ -487,7 +489,8 @@ def upsert_city_summary_cache(conn: sqlite3.Connection, row: dict[str, Any]) -> 
             research_sources_json = excluded.research_sources_json,
             cre_generated_at = excluded.cre_generated_at,
             cre_research_version = excluded.cre_research_version,
-            cre_result_type = excluded.cre_result_type
+            cre_result_type = excluded.cre_result_type,
+            cre_failure_category = excluded.cre_failure_category
         """,
         {
             **row,
@@ -496,6 +499,7 @@ def upsert_city_summary_cache(conn: sqlite3.Connection, row: dict[str, Any]) -> 
             "cre_generated_at": row.get("cre_generated_at"),
             "cre_research_version": row.get("cre_research_version"),
             "cre_result_type": row.get("cre_result_type"),
+            "cre_failure_category": row.get("cre_failure_category"),
         },
     )
     conn.commit()
@@ -514,6 +518,7 @@ def update_city_summary_cre_fields(
     cre_generated_at: str,
     cre_research_version: str | None = None,
     cre_result_type: str | None = None,
+    cre_failure_category: str | None = None,
 ) -> None:
     """Refresh only the CRE fields of an existing cached summary row."""
     conn.execute(
@@ -523,7 +528,8 @@ def update_city_summary_cre_fields(
             research_sources_json = ?,
             cre_generated_at = ?,
             cre_research_version = ?,
-            cre_result_type = ?
+            cre_result_type = ?,
+            cre_failure_category = ?
         WHERE city = ? AND state = ?
           AND data_fingerprint = ?
           AND model_name = ?
@@ -531,6 +537,7 @@ def update_city_summary_cre_fields(
         """,
         (
             cre_sentences_text, research_sources_json, cre_generated_at, cre_research_version, cre_result_type,
+            cre_failure_category,
             city, state, data_fingerprint, model_name, prompt_version,
         ),
     )

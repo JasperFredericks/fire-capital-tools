@@ -1577,7 +1577,42 @@ def openai_cre_research(
         "research_sources": [],
         "cre_generated_at": utc_now_iso(),
         "cre_research_version": CRE_RESEARCH_VERSION,
+        "failure_category": None,
     }
+
+    def _failure_category_from_exception(exc: Exception) -> str:
+        # Keep diagnostics non-secret by returning only coarse categories.
+        try:
+            from openai import (
+                APIConnectionError,
+                APIStatusError,
+                APITimeoutError,
+                AuthenticationError,
+                BadRequestError,
+                PermissionDeniedError,
+                RateLimitError,
+            )
+        except Exception:
+            return "openai_exception"
+
+        if isinstance(exc, AuthenticationError):
+            return "auth_error"
+        if isinstance(exc, PermissionDeniedError):
+            return "permission_error"
+        if isinstance(exc, RateLimitError):
+            return "rate_limit"
+        if isinstance(exc, APITimeoutError):
+            return "timeout"
+        if isinstance(exc, APIConnectionError):
+            return "network_error"
+        if isinstance(exc, BadRequestError):
+            return "bad_request"
+        if isinstance(exc, APIStatusError):
+            status = getattr(exc, "status_code", None)
+            if status is not None:
+                return f"api_status_{status}"
+            return "api_status_error"
+        return "unexpected_exception"
 
     try:
         client = OpenAI(api_key=api_key)
@@ -1613,6 +1648,23 @@ def openai_cre_research(
             include=["web_search_call.action.sources"],
             input=[{"role": "user", "content": [{"type": "input_text", "text": search_prompt}]}],
         )
+
+        response_error = _safe_get(response, "error", None)
+        err_code_raw = _safe_get(response_error, "code", None) if response_error is not None else None
+        err_msg_raw = _safe_get(response_error, "message", None) if response_error is not None else None
+        err_code = err_code_raw.strip() if isinstance(err_code_raw, str) else ""
+        err_msg = err_msg_raw.strip() if isinstance(err_msg_raw, str) else ""
+        if err_code or err_msg:
+            failure_category = f"response_error_{err_code}" if err_code else "response_error"
+            log.warning(
+                "FIRE CRE response error: city_key=%s|%s category=%s",
+                city, state, failure_category,
+            )
+            return {
+                **_result_base,
+                "result_type": "failure",
+                "failure_category": failure_category,
+            }
 
         output_items = _safe_get(response, "output", None) or []
 
@@ -1721,14 +1773,20 @@ def openai_cre_research(
             "research_sources": validated_sources,
             "cre_generated_at": utc_now_iso(),
             "result_type": result_type,
+            "failure_category": None,
         }
 
     except Exception as exc:
+        failure_category = _failure_category_from_exception(exc)
         log.warning(
-            "FIRE CRE failed: city_key=%s|%s error=%s: %s",
-            city, state, type(exc).__name__, str(exc)[:200],
+            "FIRE CRE failed: city_key=%s|%s category=%s error=%s",
+            city, state, failure_category, type(exc).__name__,
         )
-        return {**_result_base, "result_type": "failure"}
+        return {
+            **_result_base,
+            "result_type": "failure",
+            "failure_category": failure_category,
+        }
 
 
 
