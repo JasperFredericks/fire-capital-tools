@@ -12,7 +12,7 @@ PROMPT_VERSION = "fire_metrics_summary_v5"
 SUMMARY_SCHEMA_NAME = "fire_metrics_market_overview"
 
 CRE_RESEARCH_VERSION = "cre_v3"  # increment to bust stale cached broken results
-CRE_RESEARCH_TTL_DAYS = 7
+CRE_RESEARCH_TTL_DAYS = 30
 CRE_NEGATIVE_CACHE_TTL_HOURS = 24   # no-useful-result cache: try again after 24 h
 CRE_FAILURE_BACKOFF_MINUTES = 30    # API error backoff: retry after 30 min
 
@@ -1713,6 +1713,7 @@ def openai_cre_research(
             result_type = "success"
         else:
             result_type = "no_data"
+            cre_sentences = "No relevant research from approved sources."
 
         return {
             **_result_base,
