@@ -64,7 +64,22 @@ CREATE TABLE IF NOT EXISTS underwriting_expense_lines (
     growth_pct REAL,
     is_included INTEGER NOT NULL DEFAULT 1,
     line_kind TEXT,
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    -- JSON list of per-year growth rates overriding growth_pct. NULL for
+    -- the overwhelming majority of lines, which is why this is a column
+    -- and not a second table.
+    growth_schedule TEXT
+);
+
+-- Per-year overrides for the scenario-level income assumptions. A
+-- scenario with no rows here runs on its flat rates, which is what makes
+-- the per-year feature opt-in and every existing scenario unchanged.
+CREATE TABLE IF NOT EXISTS underwriting_assumption_years (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scenario_id INTEGER NOT NULL,
+    year INTEGER NOT NULL,
+    vacancy_pct REAL, concessions_pct REAL,
+    bad_debt_pct REAL, rent_growth_pct REAL
 );
 
 CREATE TABLE IF NOT EXISTS underwriting_unit_lines (
@@ -78,6 +93,7 @@ CREATE TABLE IF NOT EXISTS underwriting_unit_lines (
 CREATE INDEX IF NOT EXISTS idx_uw_deal ON underwriting_scenarios (deal_id);
 CREATE INDEX IF NOT EXISTS idx_uw_exp ON underwriting_expense_lines (scenario_id);
 CREATE INDEX IF NOT EXISTS idx_uw_unit ON underwriting_unit_lines (scenario_id);
+CREATE INDEX IF NOT EXISTS idx_uw_years ON underwriting_assumption_years (scenario_id);
 """
 
 SCENARIO_NUMERIC = (
@@ -105,12 +121,22 @@ _SCENARIO_ADDED_COLUMNS = (
 )
 
 
+_EXPENSE_ADDED_COLUMNS = (
+    ("growth_schedule", "TEXT"),
+)
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     existing = {row[1] for row in conn.execute("PRAGMA table_info(underwriting_scenarios)")}
     for name, coltype in _SCENARIO_ADDED_COLUMNS:
         if name not in existing:
             conn.execute(f"ALTER TABLE underwriting_scenarios ADD COLUMN {name} {coltype}")
+    existing_exp = {row[1] for row in conn.execute(
+        "PRAGMA table_info(underwriting_expense_lines)")}
+    for name, coltype in _EXPENSE_ADDED_COLUMNS:
+        if name not in existing_exp:
+            conn.execute(f"ALTER TABLE underwriting_expense_lines ADD COLUMN {name} {coltype}")
     conn.commit()
 
 
@@ -193,6 +219,7 @@ def update_scenario(conn, scenario_id: int, fields: dict[str, Any]) -> None:
 def delete_scenario(conn, scenario_id: int) -> None:
     conn.execute("DELETE FROM underwriting_expense_lines WHERE scenario_id = ?", (scenario_id,))
     conn.execute("DELETE FROM underwriting_unit_lines WHERE scenario_id = ?", (scenario_id,))
+    conn.execute("DELETE FROM underwriting_assumption_years WHERE scenario_id = ?", (scenario_id,))
     conn.execute("DELETE FROM underwriting_scenarios WHERE id = ?", (scenario_id,))
     conn.commit()
 
@@ -216,15 +243,18 @@ def replace_expense_lines(conn, scenario_id: int, lines: list[dict[str, Any]]) -
     conn.executemany(
         """INSERT INTO underwriting_expense_lines
            (scenario_id, category_key, category_name, gl_code, label,
-            annual_amount, growth_pct, is_included, line_kind, sort_order)
+            annual_amount, growth_pct, is_included, line_kind, sort_order,
+            growth_schedule)
            VALUES (:scenario_id,:category_key,:category_name,:gl_code,:label,
-                   :annual_amount,:growth_pct,:is_included,:line_kind,:sort_order)""",
+                   :annual_amount,:growth_pct,:is_included,:line_kind,:sort_order,
+                   :growth_schedule)""",
         [{"scenario_id": scenario_id,
           "category_key": l.get("category_key"), "category_name": l.get("category_name"),
           "gl_code": l.get("gl_code"), "label": l.get("label") or "Expense",
           "annual_amount": l.get("annual_amount"), "growth_pct": l.get("growth_pct"),
           "is_included": 1 if l.get("is_included") else 0,
-          "line_kind": l.get("line_kind"), "sort_order": idx}
+          "line_kind": l.get("line_kind"), "sort_order": idx,
+          "growth_schedule": l.get("growth_schedule")}
          for idx, l in enumerate(lines)])
     conn.commit()
 
@@ -264,3 +294,35 @@ def list_unit_lines(conn, scenario_id: int) -> list[dict[str, Any]]:
         "SELECT * FROM underwriting_unit_lines WHERE scenario_id = ? ORDER BY id",
         (scenario_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Per-year assumptions ─────────────────────────────────────────────────
+#
+# No rows means flat rates. Nothing writes a default row, because seeding
+# one per year would convert every scenario to a scheduled one and make
+# "has an override" unanswerable.
+
+def list_assumption_years(conn, scenario_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM underwriting_assumption_years WHERE scenario_id = ? ORDER BY year",
+        (scenario_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def replace_assumption_years(conn, scenario_id: int, rows: list[dict[str, Any]]) -> None:
+    """Rewrite the whole schedule. A row with every field blank is dropped
+    rather than stored, so clearing the form clears the schedule."""
+    conn.execute("DELETE FROM underwriting_assumption_years WHERE scenario_id = ?",
+                 (scenario_id,))
+    keep = [r for r in rows
+            if any(r.get(f) is not None for f in
+                   ("vacancy_pct", "concessions_pct", "bad_debt_pct", "rent_growth_pct"))]
+    conn.executemany(
+        """INSERT INTO underwriting_assumption_years
+           (scenario_id, year, vacancy_pct, concessions_pct, bad_debt_pct, rent_growth_pct)
+           VALUES (:scenario_id,:year,:vacancy_pct,:concessions_pct,:bad_debt_pct,:rent_growth_pct)""",
+        [{"scenario_id": scenario_id, "year": int(r["year"]),
+          "vacancy_pct": r.get("vacancy_pct"), "concessions_pct": r.get("concessions_pct"),
+          "bad_debt_pct": r.get("bad_debt_pct"), "rent_growth_pct": r.get("rent_growth_pct")}
+         for r in keep])
+    conn.commit()

@@ -267,6 +267,79 @@
   </form>
 </div>
 
+<!-- ── Per-year assumptions ───────────────────────────────────────────── -->
+{#
+  Opt-in, and invisible in its effect until used: a scenario with no
+  overrides runs the same arithmetic on the same flat rates and produces
+  bit-identical numbers.
+
+  Every cell is prefilled with the rate actually in force for that year,
+  not left blank, so the grid opens showing the model as it stands. A cell
+  left equal to the flat rate is stored as no override at all -- otherwise
+  simply opening and saving this form would freeze today's flat rates into
+  rows that stop tracking a later change to the assumption above.
+#}
+<div class="card" id="peryear">
+  <div class="scorecard-section-title">Per-Year Assumptions</div>
+  <p class="page-subtitle" style="margin-top:12px;">
+    Vary vacancy, concessions, bad debt and rent growth year by year. Cells
+    matching the flat assumption are not stored as overrides.
+    {% if result and result.has_schedule %}
+      <strong>This scenario is currently running on per-year assumptions.</strong>
+    {% else %}
+      This scenario currently runs on its flat rates.
+    {% endif %}
+  </p>
+
+  <div class="result-note" style="margin:12px 0 14px;">
+    A rate here applies <strong>during</strong> that year, except rent growth,
+    which carries that year <strong>into the next</strong> &mdash; so the last
+    row also grows the final year into the exit year the sale capitalizes.
+    A schedule shorter than the hold carries its last value forward; it does
+    not drop to zero.
+  </div>
+
+  <form method="POST"
+        action="{{ url_for('underwriting.save_assumption_years', scenario_id=scenario.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="table-wrap">
+      <table class="rent-comps-table">
+        <thead>
+          <tr>
+            <th>Year</th><th>Vacancy (%)</th><th>Concessions (%)</th>
+            <th>Bad Debt (%)</th><th>Rent Growth (%)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in schedule_rows %}
+            <tr>
+              <td><strong>Year {{ row.year }}</strong></td>
+              {% for field in schedule_fields %}
+                {% set cell = row.cells[field] %}
+                <td>
+                  <input class="form-input" type="text"
+                         name="{{ field }}_y{{ row.year }}"
+                         value="{{ '{:g}'.format(cell.value) }}"
+                         style="{% if cell.is_override %}font-weight:650; border-color:#b45309;{% endif %}">
+                </td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <button type="submit" class="btn btn-primary" style="margin-top:12px;">
+      Save Per-Year Assumptions
+    </button>
+    {% if schedule_rows | length >= max_schedule_years %}
+      <p class="stat-box-sub" style="margin-top:8px;">
+        Showing the first {{ max_schedule_years }} years. A longer hold carries
+        year {{ max_schedule_years }}'s values forward.
+      </p>
+    {% endif %}
+  </form>
+</div>
+
 <!-- ── Rent roll ──────────────────────────────────────────────────────── -->
 <div class="card" id="rentroll">
   <div class="scorecard-section-title">Rent Roll{% if units %} ({{ units|length }} units){% endif %}</div>

@@ -46,6 +46,7 @@ from tools import deal_dive_db
 from tools import underwriting_db as db
 from tools import deal_readiness_defaults as readiness
 from tools import underwriting_math as um
+from tools import underwriting_schedule as us
 from tools.form_utils import to_float, to_int
 from tools.scorecard_pro.kpis import KPICalculator
 from tools.scorecard_pro.parsing import PnLParser
@@ -110,6 +111,33 @@ def _scenario_form(form) -> dict:
     return out
 
 
+def _schedule_rows(scenario, assumption_years):
+    """One row per projection year for the per-year assumptions form.
+
+    Every cell is prefilled with the rate actually in force for that year
+    -- an explicit override where one exists, otherwise the flat rate
+    resolved by carry-forward. So the form opens showing the model as it
+    stands, and editing one box overrides exactly one year rather than
+    starting from blanks the user has to re-derive.
+
+    `is_override` marks cells the scenario genuinely stores, so the
+    template can distinguish "you set this" from "this is the default
+    shown for reference".
+    """
+    schedule = us.normalize(assumption_years)
+    hold = int(scenario.get("hold_years") or 0) or 1
+    rows = []
+    for year in range(1, min(hold, us.MAX_SCHEDULE_YEARS) + 1):
+        cells = {}
+        for field in us.SCHEDULE_FIELDS:
+            cells[field] = {
+                "value": us.resolve(schedule, field, scenario.get(field), year),
+                "is_override": bool(schedule.get(year, {}).get(field) is not None),
+            }
+        rows.append({"year": year, "cells": cells})
+    return rows
+
+
 # ── Index ────────────────────────────────────────────────────────────────
 
 @underwriting_bp.route("/")
@@ -138,7 +166,8 @@ def _safe_summary(conn, scenario):
     try:
         res = um.analyze_scenario(scenario,
                                   db.list_unit_lines(conn, scenario["id"]),
-                                  db.list_expense_lines(conn, scenario["id"]))
+                                  db.list_expense_lines(conn, scenario["id"]),
+                                  db.list_assumption_years(conn, scenario["id"]))
         return {"noi": res["projection"]["noi_series"][0],
                 "irr": res["returns"]["levered_irr"],
                 "units": res["egi"]["unit_count"]}
@@ -213,7 +242,8 @@ def compare():
                 units = db.list_unit_lines(conn, sc["id"])
                 lines = db.list_expense_lines(conn, sc["id"])
                 try:
-                    res = um.analyze_scenario(sc, units, lines)
+                    res = um.analyze_scenario(
+                        sc, units, lines, db.list_assumption_years(conn, sc["id"]))
                     columns.append({"scenario": sc, "result": res, "error": None})
                 except um.ValidationError as exc:
                     columns.append({"scenario": sc, "result": None, "error": str(exc)})
@@ -242,12 +272,14 @@ def detail(scenario_id):
             abort(404)
         units = db.list_unit_lines(conn, scenario_id)
         expense_lines = db.list_expense_lines(conn, scenario_id)
+        assumption_years = db.list_assumption_years(conn, scenario_id)
 
     result = error = grid = None
     try:
-        result = um.analyze_scenario(scenario, units, expense_lines)
+        result = um.analyze_scenario(scenario, units, expense_lines, assumption_years)
         grid = um.sensitivity_grid(scenario, units, expense_lines,
-                                   metric=grid_metric, variable=grid_variable)
+                                   metric=grid_metric, variable=grid_variable,
+                                   assumption_years=assumption_years)
     except um.ValidationError as exc:
         error = str(exc)
 
@@ -257,6 +289,10 @@ def detail(scenario_id):
         "tools/underwriting_detail.html",
         scenario=scenario, deal=_deal_for(scenario["deal_id"]),
         units=units, expense_lines=expense_lines,
+        assumption_years=assumption_years,
+        schedule_rows=_schedule_rows(scenario, assumption_years),
+        schedule_fields=us.SCHEDULE_FIELDS,
+        max_schedule_years=us.MAX_SCHEDULE_YEARS,
         # The operating-expenses table shows excluded lines deliberately
         # ("shown, not dropped"), so this filters only on kind -- not on
         # is_included -- to keep that behaviour intact.
@@ -310,6 +346,7 @@ def save_expenses(scenario_id):
                     "gl_code": l["gl_code"], "label": l["label"], "line_kind": l["line_kind"],
                     "annual_amount": l["annual_amount"], "growth_pct": l["growth_pct"],
                     "is_included": l["is_included"],
+                    "growth_schedule": l.get("growth_schedule"),
                 })
                 continue
             lines.append({
@@ -318,6 +355,14 @@ def save_expenses(scenario_id):
                 "annual_amount": to_float(request.form.get(f"amount_{lid}")),
                 "growth_pct": to_float(request.form.get(f"growth_{lid}")),
                 "is_included": request.form.get(f"included_{lid}") == "1",
+                # Per-line schedules are edited by their own form; reading
+                # them from this request would find nothing and silently
+                # clear every override.
+                "growth_schedule": us.dump_line_schedule(
+                    us.parse_line_schedule(
+                        request.form.get(f"schedule_{lid}")
+                        if f"schedule_{lid}" in request.form
+                        else l.get("growth_schedule"))),
             })
         # optional manual additions (the no-T12 fallback path)
         for key, label in um.DEFAULT_EXPENSE_CATEGORIES:
@@ -331,6 +376,47 @@ def save_expenses(scenario_id):
         db.replace_expense_lines(conn, scenario_id, lines)
     flash("Expense lines saved.", "success")
     return redirect(url_for("underwriting.detail", scenario_id=scenario_id) + "#expenses")
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/assumption-years", methods=["POST"])
+@login_required
+def save_assumption_years(scenario_id):
+    """Rewrite the per-year assumption schedule.
+
+    A cell equal to the scenario's flat rate is stored as no override at
+    all. The form prefills every cell with the rate in force, so without
+    this an untouched form would convert the whole scenario to a fully
+    scheduled one -- freezing today's flat rates into rows that would then
+    stop following a later change to the flat assumption.
+    """
+    with db.get_connection() as conn:
+        scenario = db.get_scenario(conn, scenario_id)
+        if not scenario:
+            return _not_found()
+
+        rows = []
+        hold = int(scenario.get("hold_years") or 0) or 1
+        for year in range(1, min(hold, us.MAX_SCHEDULE_YEARS) + 1):
+            row = {"year": year}
+            for field in us.SCHEDULE_FIELDS:
+                value = to_float(request.form.get(f"{field}_y{year}"))
+                # to_float() parses form strings; the scenario's own value
+                # is already a float off the row, so it is coerced by the
+                # schedule module's parser instead of being run back
+                # through the form parser.
+                flat = us._f(scenario.get(field))
+                row[field] = None if (value is None or value == flat) else value
+            rows.append(row)
+
+        db.replace_assumption_years(conn, scenario_id, rows)
+        stored = db.list_assumption_years(conn, scenario_id)
+
+    if stored:
+        flash(f"Per-year assumptions saved — {len(stored)} year"
+              f"{'s' if len(stored) != 1 else ''} override the flat rates.", "success")
+    else:
+        flash("No per-year overrides — this scenario runs on its flat rates.", "success")
+    return redirect(url_for("underwriting.detail", scenario_id=scenario_id) + "#peryear")
 
 
 @underwriting_bp.route("/scenario/<int:scenario_id>/acquisition-costs", methods=["POST"])
