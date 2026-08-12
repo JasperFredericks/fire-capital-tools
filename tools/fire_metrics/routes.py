@@ -442,23 +442,20 @@ def city_summary():
                 ))
 
             if not model_name:
-                return jsonify(_summary_unavailable_response(
-                    selected_city=selected_city,
-                    benchmark_data=benchmarks,
-                    reason="FIRE_METRICS_SUMMARY_MODEL is not configured.",
-                    data_refreshed_at=metadata.get("last_refresh_at"),
-                ))
-
-            try:
-                structured = ai_summary.openai_summary(
-                    api_key=api_key,
-                    model_name=model_name,
-                    selected_city=selected_city,
-                    benchmarks=benchmarks,
-                )
-                structured = ai_summary.normalize_summary(structured, selected_city, benchmarks)
-            except Exception:
+                # Keep overview deterministic when summary model is unset,
+                # but continue into explicit CRE evaluation below.
                 structured = ai_summary.fallback_summary(selected_city, benchmarks)
+            else:
+                try:
+                    structured = ai_summary.openai_summary(
+                        api_key=api_key,
+                        model_name=model_name,
+                        selected_city=selected_city,
+                        benchmarks=benchmarks,
+                    )
+                    structured = ai_summary.normalize_summary(structured, selected_city, benchmarks)
+                except Exception:
+                    structured = ai_summary.fallback_summary(selected_city, benchmarks)
 
             # CRE research: never raises; returns result_type="failure" on errors
             cre_sentences = ""

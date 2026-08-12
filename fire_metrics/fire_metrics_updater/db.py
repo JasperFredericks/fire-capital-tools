@@ -465,11 +465,13 @@ def upsert_city_summary_cache(conn: sqlite3.Connection, row: dict[str, Any]) -> 
         INSERT INTO fire_metrics_city_summaries (
             city, state, city_key, data_fingerprint, model_name, prompt_version,
             summary_text, strength_sentence, weakness_sentence, comparison_sentence,
-            generated_at, cre_sentences_text, research_sources_json, cre_generated_at
+            generated_at, cre_sentences_text, research_sources_json, cre_generated_at,
+            cre_research_version
         ) VALUES (
             :city, :state, :city_key, :data_fingerprint, :model_name, :prompt_version,
             :summary_text, :strength_sentence, :weakness_sentence, :comparison_sentence,
-            :generated_at, :cre_sentences_text, :research_sources_json, :cre_generated_at
+            :generated_at, :cre_sentences_text, :research_sources_json, :cre_generated_at,
+            :cre_research_version
         )
         ON CONFLICT(city, state, data_fingerprint, model_name, prompt_version)
         DO UPDATE SET

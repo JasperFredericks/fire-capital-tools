@@ -1106,6 +1106,75 @@ class FireMetricsAISummaryTests(unittest.TestCase):
             else:
                 os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
 
+    def test_explicit_selection_with_missing_summary_model_uses_fallback_overview_and_cre_cache(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=True,
+            FIRE_METRICS_SUMMARY_MODEL="",
+            OPENAI_API_KEY="test-key",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        mock_cre = {
+            "cre_sentences": "Vacancy in the Alpha metro declined to 4.2%.",
+            "research_sources": [{
+                "publisher": "CBRE",
+                "title": "Q2 Report",
+                "published_date": "",
+                "url": "https://cbre.com/q2",
+            }],
+            "cre_generated_at": summary.utc_now_iso(),
+            "cre_research_version": summary.CRE_RESEARCH_VERSION,
+            "result_type": "success",
+        }
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cre-no-summary-model-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+
+                with patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_summary",
+                    side_effect=AssertionError("openai_summary should not be called when summary model is unset"),
+                ), patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    return_value=mock_cre,
+                ) as cre_mock:
+                    status_code_1, payload_1 = self._call_city_summary(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+                    status_code_2, payload_2 = self._call_city_summary(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code_1, 200)
+                self.assertEqual(payload_1["status"], "ready")
+                self.assertTrue(payload_1.get("research_sources"))
+                self.assertIn("Vacancy in the Alpha metro declined to 4.2%.", payload_1.get("summary", ""))
+                self.assertEqual(
+                    summary.count_sentences(summary.combined_summary(payload_1.get("summary_structured", {}))),
+                    3,
+                )
+
+                self.assertEqual(status_code_2, 200)
+                self.assertTrue(payload_2.get("cached"))
+                cre_mock.assert_called_once()
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
     def test_top_cities_ranking_never_triggers_cre_generation(self):
         app = Flask(__name__)
         app.config.update(
