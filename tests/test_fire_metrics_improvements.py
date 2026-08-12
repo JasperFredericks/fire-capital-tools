@@ -1646,14 +1646,14 @@ class TestInMapCityCard(unittest.TestCase):
         html = self._template()
         self.assertIn("showCityCard(currentCity)", html)
 
-    def test_open_current_city_preview_closes_info_window(self):
-        """Selected-city click must close InfoWindow so card is the only detail UI."""
+    def test_open_current_city_preview_uses_city_card_only(self):
+        """Selected-city preview uses card rendering and no InfoWindow calls."""
         html = self._template()
-        # The openCurrentCityPreview function should close googleInfoWindow
         fn_start = html.find("function openCurrentCityPreview(")
         fn_end = html.find("\n  function ", fn_start + 1)
         fn_body = html[fn_start:fn_end]
-        self.assertIn("googleInfoWindow.close()", fn_body)
+        self.assertIn("showCityCard(currentCity)", fn_body)
+        self.assertNotIn("googleInfoWindow", fn_body)
 
     def test_open_current_city_preview_no_longer_calls_open_marker_preview_for_click(self):
         """openCurrentCityPreview must not call openMarkerPreview (that opened InfoWindow)."""
@@ -1669,7 +1669,7 @@ class TestInMapCityCard(unittest.TestCase):
         fn_start = html.find("function openCurrentCityPreview(")
         fn_end = html.find("\n  function ", fn_start + 1)
         fn_body = html[fn_start:fn_end]
-        self.assertIn("panBy(", fn_body)
+        self.assertIn("panBy(210, 0)", fn_body)
 
     def test_advanced_marker_element_remains(self):
         self.assertIn("AdvancedMarkerElement", self._template())
@@ -1682,11 +1682,48 @@ class TestInMapCityCard(unittest.TestCase):
     def test_select_current_search_city_still_exists(self):
         self.assertIn("function selectCurrentSearchCity(", self._template())
 
-    def test_info_window_retained_for_hover(self):
-        """InfoWindow is kept so hover previews still work on comparison markers."""
+    def test_google_info_window_removed_entirely(self):
+        """No Google InfoWindow code remains; city card is sole detail UI."""
         html = self._template()
-        self.assertIn("googleInfoWindow = new InfoWindow()", html)
-        self.assertIn("function openMarkerPreview(", html)
+        self.assertNotIn("new InfoWindow(", html)
+        self.assertNotIn("googleInfoWindow", html)
+        self.assertNotIn("function openMarkerPreview(", html)
+
+    def test_city_card_metric_set_expanded(self):
+        """Card includes all existing city metrics shown elsewhere in payload/UI."""
+        html = self._template()
+        fn_start = html.find("function showCityCard(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        for label in (
+            "Coverage",
+            "Population",
+            "Median Income",
+            "Home Value",
+            "Employment",
+            "Crime",
+            "Density-Adj. Crime",
+            "Climate Risk",
+            "Landlord",
+        ):
+            self.assertIn(label, fn_body)
+
+    def test_city_card_desktop_width_and_scroll_constraints(self):
+        css = self._css()
+        idx = css.find(".fire-city-card {")
+        block = css[idx:css.find("}", idx) + 1]
+        self.assertIn("width: clamp(300px", block)
+        self.assertIn("max-height: calc(100% - 24px)", block)
+        self.assertIn("overflow-y: auto", block)
+
+    def test_city_card_mobile_panel_scroll_enabled(self):
+        css = self._css()
+        media_idx = css.find("@media (max-width: 768px)")
+        card_idx = css.find(".fire-city-card {", media_idx)
+        block = css[card_idx:css.find("}", card_idx) + 1]
+        self.assertIn("bottom: 12px", block)
+        self.assertIn("max-height: 46%", block)
+        self.assertIn("overflow-y: auto", block)
 
     def test_city_analytics_row_uses_select_current_search_city(self):
         html = self._template()

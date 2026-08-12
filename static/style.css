@@ -1983,8 +1983,10 @@ hr.divider {
   top: 12px;
   right: 12px;
   z-index: 10;  /* above map canvas, below Google attribution */
-  width: 220px;
+  width: clamp(300px, 25vw, 330px);
   max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
   background: rgba(255,255,255,0.97);
   border: 1.5px solid rgba(26,39,68,0.18);
   border-radius: 10px;
@@ -2045,7 +2047,7 @@ hr.divider {
   border-top: 1px solid #f1f5f9;
   padding-top: 8px;
   display: grid;
-  gap: 5px;
+  gap: 4px;
 }
 
 .fcc-row {
@@ -2059,6 +2061,7 @@ hr.divider {
   font-size: 11px;
   color: #6b7280;
   white-space: nowrap;
+  line-height: 1.25;
 }
 
 .fcc-value {
@@ -2066,6 +2069,12 @@ hr.divider {
   font-weight: 600;
   color: #1a2744;
   text-align: right;
+  line-height: 1.25;
+}
+
+.fcc-subvalue {
+  font-weight: 500;
+  color: #6b7280;
 }
 
 @media (max-width: 768px) {
@@ -2076,6 +2085,8 @@ hr.divider {
     left: 8px;
     width: auto;
     max-width: 100%;
+    max-height: 46%;
+    overflow-y: auto;
   }
 }
 
