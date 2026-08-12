@@ -172,12 +172,12 @@ class TestSingleLoanUnaffected(unittest.TestCase):
     def test_debt_stack_is_none_in_single_loan_mode(self):
         for loans in (None, []):
             with self.subTest(loans=loans):
-                r = um.analyze_scenario(self.scenario, self.units, self.expenses, loans)
+                r = um.analyze_scenario(self.scenario, self.units, self.expenses, loans=loans)
                 self.assertIsNone(r["debt_stack"])
 
     def test_none_and_empty_list_are_byte_identical(self):
-        a = um.analyze_scenario(self.scenario, self.units, self.expenses, None)
-        b = um.analyze_scenario(self.scenario, self.units, self.expenses, [])
+        a = um.analyze_scenario(self.scenario, self.units, self.expenses, loans=None)
+        b = um.analyze_scenario(self.scenario, self.units, self.expenses, loans=[])
         self.assertEqual(json.dumps(a, sort_keys=True, default=str),
                          json.dumps(b, sort_keys=True, default=str))
 
@@ -230,7 +230,7 @@ class TestEagleRockWithATwoLoanStack(unittest.TestCase):
         ]
 
     def test_returns_use_the_summed_debt_service(self):
-        r = um.analyze_scenario(self.scenario, self.units, self.expenses, self.loans)
+        r = um.analyze_scenario(self.scenario, self.units, self.expenses, loans=self.loans)
         stack = r["debt_stack"]
         self.assertAlmostEqual(r["returns"]["annual_debt_service"],
                                stack["annual_debt_service"], places=9)
@@ -239,7 +239,7 @@ class TestEagleRockWithATwoLoanStack(unittest.TestCase):
                                stack["balance_at_exit"], places=9)
 
     def test_dscr_headline_is_the_combined_figure(self):
-        r = um.analyze_scenario(self.scenario, self.units, self.expenses, self.loans)
+        r = um.analyze_scenario(self.scenario, self.units, self.expenses, loans=self.loans)
         self.assertAlmostEqual(r["returns"]["dscr"],
                                r["debt_stack"]["combined_dscr"], places=12)
 
@@ -247,13 +247,13 @@ class TestEagleRockWithATwoLoanStack(unittest.TestCase):
         """The scenario's stored ltv_pct is 65; the stack here happens to
         total the same 65% of price, so the check is that the engine used
         the computed value rather than coincidentally agreeing."""
-        r = um.analyze_scenario(self.scenario, self.units, self.expenses, self.loans)
+        r = um.analyze_scenario(self.scenario, self.units, self.expenses, loans=self.loans)
         self.assertAlmostEqual(r["debt_stack"]["implied_ltv_pct"], 65.0, places=9)
         self.assertAlmostEqual(r["returns"]["inputs"]["ltv_pct"], 65.0, places=9)
 
         heavier = list(self.loans) + [
             {"name": "Third", "amount": 699_000.0, "rate_pct": 10.0, "amort_years": 10}]
-        r2 = um.analyze_scenario(self.scenario, self.units, self.expenses, heavier)
+        r2 = um.analyze_scenario(self.scenario, self.units, self.expenses, loans=heavier)
         self.assertAlmostEqual(r2["debt_stack"]["implied_ltv_pct"], 75.0, places=9)
         self.assertAlmostEqual(r2["returns"]["inputs"]["ltv_pct"], 75.0, places=9)
         self.assertEqual(self.scenario["ltv_pct"], 65.0, "fixture must be unmodified")
@@ -261,7 +261,7 @@ class TestEagleRockWithATwoLoanStack(unittest.TestCase):
     def test_equity_reflects_the_stack_not_the_stored_ltv(self):
         heavier = list(self.loans) + [
             {"name": "Third", "amount": 699_000.0, "rate_pct": 10.0, "amort_years": 10}]
-        r = um.analyze_scenario(self.scenario, self.units, self.expenses, heavier)
+        r = um.analyze_scenario(self.scenario, self.units, self.expenses, loans=heavier)
         # price - debt + closing costs
         expected = 6_990_000.0 - 5_242_500.0 + 6_990_000.0 * 0.02
         self.assertAlmostEqual(r["returns"]["equity_invested"], expected, places=6)
@@ -269,7 +269,7 @@ class TestEagleRockWithATwoLoanStack(unittest.TestCase):
     def test_noi_is_untouched_by_financing(self):
         """Financing must not move the property's income."""
         base = um.analyze_scenario(self.scenario, self.units, self.expenses)
-        stacked = um.analyze_scenario(self.scenario, self.units, self.expenses, self.loans)
+        stacked = um.analyze_scenario(self.scenario, self.units, self.expenses, loans=self.loans)
         self.assertEqual(base["projection"]["noi_series"],
                          stacked["projection"]["noi_series"])
         self.assertEqual(base["egi"], stacked["egi"])
@@ -323,6 +323,91 @@ class TestValidation(unittest.TestCase):
     def test_implied_ltv_none_without_a_price(self):
         self.assertIsNone(ulm.implied_ltv_pct([LOAN_A], None))
         self.assertIsNone(ulm.implied_ltv_pct([LOAN_A], 0))
+
+
+class TestKeywordOnlyOptionals(unittest.TestCase):
+    """The optional financing/assumption arguments are keyword-only.
+
+    Several branches each added an optional 4th parameter to
+    analyze_scenario. Positionally they would be interchangeable, so a
+    mis-ordered call site could pass a loan stack where a different
+    argument was expected and quietly model the wrong deal. Keyword-only
+    turns that from silently wrong numbers into an immediate TypeError.
+    """
+
+    def setUp(self):
+        self.scenario, self.units, self.expenses = load_fixture()
+
+    def test_loans_cannot_be_passed_positionally(self):
+        with self.assertRaises(TypeError):
+            um.analyze_scenario(self.scenario, self.units, self.expenses, [LOAN_A])
+
+    def test_loans_by_keyword_works(self):
+        r = um.analyze_scenario(self.scenario, self.units, self.expenses, loans=[LOAN_A])
+        self.assertIsNotNone(r["debt_stack"])
+
+    def test_debt_override_cannot_be_passed_positionally(self):
+        inputs = {
+            "purchase_price": 1_000_000.0, "closing_costs_pct": 2.0, "ltv_pct": 65.0,
+            "interest_rate_pct": 6.0, "amort_years": 30, "hold_years": 1,
+            "exit_cap_pct": 6.0, "selling_costs_pct": 2.0,
+            "noi_year1": 1.0, "noi_growth_pct": 0.0,
+        }
+        with self.assertRaises(TypeError):
+            dam.analyze_noi_series(inputs, [60_000.0], 61_000.0, {"loan_amount": 0})
+
+    def test_sensitivity_grid_loans_is_keyword_only(self):
+        with self.assertRaises(TypeError):
+            um.sensitivity_grid(self.scenario, self.units, self.expenses,
+                                "levered_irr", "rent_growth", [LOAN_A])
+
+
+class TestFeesAndLoansTogether(unittest.TestCase):
+    """The two merged features are independent and must compose: fees
+    change the NOI and the exit, loans change the financing."""
+
+    def setUp(self):
+        self.scenario, self.units, self.expenses = load_fixture()
+        self.loans = [
+            {"name": "Senior", "amount": 4_000_000.0, "rate_pct": 6.0, "amort_years": 30},
+            {"name": "Supplemental", "amount": 543_500.0, "rate_pct": 8.0, "amort_years": 20},
+        ]
+
+    def test_stack_plus_zero_fees_matches_stack_alone(self):
+        a = um.analyze_scenario(self.scenario, self.units, self.expenses, loans=self.loans)
+        b = um.analyze_scenario(dict(self.scenario, management_fee_pct=0.0,
+                                     capital_transaction_fee_pct=0.0),
+                                self.units, self.expenses, loans=self.loans)
+        self.assertEqual(json.dumps(a["returns"], sort_keys=True, default=str),
+                         json.dumps(b["returns"], sort_keys=True, default=str))
+
+    def test_management_fee_lowers_combined_dscr(self):
+        base = um.analyze_scenario(self.scenario, self.units, self.expenses,
+                                   loans=self.loans)
+        feed = um.analyze_scenario(dict(self.scenario, management_fee_pct=3.0),
+                                   self.units, self.expenses, loans=self.loans)
+        self.assertLess(feed["debt_stack"]["combined_dscr"],
+                        base["debt_stack"]["combined_dscr"])
+
+    def test_dscr_headline_still_matches_the_stack_with_fees_on(self):
+        """The DSCR quoted must be measured on the same post-fee NOI the
+        returns are."""
+        r = um.analyze_scenario(dict(self.scenario, management_fee_pct=3.0),
+                                self.units, self.expenses, loans=self.loans)
+        self.assertAlmostEqual(r["returns"]["dscr"],
+                               r["debt_stack"]["combined_dscr"], places=12)
+
+    def test_capital_transaction_fee_does_not_touch_the_debt_stack(self):
+        base = um.analyze_scenario(self.scenario, self.units, self.expenses,
+                                   loans=self.loans)
+        feed = um.analyze_scenario(dict(self.scenario, capital_transaction_fee_pct=1.0),
+                                   self.units, self.expenses, loans=self.loans)
+        self.assertEqual(base["debt_stack"]["annual_debt_service"],
+                         feed["debt_stack"]["annual_debt_service"])
+        self.assertEqual(base["debt_stack"]["balance_at_exit"],
+                         feed["debt_stack"]["balance_at_exit"])
+        self.assertLess(feed["returns"]["net_sale_proceeds"],
+                        base["returns"]["net_sale_proceeds"])
 
 
 class TestPurity(unittest.TestCase):

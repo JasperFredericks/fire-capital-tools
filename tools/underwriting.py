@@ -140,7 +140,7 @@ def _safe_summary(conn, scenario):
         res = um.analyze_scenario(scenario,
                                   db.list_unit_lines(conn, scenario["id"]),
                                   db.list_expense_lines(conn, scenario["id"]),
-                                  db.list_loans(conn, scenario["id"]))
+                                  loans=db.list_loans(conn, scenario["id"]))
         return {"noi": res["projection"]["noi_series"][0],
                 "irr": res["returns"]["levered_irr"],
                 "units": res["egi"]["unit_count"]}
@@ -216,7 +216,7 @@ def compare():
                 lines = db.list_expense_lines(conn, sc["id"])
                 try:
                     res = um.analyze_scenario(sc, units, lines,
-                                              db.list_loans(conn, sc["id"]))
+                                              loans=db.list_loans(conn, sc["id"]))
                     columns.append({"scenario": sc, "result": res, "error": None})
                 except um.ValidationError as exc:
                     columns.append({"scenario": sc, "result": None, "error": str(exc)})
@@ -249,7 +249,7 @@ def detail(scenario_id):
 
     result = error = grid = None
     try:
-        result = um.analyze_scenario(scenario, units, expense_lines, loans)
+        result = um.analyze_scenario(scenario, units, expense_lines, loans=loans)
         grid = um.sensitivity_grid(scenario, units, expense_lines,
                                    metric=grid_metric, variable=grid_variable,
                                    loans=loans)
