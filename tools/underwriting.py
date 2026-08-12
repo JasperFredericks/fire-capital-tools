@@ -37,15 +37,19 @@ import shutil
 from pathlib import Path
 
 from flask import (
-    Blueprint, abort, current_app, flash, redirect, render_template, request, url_for,
+    Blueprint, abort, current_app, flash, redirect, render_template, request,
+    send_file, url_for,
 )
 from flask_login import login_required
 from werkzeug.utils import secure_filename
 
+from tools import branding
 from tools import deal_dive_db
 from tools import underwriting_db as db
 from tools import deal_readiness_defaults as readiness
 from tools import underwriting_math as um
+from tools import underwriting_pnl as pnl_view
+from tools import underwriting_pnl_export as pnl_export
 from tools.form_utils import to_float, to_int
 from tools.scorecard_pro.kpis import KPICalculator
 from tools.scorecard_pro.parsing import PnLParser
@@ -272,6 +276,89 @@ def detail(scenario_id):
                            for l in expense_lines if um.is_acquisition_line(l)},
         feedback_tool=FEEDBACK_TOOL_NAME,
     )
+
+
+# ── Pro-forma P&L ────────────────────────────────────────────────────────
+#
+# A view over the scenario, not a second model of it: every figure comes
+# from the same analyze_scenario() call the detail page uses, and
+# build_pnl() refuses to return a statement that does not reconcile to it.
+
+def _load_pnl(scenario_id: int):
+    """Scenario -> (scenario, pnl). Shared by the three P&L endpoints so
+    the page and both downloads are built from one code path.
+
+    Returns (None, None) when the scenario cannot be computed at all --
+    an incomplete scenario has no P&L, and the caller redirects back to
+    the detail page where the actual validation error is shown.
+    """
+    with db.get_connection() as conn:
+        scenario = db.get_scenario(conn, scenario_id)
+        if not scenario:
+            abort(404)
+        units = db.list_unit_lines(conn, scenario_id)
+        expense_lines = db.list_expense_lines(conn, scenario_id)
+
+    try:
+        result = um.analyze_scenario(scenario, units, expense_lines)
+    except um.ValidationError:
+        return scenario, None
+    return scenario, pnl_view.build_pnl(scenario, units, expense_lines, result)
+
+
+def _pnl_unavailable(scenario_id: int):
+    flash("This scenario's assumptions are incomplete, so it has no P&L yet.",
+          "warning")
+    return redirect(url_for("underwriting.detail", scenario_id=scenario_id))
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/pnl")
+@login_required
+def pnl(scenario_id):
+    scenario, statement = _load_pnl(scenario_id)
+    if statement is None:
+        return _pnl_unavailable(scenario_id)
+    return render_template(
+        "tools/underwriting_pnl.html",
+        scenario=scenario, deal=_deal_for(scenario["deal_id"]),
+        pnl=statement, rows=pnl_export.flatten_rows(statement),
+        feedback_tool=FEEDBACK_TOOL_NAME,
+    )
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/pnl.pdf")
+@login_required
+def pnl_pdf(scenario_id):
+    """Built on demand rather than stored, for the same reason Site DD's
+    report is: it is derived entirely from the scenario, so a stored copy
+    could only go stale."""
+    _scenario, statement = _load_pnl(scenario_id)
+    if statement is None:
+        return _pnl_unavailable(scenario_id)
+
+    name = pnl_export.export_filename(statement, "pdf")
+    out_path = _upload_dir(scenario_id) / name
+    pnl_export.build_pdf(
+        out_path, statement,
+        logo_path=branding.logo_png_path(Path(current_app.root_path) / "static"),
+    )
+    return send_file(str(out_path), as_attachment=True,
+                     download_name=name, mimetype="application/pdf")
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/pnl.xlsx")
+@login_required
+def pnl_xlsx(scenario_id):
+    _scenario, statement = _load_pnl(scenario_id)
+    if statement is None:
+        return _pnl_unavailable(scenario_id)
+
+    name = pnl_export.export_filename(statement, "xlsx")
+    out_path = _upload_dir(scenario_id) / name
+    pnl_export.build_xlsx(out_path, statement)
+    return send_file(
+        str(out_path), as_attachment=True, download_name=name,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @underwriting_bp.route("/scenario/<int:scenario_id>/save", methods=["POST"])
