@@ -1045,6 +1045,10 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertEqual(status_code, 200)
                 self.assertEqual(payload["status"], "ready")
                 self.assertEqual(payload.get("research_sources"), [])
+                self.assertEqual(payload.get("cre_status"), "skipped")
+                self.assertIsNone(payload.get("cre_failure_category"))
+                self.assertIsNone(payload.get("cre_failure_code"))
+                self.assertIsNone(payload.get("cre_failure_param"))
                 self.assertNotIn("No relevant research from approved sources.", payload.get("summary", ""))
         finally:
             if original_db_path is None:
@@ -1099,7 +1103,63 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertEqual(status_code, 200)
                 self.assertEqual(payload["status"], "ready")
                 self.assertTrue(payload.get("research_sources"))
+                self.assertEqual(payload.get("cre_status"), "success")
+                self.assertIsNone(payload.get("cre_failure_category"))
+                self.assertIsNone(payload.get("cre_failure_code"))
+                self.assertIsNone(payload.get("cre_failure_param"))
                 cre_mock.assert_called_once()
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_city_summary_explicit_selection_surfaces_cre_no_data_status(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=True,
+            FIRE_METRICS_SUMMARY_MODEL="model-a",
+            OPENAI_API_KEY="test-key",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        mock_cre = {
+            "cre_sentences": "No relevant research from approved sources.",
+            "research_sources": [],
+            "cre_generated_at": summary.utc_now_iso(),
+            "cre_research_version": summary.CRE_RESEARCH_VERSION,
+            "result_type": "no_data",
+        }
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cre-no-data-status-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+
+                with patch.object(fire_metrics_routes.ai_summary, "openai_summary", return_value={
+                    "strength_sentence": "Alpha has solid employment growth.",
+                    "weakness_sentence": "Climate risk is moderate.",
+                    "comparison_sentence": "Overall Alpha is a mixed opportunity.",
+                }), patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    return_value=mock_cre,
+                ):
+                    status_code, payload = self._call_city_summary(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["status"], "ready")
+                self.assertEqual(payload.get("cre_status"), "no_data")
+                self.assertIsNone(payload.get("cre_failure_category"))
+                self.assertIsNone(payload.get("cre_failure_code"))
+                self.assertIsNone(payload.get("cre_failure_param"))
+                self.assertIn("No relevant research from approved sources.", payload.get("summary", ""))
         finally:
             if original_db_path is None:
                 os.environ.pop("FIRE_METRICS_DB_PATH", None)
@@ -1160,6 +1220,10 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertEqual(status_code_1, 200)
                 self.assertEqual(payload_1["status"], "ready")
                 self.assertTrue(payload_1.get("research_sources"))
+                self.assertEqual(payload_1.get("cre_status"), "success")
+                self.assertIsNone(payload_1.get("cre_failure_category"))
+                self.assertIsNone(payload_1.get("cre_failure_code"))
+                self.assertIsNone(payload_1.get("cre_failure_param"))
                 self.assertIn("Vacancy in the Alpha metro declined to 4.2%.", payload_1.get("summary", ""))
                 self.assertEqual(
                     summary.count_sentences(summary.combined_summary(payload_1.get("summary_structured", {}))),
@@ -1263,11 +1327,19 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertEqual(status_code_1, 200)
                 self.assertTrue(payload_1.get("cached"))
                 self.assertTrue(payload_1.get("research_sources"))
+                self.assertEqual(payload_1.get("cre_status"), "success")
+                self.assertIsNone(payload_1.get("cre_failure_category"))
+                self.assertIsNone(payload_1.get("cre_failure_code"))
+                self.assertIsNone(payload_1.get("cre_failure_param"))
                 self.assertIn("Vacancy in the Alpha metro declined to 4.2%.", payload_1.get("summary", ""))
 
                 self.assertEqual(status_code_2, 200)
                 self.assertTrue(payload_2.get("cached"))
                 self.assertTrue(payload_2.get("research_sources"))
+                self.assertEqual(payload_2.get("cre_status"), "success")
+                self.assertIsNone(payload_2.get("cre_failure_category"))
+                self.assertIsNone(payload_2.get("cre_failure_code"))
+                self.assertIsNone(payload_2.get("cre_failure_param"))
                 cre_mock.assert_called_once()
         finally:
             if original_db_path is None:
@@ -1391,6 +1463,9 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                         "cre_generated_at": summary.utc_now_iso(),
                         "cre_research_version": summary.CRE_RESEARCH_VERSION,
                         "result_type": "failure",
+                        "failure_category": "network_error",
+                        "failure_code": "invalid_request_error",
+                        "failure_param": "tools[0].filters.allowed_domains[0]",
                     },
                 ):
                     status_code, payload = self._call_city_summary(
@@ -1403,6 +1478,10 @@ class FireMetricsAISummaryTests(unittest.TestCase):
 
                 self.assertEqual(status_code, 200)
                 self.assertEqual(payload["status"], "ready")
+                self.assertEqual(payload.get("cre_status"), "failure")
+                self.assertEqual(payload.get("cre_failure_category"), "network_error")
+                self.assertEqual(payload.get("cre_failure_code"), "invalid_request_error")
+                self.assertEqual(payload.get("cre_failure_param"), "tools[0].filters.allowed_domains[0]")
                 self.assertNotIn("No relevant research from approved sources.", payload.get("summary", ""))
         finally:
             if original_db_path is None:
