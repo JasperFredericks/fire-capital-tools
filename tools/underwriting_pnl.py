@@ -38,6 +38,7 @@ from __future__ import annotations
 from typing import Any
 
 from tools import underwriting_math as um
+from tools import underwriting_schedule as us
 
 # The engine's own numeric coercion, aliased rather than reimplemented: a
 # value the engine reads as 0.0 must never read as anything else here, and
@@ -106,19 +107,51 @@ def _category_of(line: dict[str, Any]) -> str:
 
 
 def build_revenue(egi: dict[str, Any], rent_growth_pct: Any,
-                  years: list[int]) -> list[dict[str, Any]]:
-    """Revenue detail rows, one row per component, one amount per year."""
+                  years: list[int],
+                  proj_years: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Revenue detail rows, one row per component, one amount per year.
+
+    Two sources, in order of preference:
+
+      1. the engine's own per-year income build-up, when the projection
+         carries one (`egi_detail`, produced when a scenario has per-year
+         assumptions)
+      2. year 1 scaled by cumulative rent growth, which is what the
+         flat-rate model does and is exactly equivalent when no rate
+         varies
+
+    Preferring (1) is not an optimization, it is a correctness
+    requirement. Scaling year 1 by a single growth factor cannot express a
+    vacancy rate that changes in year 3: the column would still foot to
+    its own total while disagreeing with the NOI beside it. The
+    reconciliation catches that -- it did, on a scheduled scenario, which
+    is how this branch came to exist -- but a statement that reconstructs
+    income differently from the engine is wrong even when the arithmetic
+    happens to agree.
+    """
+    def detail_for(i: int) -> dict[str, Any] | None:
+        if not proj_years or i >= len(proj_years):
+            return None
+        return proj_years[i].get("egi_detail")
+
     rows = []
     for key, label, is_deduction in REVENUE_ROWS:
         base = float(egi.get(key) or 0.0)
-        # Deductions are stored as positive magnitudes by build_egi and
-        # subtracted there; negating here lets a column sum down to EGI.
-        signed = -base if is_deduction else base
+        amounts = []
+        for i, y in enumerate(years):
+            detail = detail_for(i)
+            if detail is not None:
+                value = float(detail.get(key) or 0.0)
+            else:
+                value = base * _rent_factor(rent_growth_pct, y)
+            # Deductions are stored as positive magnitudes by build_egi and
+            # subtracted there; negating here lets a column sum down to EGI.
+            amounts.append(-value if is_deduction else value)
         rows.append({
             "key": key,
             "label": label,
             "is_deduction": is_deduction,
-            "amounts": [signed * _rent_factor(rent_growth_pct, y) for y in years],
+            "amounts": amounts,
         })
     return rows
 
@@ -142,13 +175,24 @@ def build_expenses(expense_lines: list[dict[str, Any]],
         cat = _category_of(line)
         group = groups.setdefault(cat, {"category": cat, "lines": []})
         amt = float(_num(line.get("annual_amount")) or 0.0)
-        g = _line_growth(line, default_expense_growth_pct)
+        # Delegated to the schedule module rather than compounding here.
+        # It honours a per-line growth_schedule where one exists and falls
+        # back to the line's flat rate then the scenario default where one
+        # does not -- the same precedence, and the same compounding, that
+        # project_noi_series used to build the totals this must sum to.
+        #
+        # A local copy of the growth expression looked equivalent and was
+        # not: it ignored per-line schedules, and the reconciliation caught
+        # the resulting $3.38 gap on a scheduled line.
         group["lines"].append({
             "label": line.get("label") or cat,
             "gl_code": line.get("gl_code") or "",
             "growth_pct": line.get("growth_pct"),
-            "effective_growth_pct": g * 100.0,
-            "amounts": [amt * (1.0 + g) ** (y - 1) for y in years],
+            "effective_growth_pct": us.line_growth_for_year(
+                line, default_expense_growth_pct, 1) * 100.0,
+            "has_schedule": bool(us.parse_line_schedule(line.get("growth_schedule"))),
+            "amounts": [us.line_amount_for_year(line, amt, default_expense_growth_pct, y)
+                        for y in years],
         })
 
     out = []
@@ -248,7 +292,8 @@ def build_pnl(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
     proj_years = projection["years"]
     years = [y["year"] for y in proj_years]
 
-    revenue = build_revenue(result["egi"], scenario.get("rent_growth_pct"), years)
+    revenue = build_revenue(result["egi"], scenario.get("rent_growth_pct"), years,
+                            proj_years=proj_years)
     expenses = build_expenses(expense_lines, scenario.get("expense_growth_pct"), years)
 
     # The management fee is subtracted to reach NOI but is not an expense

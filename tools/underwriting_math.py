@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import Any
 
 from tools import underwriting_loans_math as ulm
+from tools import underwriting_schedule as us
 from tools.deal_analyzer_math import (  # noqa: F401  (ValidationError re-exported)
     ValidationError,
     analyze_noi_series,
@@ -145,6 +146,84 @@ def build_egi(unit_lines: list[dict[str, Any]], assumptions: dict[str, Any]) -> 
         "bad_debt": bad_debt,
         "other_income": other_income,
         "effective_gross_income": egi,
+    }
+
+
+def build_egi_for_year(base_egi: dict[str, Any], scenario: dict[str, Any],
+                       schedule: dict[int, dict[str, float]] | None,
+                       year: int) -> dict[str, Any]:
+    """Rebuild the income statement for one projection year.
+
+    This is the per-year generalization of build_egi. Rather than scaling
+    year 1's finished EGI by a growth factor -- which cannot express a
+    vacancy rate that changes in year 3 -- it rescales the rent-roll
+    quantities and then re-applies that year's own loss percentages:
+
+        GPR_t   = GPR_1 * cumulative rent growth to year t
+        LTL_t   = LTL_1 * the same factor
+        OI_t    = OI_1  * the same factor
+        losses  = GPR_t * that year's vacancy/concessions/bad-debt rates
+        EGI_t   = GPR_t - LTL_t - losses + OI_t
+
+    ── Why this is byte-identical when nothing is scheduled ─────────────
+
+    With flat rates the loss percentages are constant, so every term above
+    carries the same factor f and the whole expression collapses to
+
+        f * (GPR_1 - LTL_1 - GPR_1*(v+c+b) + OI_1)  ==  f * EGI_1
+
+    which is exactly `egi_year1 * (1+rg)^(t-1)`, the expression the flat
+    path used before this existed. The equality is arithmetic, not
+    approximate, and tests assert it on real scenarios.
+
+    Other income scales with rent growth here because it did before --
+    the old code grew the whole of EGI, other income included. Holding it
+    flat would be a modelling change smuggled in under a refactor.
+    """
+    factor = us.rent_growth_factor(scenario, schedule, year)
+    rates = us.assumptions_for_year(scenario, schedule, year)
+
+    gpr = base_egi["gross_potential_rent"] * factor
+    ltl = base_egi["loss_to_lease"] * factor
+    other_income = base_egi["other_income"] * factor
+
+    vacancy = gpr * (rates["vacancy_pct"] / 100.0)
+    concessions = gpr * (rates["concessions_pct"] / 100.0)
+    bad_debt = gpr * (rates["bad_debt_pct"] / 100.0)
+
+    # Rebuilding sums six scaled terms where the flat path performed a
+    # single multiplication, and floating-point addition is not
+    # associative -- on a real rent roll the two disagree in the last bit
+    # by year 4. Mathematically identical, but it would move numbers this
+    # system has already quoted and verified.
+    #
+    # So when this year's loss rates are the scenario's own flat rates --
+    # which is every year of every unscheduled scenario -- EGI is taken as
+    # year 1 scaled, exactly as before. The rebuilt components above are
+    # still returned for display; only the total takes the older, equally
+    # correct route. A year that genuinely overrides a rate cannot be
+    # expressed that way and takes the sum, where there is no prior value
+    # to preserve. Same reasoning as underwriting_schedule.compound().
+    uniform = all(rates[f] == (us._f(scenario.get(f)) or 0.0)
+                  for f in us.LEVEL_FIELDS)
+    if uniform:
+        egi_value = base_egi["effective_gross_income"] * factor
+    else:
+        egi_value = gpr - ltl - vacancy - concessions - bad_debt + other_income
+
+    return {
+        "year": year,
+        "unit_count": base_egi["unit_count"],
+        "occupied_units": base_egi["occupied_units"],
+        "gross_potential_rent": gpr,
+        "loss_to_lease": ltl,
+        "vacancy": vacancy,
+        "concessions": concessions,
+        "bad_debt": bad_debt,
+        "other_income": other_income,
+        "rent_growth_factor": factor,
+        "rates": rates,
+        "effective_gross_income": egi_value,
     }
 
 
@@ -276,19 +355,33 @@ def acquisition_costs(expense_lines: list[dict[str, Any]],
 def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
                        hold_years: int, rent_growth_pct: float,
                        default_expense_growth_pct: float, *,
-                       management_fee_pct: float | None = None) -> dict[str, Any]:
+                       management_fee_pct: float | None = None,
+                       scenario: dict[str, Any] | None = None,
+                       schedule: dict[int, dict[str, float]] | None = None,
+                       base_egi: dict[str, Any] | None = None) -> dict[str, Any]:
     """NOI for years 1..H plus the forward NOI (year H+1) used at exit.
 
-    Income grows at one rate. Expenses grow per line, each falling back to
-    the scenario default when it has no rate of its own -- that is the point
-    of an itemized model: property tax and insurance rarely move at the same
-    rate as payroll, and a single blended assumption hides that.
+    Income is rebuilt per year (see build_egi_for_year) rather than grown
+    from year 1, so a vacancy or rent-growth assumption that changes
+    mid-hold is expressible. Expenses grow per line, each line falling
+    back to its own flat rate and then to the scenario default -- that is
+    the point of an itemized model: property tax and insurance rarely move
+    at the same rate as payroll.
 
-    `management_fee_pct` is charged annually as a percentage of that year's
-    effective gross income, and is deducted with the other operating
-    expenses -- so it reduces NOI, and therefore also the exit value, since
-    the exit capitalizes NOI. It needs no growth rate of its own: being a
-    percentage of income, it already grows with income.
+    `scenario`, `schedule` and `base_egi` are optional together. Without
+    them this reproduces the flat-rate path exactly, from the same
+    `egi_year1` scalar it always took, so existing callers are unaffected.
+    With them, the same arithmetic runs with per-year rates resolved by
+    underwriting_schedule -- and when no rate is actually overridden, the
+    two agree to the last bit.
+
+    `management_fee_pct` is charged annually as a percentage of that
+    year's effective gross income, and is deducted with the other
+    operating expenses -- so it reduces NOI, and therefore also the exit
+    value, since the exit capitalizes NOI. It needs no growth rate of its
+    own: being a percentage of income it already grows with income, and
+    because it is charged on whatever income that year actually produced
+    it follows the per-year rebuild without knowing the rebuild exists.
 
     None or 0 adds nothing at all, not a zero-valued term, so a scenario
     without a fee is arithmetically untouched.
@@ -300,22 +393,40 @@ def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
     default_eg = (default_expense_growth_pct or 0.0) / 100.0
     mgmt = (management_fee_pct or 0.0) / 100.0
     included = operating_expense_lines(expense_lines)
+    per_year = scenario is not None and base_egi is not None
 
     years = []
     for t in range(1, hold_years + 2):        # one extra year for the exit
-        income = egi_year1 * (1 + rg) ** (t - 1)
+        if per_year:
+            egi_t = build_egi_for_year(base_egi, scenario, schedule, t)
+            income = egi_t["effective_gross_income"]
+        else:
+            egi_t = None
+            income = egi_year1 * (1 + rg) ** (t - 1)
+
         expenses = 0.0
         for l in included:
             amt = _num(l.get("annual_amount")) or 0.0
-            g = l.get("growth_pct")
-            g = default_eg if g is None else (float(g) / 100.0)
-            expenses += amt * (1 + g) ** (t - 1)
+            if per_year:
+                expenses += us.line_amount_for_year(l, amt, default_expense_growth_pct, t)
+            else:
+                g = l.get("growth_pct")
+                g = default_eg if g is None else (float(g) / 100.0)
+                expenses += amt * (1 + g) ** (t - 1)
+
+        # Charged on THIS year's income, so it follows the per-year
+        # rebuild automatically: a year whose vacancy assumption changed
+        # pays its fee on the income that assumption actually produced.
         management_fee = income * mgmt
         if mgmt:
             expenses += management_fee
-        years.append({"year": t, "income": income, "expenses": expenses,
-                      "management_fee": management_fee,
-                      "noi": income - expenses})
+
+        row = {"year": t, "income": income, "expenses": expenses,
+               "management_fee": management_fee,
+               "noi": income - expenses}
+        if egi_t is not None:
+            row["egi_detail"] = egi_t
+        years.append(row)
 
     return {
         "years": years[:hold_years],
@@ -329,7 +440,8 @@ def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
 
 def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
                      expense_lines: list[dict[str, Any]], *,
-                     loans: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                     loans: list[dict[str, Any]] | None = None,
+                     assumption_years: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Rent roll + expenses + assumptions -> the full underwriting result.
 
     Everything after the NOI series is delegated to the shared engine, so
@@ -347,10 +459,12 @@ def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
     """
     egi = build_egi(unit_lines, scenario)
     hold = int(scenario.get("hold_years") or 0)
+    schedule = us.normalize(assumption_years)
     proj = project_noi_series(
         egi["effective_gross_income"], expense_lines, hold,
         _f(scenario.get("rent_growth_pct")), _f(scenario.get("expense_growth_pct")),
         management_fee_pct=scenario.get("management_fee_pct"),
+        scenario=scenario, schedule=schedule, base_egi=egi,
     )
     acq = acquisition_costs(expense_lines, scenario.get("purchase_price"),
                             scenario.get("closing_costs_pct"),
@@ -399,6 +513,10 @@ def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
         # None in single-loan mode, so a template can branch on presence
         # rather than on an empty-list sentinel that reads as "no debt".
         "debt_stack": debt_stack,
+        # Whether anything actually overrides a flat rate. Drives a banner,
+        # never a code path -- both modes run the same arithmetic.
+        "has_schedule": us.has_any_schedule(schedule, expense_lines),
+        "schedule": schedule,
     }
 
 
@@ -431,7 +549,8 @@ def _engine_inputs(scenario: dict[str, Any],
 
 def sensitivity_grid(scenario, unit_lines, expense_lines, metric="levered_irr",
                      variable="rent_growth", *,
-                     loans: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                     loans: list[dict[str, Any]] | None = None,
+                     assumption_years: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Two-variable grid: exit cap rate against either rent growth or
     purchase price.
 
@@ -475,7 +594,8 @@ def sensitivity_grid(scenario, unit_lines, expense_lines, metric="levered_irr",
             s["exit_cap_pct"] = cap
             s["purchase_price" if variable == "price" else "rent_growth_pct"] = col
             try:
-                res = analyze_scenario(s, unit_lines, expense_lines, loans=loans)["returns"]
+                res = analyze_scenario(s, unit_lines, expense_lines, loans=loans,
+                                       assumption_years=assumption_years)["returns"]
                 value = res.get(metric)
                 reason = res.get(f"{metric}_reason")
             except ValidationError as exc:

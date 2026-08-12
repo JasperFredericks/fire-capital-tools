@@ -287,6 +287,123 @@ class TestManagementFeeLine(unittest.TestCase):
         self.assertIn(pnl_mod.MANAGEMENT_FEE_CATEGORY, labels)
 
 
+class TestPerYearSchedules(unittest.TestCase):
+    """The P&L must follow per-year assumptions, not reconstruct income
+    from a single flat growth rate.
+
+    Both cases here were found by the reconciliation gate during the merge,
+    not by inspection: scaling year 1 cannot express a vacancy rate that
+    changes in year 3, and a local copy of the expense growth expression
+    ignored per-line schedules entirely.
+    """
+
+    def setUp(self):
+        self.scenario, self.units, self.expenses = load_fixture()
+
+    def _build(self, expenses=None, **kw):
+        expenses = self.expenses if expenses is None else expenses
+        result = um.analyze_scenario(self.scenario, self.units, expenses, **kw)
+        return pnl_mod.build_pnl(self.scenario, self.units, expenses, result), result
+
+    def _scheduled_line(self, schedule="[0.0, 50.0]"):
+        lines = [dict(l) for l in self.expenses]
+        target = next(l for l in lines if l.get("is_included"))
+        target["growth_schedule"] = schedule
+        return lines, target
+
+    def test_per_year_vacancy_reconciles(self):
+        rows = [{"year": 2, "vacancy_pct": 7.0}, {"year": 3, "vacancy_pct": 9.0}]
+        pnl, _ = self._build(assumption_years=rows)
+        self.assertTrue(all(c["passed"] for c in pnl["reconciliation"]))
+
+    def test_per_year_vacancy_moves_the_revenue_rows(self):
+        rows = [{"year": 2, "vacancy_pct": 20.0}]
+        flat, _ = self._build()
+        sched, _ = self._build(assumption_years=rows)
+        vac_flat = next(r for r in flat["revenue"] if r["key"] == "vacancy")
+        vac_sched = next(r for r in sched["revenue"] if r["key"] == "vacancy")
+        self.assertEqual(vac_flat["amounts"][0], vac_sched["amounts"][0])
+        # deductions are negative, so a bigger loss is a smaller number
+        self.assertLess(vac_sched["amounts"][1], vac_flat["amounts"][1])
+
+    def test_revenue_rows_come_from_the_engine_build_up_when_scheduled(self):
+        rows = [{"year": 2, "vacancy_pct": 7.0}]
+        pnl, result = self._build(assumption_years=rows)
+        detail = result["projection"]["years"][1]["egi_detail"]
+        gpr = next(r for r in pnl["revenue"] if r["key"] == "gross_potential_rent")
+        self.assertEqual(gpr["amounts"][1], detail["gross_potential_rent"])
+
+    def test_per_line_expense_schedule_reconciles(self):
+        lines, _ = self._scheduled_line()
+        pnl, _ = self._build(expenses=lines)
+        self.assertTrue(all(c["passed"] for c in pnl["reconciliation"]))
+
+    def test_per_line_expense_schedule_moves_that_line(self):
+        lines, target = self._scheduled_line()
+        flat, _ = self._build()
+        sched, _ = self._build(expenses=lines)
+
+        def find(pnl):
+            for g in pnl["expenses"]:
+                for l in g["lines"]:
+                    if target["label"] in l["label"]:
+                        return l
+            raise AssertionError("scheduled line not found in the statement")
+
+        self.assertEqual(find(flat)["amounts"][0], find(sched)["amounts"][0])
+        self.assertNotEqual(find(flat)["amounts"][2], find(sched)["amounts"][2])
+        self.assertTrue(find(sched)["has_schedule"])
+
+    def test_unscheduled_line_is_bit_identical_to_the_flat_expression(self):
+        """Delegating to the schedule module must not move an ordinary
+        line by even a float bit.
+
+        Asserted per line, not on the total: the statement sums 96 lines
+        grouped by category while project_noi_series sums them in list
+        order, and float addition is not associative, so the two totals
+        legitimately differ by ~2e-10. That gap is what RECONCILE_TOLERANCE
+        exists for. The per-line values, which is what "delegating changed
+        nothing" actually claims, are exactly equal.
+        """
+        from tools import underwriting_schedule as us
+
+        default_growth = self.scenario["expense_growth_pct"]
+        included = um.operating_expense_lines(self.expenses)
+        self.assertGreater(len(included), 50)
+
+        # Checked against each source line directly. Matching by label would
+        # be wrong: the real Eagle Rock set reuses labels across categories,
+        # so a lookup by name silently compares the wrong two rows.
+        for src in included:
+            amt = float(src.get("annual_amount") or 0.0)
+            g = src.get("growth_pct")
+            g = (float(default_growth) / 100.0) if g is None else (float(g) / 100.0)
+            for year in (1, 2, 3, 4, 5):
+                self.assertEqual(
+                    us.line_amount_for_year(src, amt, default_growth, year),
+                    amt * (1.0 + g) ** (year - 1),
+                    f"{src.get('label')!r} year {year} moved")
+
+    def test_unscheduled_totals_still_tie_within_tolerance(self):
+        pnl, result = self._build()
+        for i, py in enumerate(result["projection"]["years"]):
+            self.assertAlmostEqual(pnl["expense_totals"][i], py["expenses"], places=6)
+
+    def test_everything_at_once_reconciles(self):
+        lines, _ = self._scheduled_line()
+        scenario = dict(self.scenario, management_fee_pct=3.0,
+                        capital_transaction_fee_pct=1.0)
+        result = um.analyze_scenario(
+            scenario, self.units, lines,
+            assumption_years=[{"year": 2, "vacancy_pct": 7.0}],
+            loans=[{"name": "A", "amount": 4_000_000.0, "rate_pct": 6.0,
+                    "amort_years": 30},
+                   {"name": "B", "amount": 543_500.0, "rate_pct": 8.0,
+                    "amort_years": 20}])
+        pnl = pnl_mod.build_pnl(scenario, self.units, lines, result)
+        self.assertTrue(all(c["passed"] for c in pnl["reconciliation"]))
+
+
 class TestReconciliationGate(unittest.TestCase):
     """The gate must actually fire -- a reconciliation that cannot fail
     proves nothing."""
