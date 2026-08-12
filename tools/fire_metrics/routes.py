@@ -293,6 +293,8 @@ def city_summary():
                 )
                 response_payload["cre_status"] = "skipped"
                 response_payload["cre_failure_category"] = None
+                response_payload["cre_failure_code"] = None
+                response_payload["cre_failure_param"] = None
                 return jsonify(response_payload)
 
             model_name = _summary_model_name()
@@ -327,6 +329,8 @@ def city_summary():
                 )
                 cached_cre_result_type = str(cache_row.get("cre_result_type") or "").strip().lower()
                 cached_cre_failure_category = str(cache_row.get("cre_failure_category") or "").strip() or None
+                cached_cre_failure_code = str(cache_row.get("cre_failure_code") or "").strip() or None
+                cached_cre_failure_param = str(cache_row.get("cre_failure_param") or "").strip() or None
                 cre_sentences = str(cache_row.get("cre_sentences_text") or "").strip()
                 research_sources: list[dict] = []
                 try:
@@ -366,6 +370,8 @@ def city_summary():
                     result_type = cre_result.get("result_type", "failure")
                     cached_cre_result_type = str(result_type or "").strip().lower()
                     cached_cre_failure_category = str(cre_result.get("failure_category") or "").strip() or None
+                    cached_cre_failure_code = str(cre_result.get("failure_code") or "").strip() or None
+                    cached_cre_failure_param = str(cre_result.get("failure_param") or "").strip() or None
                     current_app.logger.info(
                         "FIRE CRE refresh result: city=%s state=%s result_type=%s sources=%d",
                         selected_city["city"], selected_city["state"],
@@ -418,6 +424,8 @@ def city_summary():
                         cre_research_version=store_version,
                         cre_result_type=result_type,
                         cre_failure_category=cached_cre_failure_category,
+                        cre_failure_code=cached_cre_failure_code,
+                        cre_failure_param=cached_cre_failure_param,
                     )
 
                 cre_status = cached_cre_result_type if cached_cre_result_type in {"success", "no_data", "failure"} else "skipped"
@@ -452,6 +460,8 @@ def city_summary():
                     "source": "cache",
                     "cre_status": cre_status,
                     "cre_failure_category": cached_cre_failure_category if cre_status == "failure" else None,
+                    "cre_failure_code": cached_cre_failure_code if cre_status == "failure" else None,
+                    "cre_failure_param": cached_cre_failure_param if cre_status == "failure" else None,
                 })
 
             generated_at = ai_summary.utc_now_iso()
@@ -465,6 +475,8 @@ def city_summary():
                 )
                 response_payload["cre_status"] = "skipped"
                 response_payload["cre_failure_category"] = None
+                response_payload["cre_failure_code"] = None
+                response_payload["cre_failure_param"] = None
                 return jsonify(response_payload)
 
             if not model_name:
@@ -490,6 +502,8 @@ def city_summary():
             cre_research_version_stored: str | None = None
             cre_result_type_stored: str | None = None
             cre_failure_category: str | None = None
+            cre_failure_code: str | None = None
+            cre_failure_param: str | None = None
             if cre_generation_allowed:
                 cre_model = _cre_research_model_name()
                 current_app.logger.info(
@@ -506,6 +520,8 @@ def city_summary():
                 result_type = cre_result.get("result_type", "failure")
                 cre_result_type_stored = result_type
                 cre_failure_category = str(cre_result.get("failure_category") or "").strip() or None
+                cre_failure_code = str(cre_result.get("failure_code") or "").strip() or None
+                cre_failure_param = str(cre_result.get("failure_param") or "").strip() or None
                 current_app.logger.info(
                     "FIRE CRE complete: city=%s state=%s result_type=%s sources=%d",
                     selected_city["city"], selected_city["state"],
@@ -558,6 +574,8 @@ def city_summary():
                 "cre_research_version": cre_research_version_stored,
                 "cre_result_type": cre_result_type_stored,
                 "cre_failure_category": cre_failure_category,
+                "cre_failure_code": cre_failure_code,
+                "cre_failure_param": cre_failure_param,
             }
 
             try:
@@ -590,6 +608,8 @@ def city_summary():
                 "source": "generated",
                 "cre_status": cre_result_type_stored if cre_result_type_stored in {"success", "no_data", "failure"} else "skipped",
                 "cre_failure_category": cre_failure_category if cre_result_type_stored == "failure" else None,
+                "cre_failure_code": cre_failure_code if cre_result_type_stored == "failure" else None,
+                "cre_failure_param": cre_failure_param if cre_result_type_stored == "failure" else None,
             })
     except Exception as exc:
         current_app.logger.exception("FIRE Metrics city-summary endpoint failed: %s", exc.__class__.__name__)

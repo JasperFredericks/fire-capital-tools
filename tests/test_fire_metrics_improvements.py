@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
+
 from flask import Flask
 
 from fire_metrics.fire_metrics_updater import db as db_module
@@ -307,6 +309,44 @@ class TestCREAPIShape(unittest.TestCase):
             )
         self.assertEqual(len(calls), 1, "Must make exactly one API call per request")
 
+    def test_cre_responses_kwargs_match_supported_web_search_shape(self):
+        """CRE request kwargs match supported Responses API web_search shape."""
+        mock_response = MagicMock()
+        mock_response.output = []
+        mock_response.output_text = "NONE"
+        mock_response.error = None
+        captured: dict = {}
+
+        def mock_create(**kwargs):
+            captured.update(kwargs)
+            return mock_response
+
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.side_effect = mock_create
+            summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="Austin", state="TX", display_name="Austin, TX",
+            )
+
+        self.assertEqual(captured.get("model"), "gpt-4.1-mini")
+        self.assertEqual(captured.get("tool_choice"), "required")
+        self.assertEqual(captured.get("include"), ["web_search_call.action.sources"])
+        self.assertIsInstance(captured.get("input"), str)
+        self.assertTrue(captured.get("input"))
+
+        tools = captured.get("tools")
+        self.assertIsInstance(tools, list)
+        self.assertEqual(len(tools), 1)
+        self.assertEqual(tools[0].get("type"), "web_search")
+        self.assertEqual(tools[0].get("search_context_size"), "low")
+        self.assertIn("filters", tools[0])
+        self.assertIn("allowed_domains", tools[0]["filters"])
+
+        self.assertNotIn("instructions", captured)
+        self.assertNotIn("max_output_tokens", captured)
+        self.assertNotIn("response_format", captured)
+        self.assertNotIn("text", captured)
+
     def test_sources_extracted_from_action_sources(self):
         """Sources are extracted from web_search_call action.sources."""
         mock_action_src = MagicMock()
@@ -399,6 +439,43 @@ class TestCREAPIShape(unittest.TestCase):
             )
         self.assertEqual(result["result_type"], "failure")
         self.assertEqual(result["cre_sentences"], "")
+
+    def test_bad_request_returns_sanitized_failure_code_and_param(self):
+        """BadRequestError surfaces safe code/param diagnostics without leaking payloads."""
+        req = httpx.Request("POST", "https://api.openai.com/v1/responses")
+        resp = httpx.Response(400, request=req, json={
+            "error": {
+                "message": "Invalid tool payload.",
+                "type": "invalid_request_error",
+                "param": "tools[0].filters.allowed_domains[0]",
+                "code": "invalid_domain",
+            }
+        })
+
+        from openai import BadRequestError
+        exc = BadRequestError(
+            "Invalid tool payload.",
+            response=resp,
+            body={
+                "message": "Invalid tool payload.",
+                "type": "invalid_request_error",
+                "param": "tools[0].filters.allowed_domains[0]",
+                "code": "invalid_domain",
+            },
+        )
+
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.side_effect = exc
+            result = summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="Boston", state="MA", display_name="Boston, MA",
+            )
+
+        self.assertEqual(result["result_type"], "failure")
+        self.assertEqual(result["failure_category"], "bad_request")
+        self.assertEqual(result["failure_code"], "invalid_domain")
+        self.assertEqual(result["failure_param"], "tools[0].filters.allowed_domains[0]")
+        self.assertTrue(result.get("failure_message"))
 
     def test_successful_result_stores_current_cre_version(self):
         """Successful result includes the current CRE_RESEARCH_VERSION."""
@@ -573,6 +650,8 @@ class TestCREAPIShape(unittest.TestCase):
             self.assertEqual(data["research_sources"], [])
             self.assertEqual(data.get("cre_status"), "failure")
             self.assertEqual(data.get("cre_failure_category"), "network_error")
+            self.assertIsNone(data.get("cre_failure_code"))
+            self.assertIsNone(data.get("cre_failure_param"))
         finally:
             if original_db_path is None:
                 os.environ.pop("FIRE_METRICS_DB_PATH", None)
@@ -635,6 +714,8 @@ class TestCREAPIShape(unittest.TestCase):
             self.assertIsInstance(data.get("research_sources", []), list)
             self.assertEqual(data.get("cre_status"), "failure")
             self.assertEqual(data.get("cre_failure_category"), "network_error")
+            self.assertIsNone(data.get("cre_failure_code"))
+            self.assertIsNone(data.get("cre_failure_param"))
         finally:
             if original_db_path is None:
                 os.environ.pop("FIRE_METRICS_DB_PATH", None)
@@ -671,6 +752,8 @@ class TestCREDBSchema(unittest.TestCase):
             self.assertIn("research_sources_json", cols)
             self.assertIn("cre_generated_at", cols)
             self.assertIn("cre_failure_category", cols)
+            self.assertIn("cre_failure_code", cols)
+            self.assertIn("cre_failure_param", cols)
         finally:
             db_path.unlink(missing_ok=True)
 

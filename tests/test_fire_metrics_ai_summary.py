@@ -1047,6 +1047,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertEqual(payload.get("research_sources"), [])
                 self.assertEqual(payload.get("cre_status"), "skipped")
                 self.assertIsNone(payload.get("cre_failure_category"))
+                self.assertIsNone(payload.get("cre_failure_code"))
+                self.assertIsNone(payload.get("cre_failure_param"))
                 self.assertNotIn("No relevant research from approved sources.", payload.get("summary", ""))
         finally:
             if original_db_path is None:
@@ -1103,6 +1105,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertTrue(payload.get("research_sources"))
                 self.assertEqual(payload.get("cre_status"), "success")
                 self.assertIsNone(payload.get("cre_failure_category"))
+                self.assertIsNone(payload.get("cre_failure_code"))
+                self.assertIsNone(payload.get("cre_failure_param"))
                 cre_mock.assert_called_once()
         finally:
             if original_db_path is None:
@@ -1153,6 +1157,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertEqual(payload["status"], "ready")
                 self.assertEqual(payload.get("cre_status"), "no_data")
                 self.assertIsNone(payload.get("cre_failure_category"))
+                self.assertIsNone(payload.get("cre_failure_code"))
+                self.assertIsNone(payload.get("cre_failure_param"))
                 self.assertIn("No relevant research from approved sources.", payload.get("summary", ""))
         finally:
             if original_db_path is None:
@@ -1216,6 +1222,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertTrue(payload_1.get("research_sources"))
                 self.assertEqual(payload_1.get("cre_status"), "success")
                 self.assertIsNone(payload_1.get("cre_failure_category"))
+                self.assertIsNone(payload_1.get("cre_failure_code"))
+                self.assertIsNone(payload_1.get("cre_failure_param"))
                 self.assertIn("Vacancy in the Alpha metro declined to 4.2%.", payload_1.get("summary", ""))
                 self.assertEqual(
                     summary.count_sentences(summary.combined_summary(payload_1.get("summary_structured", {}))),
@@ -1321,6 +1329,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertTrue(payload_1.get("research_sources"))
                 self.assertEqual(payload_1.get("cre_status"), "success")
                 self.assertIsNone(payload_1.get("cre_failure_category"))
+                self.assertIsNone(payload_1.get("cre_failure_code"))
+                self.assertIsNone(payload_1.get("cre_failure_param"))
                 self.assertIn("Vacancy in the Alpha metro declined to 4.2%.", payload_1.get("summary", ""))
 
                 self.assertEqual(status_code_2, 200)
@@ -1328,6 +1338,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertTrue(payload_2.get("research_sources"))
                 self.assertEqual(payload_2.get("cre_status"), "success")
                 self.assertIsNone(payload_2.get("cre_failure_category"))
+                self.assertIsNone(payload_2.get("cre_failure_code"))
+                self.assertIsNone(payload_2.get("cre_failure_param"))
                 cre_mock.assert_called_once()
         finally:
             if original_db_path is None:
@@ -1452,6 +1464,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                         "cre_research_version": summary.CRE_RESEARCH_VERSION,
                         "result_type": "failure",
                         "failure_category": "network_error",
+                        "failure_code": "invalid_request_error",
+                        "failure_param": "tools[0].filters.allowed_domains[0]",
                     },
                 ):
                     status_code, payload = self._call_city_summary(
@@ -1466,6 +1480,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertEqual(payload["status"], "ready")
                 self.assertEqual(payload.get("cre_status"), "failure")
                 self.assertEqual(payload.get("cre_failure_category"), "network_error")
+                self.assertEqual(payload.get("cre_failure_code"), "invalid_request_error")
+                self.assertEqual(payload.get("cre_failure_param"), "tools[0].filters.allowed_domains[0]")
                 self.assertNotIn("No relevant research from approved sources.", payload.get("summary", ""))
         finally:
             if original_db_path is None:

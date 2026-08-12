@@ -1578,6 +1578,9 @@ def openai_cre_research(
         "cre_generated_at": utc_now_iso(),
         "cre_research_version": CRE_RESEARCH_VERSION,
         "failure_category": None,
+        "failure_code": None,
+        "failure_param": None,
+        "failure_message": None,
     }
 
     def _failure_category_from_exception(exc: Exception) -> str:
@@ -1646,7 +1649,8 @@ def openai_cre_research(
             tools=[tool_config],
             tool_choice="required",
             include=["web_search_call.action.sources"],
-            input=[{"role": "user", "content": [{"type": "input_text", "text": search_prompt}]}],
+            # Keep request shape canonical to reduce schema drift risk.
+            input=search_prompt,
         )
 
         response_error = _safe_get(response, "error", None)
@@ -1664,6 +1668,9 @@ def openai_cre_research(
                 **_result_base,
                 "result_type": "failure",
                 "failure_category": failure_category,
+                "failure_code": err_code or None,
+                "failure_param": None,
+                "failure_message": (" ".join(err_msg.split())[:200] if err_msg else None),
             }
 
         output_items = _safe_get(response, "output", None) or []
@@ -1774,18 +1781,27 @@ def openai_cre_research(
             "cre_generated_at": utc_now_iso(),
             "result_type": result_type,
             "failure_category": None,
+            "failure_code": None,
+            "failure_param": None,
+            "failure_message": None,
         }
 
     except Exception as exc:
         failure_category = _failure_category_from_exception(exc)
+        failure_code = str(getattr(exc, "code", "") or "").strip() or None
+        failure_param = str(getattr(exc, "param", "") or "").strip() or None
+        failure_message = " ".join(str(getattr(exc, "message", "") or "").split())[:200] or None
         log.warning(
-            "FIRE CRE failed: city_key=%s|%s category=%s error=%s",
-            city, state, failure_category, type(exc).__name__,
+            "FIRE CRE failed: city_key=%s|%s category=%s code=%s param=%s error=%s",
+            city, state, failure_category, failure_code, failure_param, type(exc).__name__,
         )
         return {
             **_result_base,
             "result_type": "failure",
             "failure_category": failure_category,
+            "failure_code": failure_code,
+            "failure_param": failure_param,
+            "failure_message": failure_message,
         }
 
 
