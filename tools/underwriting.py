@@ -45,6 +45,7 @@ from werkzeug.utils import secure_filename
 from tools import deal_dive_db
 from tools import underwriting_db as db
 from tools import deal_readiness_defaults as readiness
+from tools import underwriting_loans_math as ulm
 from tools import underwriting_math as um
 from tools.form_utils import to_float, to_int
 from tools.scorecard_pro.kpis import KPICalculator
@@ -138,7 +139,8 @@ def _safe_summary(conn, scenario):
     try:
         res = um.analyze_scenario(scenario,
                                   db.list_unit_lines(conn, scenario["id"]),
-                                  db.list_expense_lines(conn, scenario["id"]))
+                                  db.list_expense_lines(conn, scenario["id"]),
+                                  db.list_loans(conn, scenario["id"]))
         return {"noi": res["projection"]["noi_series"][0],
                 "irr": res["returns"]["levered_irr"],
                 "units": res["egi"]["unit_count"]}
@@ -213,7 +215,8 @@ def compare():
                 units = db.list_unit_lines(conn, sc["id"])
                 lines = db.list_expense_lines(conn, sc["id"])
                 try:
-                    res = um.analyze_scenario(sc, units, lines)
+                    res = um.analyze_scenario(sc, units, lines,
+                                              db.list_loans(conn, sc["id"]))
                     columns.append({"scenario": sc, "result": res, "error": None})
                 except um.ValidationError as exc:
                     columns.append({"scenario": sc, "result": None, "error": str(exc)})
@@ -242,12 +245,14 @@ def detail(scenario_id):
             abort(404)
         units = db.list_unit_lines(conn, scenario_id)
         expense_lines = db.list_expense_lines(conn, scenario_id)
+        loans = db.list_loans(conn, scenario_id)
 
     result = error = grid = None
     try:
-        result = um.analyze_scenario(scenario, units, expense_lines)
+        result = um.analyze_scenario(scenario, units, expense_lines, loans)
         grid = um.sensitivity_grid(scenario, units, expense_lines,
-                                   metric=grid_metric, variable=grid_variable)
+                                   metric=grid_metric, variable=grid_variable,
+                                   loans=loans)
     except um.ValidationError as exc:
         error = str(exc)
 
@@ -257,6 +262,7 @@ def detail(scenario_id):
         "tools/underwriting_detail.html",
         scenario=scenario, deal=_deal_for(scenario["deal_id"]),
         units=units, expense_lines=expense_lines,
+        loans=loans, default_amort_years=DEFAULTS["amort_years"],
         # The operating-expenses table shows excluded lines deliberately
         # ("shown, not dropped"), so this filters only on kind -- not on
         # is_included -- to keep that behaviour intact.
@@ -331,6 +337,61 @@ def save_expenses(scenario_id):
         db.replace_expense_lines(conn, scenario_id, lines)
     flash("Expense lines saved.", "success")
     return redirect(url_for("underwriting.detail", scenario_id=scenario_id) + "#expenses")
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/loans", methods=["POST"])
+@login_required
+def save_loans(scenario_id):
+    """Rewrite this scenario's debt stack from the Loans form.
+
+    Posting an empty stack is meaningful, not a no-op: it returns the
+    scenario to single-loan mode, where the engine sizes one loan from
+    ltv_pct again. That is the only way back, so it must be reachable.
+
+    Rows are read positionally from parallel field arrays. A row whose
+    amount is blank is dropped rather than saved as zero -- the "Add
+    Mortgage" button appends an empty row, and submitting without filling
+    it in should not book a $0 loan.
+    """
+    with db.get_connection() as conn:
+        if not db.get_scenario(conn, scenario_id):
+            return _not_found()
+
+        names = request.form.getlist("loan_name")
+        amounts = request.form.getlist("loan_amount")
+        rates = request.form.getlist("loan_rate_pct")
+        amorts = request.form.getlist("loan_amort_years")
+
+        loans = []
+        for i in range(len(amounts)):
+            amount = to_float(amounts[i])
+            if amount is None:
+                continue
+            loans.append({
+                "sort_order": i,
+                "name": (names[i] if i < len(names) else "") or f"Loan {i + 1}",
+                "amount": amount,
+                "rate_pct": to_float(rates[i]) if i < len(rates) else None,
+                "amort_years": to_int(amorts[i]) if i < len(amorts) else None,
+            })
+
+        # Validated before it is stored: an unmodellable stack saved now is
+        # a scenario that cannot be opened later.
+        try:
+            ulm.validate(loans)
+        except ulm.LoanValidationError as exc:
+            flash(str(exc), "danger")
+            return redirect(url_for("underwriting.detail", scenario_id=scenario_id) + "#loans")
+
+        db.replace_loans(conn, scenario_id, loans)
+
+    if loans:
+        flash(f"Saved {len(loans)} loan{'s' if len(loans) != 1 else ''}. "
+              "LTV is now computed from the stack.", "success")
+    else:
+        flash("Debt stack cleared — this scenario is back to single-loan (LTV) mode.",
+              "success")
+    return redirect(url_for("underwriting.detail", scenario_id=scenario_id) + "#loans")
 
 
 @underwriting_bp.route("/scenario/<int:scenario_id>/acquisition-costs", methods=["POST"])

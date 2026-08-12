@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from tools import underwriting_loans_math as ulm
 from tools.deal_analyzer_math import (  # noqa: F401  (ValidationError re-exported)
     ValidationError,
     analyze_noi_series,
@@ -312,11 +313,23 @@ def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
 # ── Full scenario ────────────────────────────────────────────────────────
 
 def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
-                     expense_lines: list[dict[str, Any]]) -> dict[str, Any]:
+                     expense_lines: list[dict[str, Any]],
+                     loans: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Rent roll + expenses + assumptions -> the full underwriting result.
 
     Everything after the NOI series is delegated to the shared engine, so
-    the returns here and Deal Analyzer's are computed by identical code."""
+    the returns here and Deal Analyzer's are computed by identical code.
+
+    `loans` is the optional multi-loan stack. Empty or absent -- which is
+    every scenario that predates the Loans tab -- keeps single-loan mode:
+    the engine sizes one loan from ltv_pct exactly as it always has, and
+    the result dict is unchanged in both shape and value.
+
+    With loans present the financing inverts: the stack becomes the input
+    and LTV becomes a computed output (see underwriting_loans_math). Only
+    the three debt figures change. Income, NOI and the exit are built by
+    the same code either way -- a debt stack is not a different property.
+    """
     egi = build_egi(unit_lines, scenario)
     hold = int(scenario.get("hold_years") or 0)
     proj = project_noi_series(
@@ -331,7 +344,23 @@ def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
     # equivalent percentage instead. Deal Analyzer therefore keeps
     # computing returns with byte-identical code.
     engine_inputs = _engine_inputs(scenario, acq["effective_pct"])
-    returns = analyze_noi_series(engine_inputs, proj["noi_series"], proj["noi_exit"])
+
+    debt_stack = None
+    if loans:
+        debt_stack = ulm.summarize(loans, hold,
+                                   noi_year1=proj["noi_series"][0] if proj["noi_series"] else None,
+                                   purchase_price=scenario.get("purchase_price"))
+        # LTV is an output now, so the engine is told the implied figure
+        # rather than the stale one typed into the scenario -- otherwise
+        # its own LTV validation would police a number nothing uses.
+        implied = debt_stack["implied_ltv_pct"]
+        if implied is not None:
+            engine_inputs["ltv_pct"] = implied
+
+    returns = analyze_noi_series(
+        engine_inputs, proj["noi_series"], proj["noi_exit"],
+        debt=ulm.engine_debt(debt_stack) if debt_stack else None)
+
     return {
         "egi": egi,
         "unit_mix": unit_mix(unit_lines),
@@ -339,6 +368,9 @@ def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
         "operating_expenses_year1": total_operating_expenses(expense_lines),
         "acquisition_costs": acq,
         "returns": returns,
+        # None in single-loan mode, so a template can branch on presence
+        # rather than on an empty-list sentinel that reads as "no debt".
+        "debt_stack": debt_stack,
     }
 
 
@@ -366,7 +398,8 @@ def _engine_inputs(scenario: dict[str, Any],
 # ── Sensitivity ──────────────────────────────────────────────────────────
 
 def sensitivity_grid(scenario, unit_lines, expense_lines, metric="levered_irr",
-                     variable="rent_growth") -> dict[str, Any]:
+                     variable="rent_growth",
+                     loans: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Two-variable grid: exit cap rate against either rent growth or
     purchase price.
 
@@ -378,6 +411,12 @@ def sensitivity_grid(scenario, unit_lines, expense_lines, metric="levered_irr",
 
     121 cells cost well under a hundredth of a second, so this is recomputed
     on render and never cached or stored.
+
+    In multi-loan mode the stack is held fixed across the grid: the loans
+    are contracted amounts, so they do not move when the exit cap or the
+    rent growth assumption does. Under the price variable this means LTV
+    varies across the columns, which is the correct reading -- the same
+    debt against a different price is a different LTV.
     """
     base_cap = _f(scenario.get("exit_cap_pct"))
     half = (EXIT_CAP_STEPS - 1) // 2
@@ -404,7 +443,7 @@ def sensitivity_grid(scenario, unit_lines, expense_lines, metric="levered_irr",
             s["exit_cap_pct"] = cap
             s["purchase_price" if variable == "price" else "rent_growth_pct"] = col
             try:
-                res = analyze_scenario(s, unit_lines, expense_lines)["returns"]
+                res = analyze_scenario(s, unit_lines, expense_lines, loans)["returns"]
                 value = res.get(metric)
                 reason = res.get(f"{metric}_reason")
             except ValidationError as exc:

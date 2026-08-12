@@ -264,8 +264,137 @@
       {% endfor %}
     </div>
     <button type="submit" class="btn btn-primary">Save Assumptions</button>
+    {% if loans %}
+      <p class="stat-box-sub" style="margin-top:10px; color:#b45309;">
+        This scenario is in multi-loan mode, so <strong>LTV, Interest Rate and
+        Amortization above are not used</strong> &mdash; the Loans section below
+        supplies the financing, and LTV is computed from it.
+      </p>
+    {% endif %}
   </form>
 </div>
+
+<!-- ── Loans ──────────────────────────────────────────────────────────── -->
+{#
+  Opt-in. A scenario with no loan rows stays in single-loan mode and is
+  financed by the LTV assumption above exactly as before -- which is why
+  no default row is ever written, and why clearing the stack is a
+  supported action rather than an edge case.
+
+  The inversion worth reading twice: with loans present, LTV stops being
+  an input and becomes an output (Σ amounts ÷ price). The same field
+  therefore means different things in the two modes, so the computed
+  figure is shown here rather than left to be inferred from a stale
+  Assumptions value.
+#}
+<div class="card" id="loans">
+  <div class="scorecard-section-title">Loans</div>
+
+  {% if loans and result and result.debt_stack %}
+    {% set ds = result.debt_stack %}
+    <div class="stats-grid" style="margin:14px 0 8px;">
+      <div class="stat-box"><div class="stat-box-label">Total Debt</div>
+        <div class="stat-box-value">{{ money(ds.loan_amount) }}</div>
+        <div class="stat-box-sub">{{ ds.loan_count }} loan{{ 's' if ds.loan_count != 1 }}</div></div>
+      <div class="stat-box"><div class="stat-box-label">Implied LTV</div>
+        <div class="stat-box-value">{{ '{:,.2f}%'.format(ds.implied_ltv_pct) if ds.implied_ltv_pct is not none else '—' }}</div>
+        <div class="stat-box-sub">Computed &mdash; total debt &divide; price</div></div>
+      <div class="stat-box"><div class="stat-box-label">Annual Debt Service</div>
+        <div class="stat-box-value">{{ money(ds.annual_debt_service) }}</div>
+        <div class="stat-box-sub">Sum of each loan's own payment</div></div>
+      <div class="stat-box"><div class="stat-box-label">Combined DSCR (Yr 1)</div>
+        <div class="stat-box-value">{{ '{:,.2f}x'.format(ds.combined_dscr) if ds.combined_dscr is not none else '—' }}</div>
+        <div class="stat-box-sub">The binding figure &mdash; year-1 NOI &divide; total debt service</div></div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:8px;">
+      <table class="rent-comps-table">
+        <thead>
+          <tr>
+            <th>Loan</th><th>Amount</th><th>Rate</th><th>Amort</th>
+            <th>Annual Debt Service</th><th>Balance at Exit</th>
+            <th>DSCR (this loan)</th><th>DSCR (through this loan)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for l in ds.loans %}
+            <tr>
+              <td><strong>{{ l.name }}</strong></td>
+              <td>{{ money(l.amount) }}</td>
+              <td>{{ '{:,.3g}%'.format(l.rate_pct) }}</td>
+              <td>{{ l.amort_years }} yrs</td>
+              <td>{{ money(l.annual_debt_service) }}</td>
+              <td>{{ money(l.balance_at_exit) }}</td>
+              <td>{{ '{:,.2f}x'.format(l.dscr) if l.dscr is not none else '—' }}</td>
+              <td>{{ '{:,.2f}x'.format(l.cumulative_dscr) if l.cumulative_dscr is not none else '—' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="stat-box-sub" style="margin-top:10px;">
+      Each loan amortizes independently on its own terms; debt service and
+      payoff are sums. A per-loan DSCR is always at least the combined one,
+      since it divides the same NOI by less debt service &mdash; it is shown for
+      per-lender covenants. The <em>through this loan</em> column walks the
+      stack in order, so it is visible where coverage runs out.
+    </p>
+  {% else %}
+    <p class="page-subtitle" style="margin-top:12px;">
+      This scenario is in <strong>single-loan mode</strong>: one loan sized by the
+      LTV assumption, at the interest rate and amortization above. Add a mortgage
+      below to model a stack of loans on their own independent terms instead.
+    </p>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('underwriting.save_loans', scenario_id=scenario.id) }}"
+        style="margin-top:16px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <table class="rent-comps-table" id="loans-table">
+      <thead>
+        <tr><th style="width:32%;">Name</th><th>Amount ($)</th><th>Rate (%)</th>
+            <th>Amortization (yrs)</th><th></th></tr>
+      </thead>
+      <tbody id="loans-body">
+        {% for l in loans %}
+          <tr>
+            <td><input class="form-input" type="text" name="loan_name" value="{{ l.name }}"></td>
+            <td><input class="form-input" type="text" name="loan_amount" value="{{ l.amount if l.amount is not none else '' }}"></td>
+            <td><input class="form-input" type="text" name="loan_rate_pct" value="{{ l.rate_pct if l.rate_pct is not none else '' }}"></td>
+            <td><input class="form-input" type="text" name="loan_amort_years" value="{{ l.amort_years if l.amort_years is not none else '' }}"></td>
+            <td><button type="button" class="btn btn-ghost" onclick="this.closest('tr').remove();">Remove</button></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div style="display:flex; gap:10px; margin-top:12px; flex-wrap:wrap;">
+      <button type="button" class="btn btn-secondary" onclick="addMortgageRow();">Add Mortgage</button>
+      <button type="submit" class="btn btn-primary">Save Loans</button>
+    </div>
+    <p class="stat-box-sub" style="margin-top:10px;">
+      Saving with no rows returns this scenario to single-loan (LTV) mode.
+      A row left with a blank amount is ignored rather than saved as a $0 loan.
+    </p>
+  </form>
+</div>
+
+<script>
+  // Appends an empty loan row. Amortization is prefilled with the scenario
+  // default so the common case is one field to type, but every field stays
+  // editable -- loans in a stack rarely share a term.
+  function addMortgageRow() {
+    var body = document.getElementById('loans-body');
+    var n = body.rows.length + 1;
+    var row = body.insertRow();
+    row.innerHTML =
+      '<td><input class="form-input" type="text" name="loan_name" value="Loan ' + n + '"></td>' +
+      '<td><input class="form-input" type="text" name="loan_amount" value=""></td>' +
+      '<td><input class="form-input" type="text" name="loan_rate_pct" value=""></td>' +
+      '<td><input class="form-input" type="text" name="loan_amort_years" value="{{ default_amort_years }}"></td>' +
+      '<td><button type="button" class="btn btn-ghost" onclick="this.closest(\'tr\').remove();">Remove</button></td>';
+  }
+</script>
 
 <!-- ── Rent roll ──────────────────────────────────────────────────────── -->
 <div class="card" id="rentroll">
