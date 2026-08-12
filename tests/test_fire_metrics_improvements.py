@@ -157,7 +157,7 @@ class TestCRECacheFreshness(unittest.TestCase):
         self.assertTrue(summary.is_cre_cache_current(recent, summary.CRE_RESEARCH_VERSION))
 
     def test_stale_timestamp_returns_false(self):
-        old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
         self.assertFalse(summary.is_cre_cache_current(old, summary.CRE_RESEARCH_VERSION))
 
     def test_none_timestamp_returns_false(self):
@@ -167,11 +167,11 @@ class TestCRECacheFreshness(unittest.TestCase):
         self.assertFalse(summary.is_cre_cache_current("", summary.CRE_RESEARCH_VERSION))
 
     def test_at_ttl_boundary_returns_false(self):
-        exactly_at_ttl = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        exactly_at_ttl = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         self.assertFalse(summary.is_cre_cache_current(exactly_at_ttl, summary.CRE_RESEARCH_VERSION))
 
     def test_just_within_ttl_returns_true(self):
-        just_within = (datetime.now(timezone.utc) - timedelta(days=6, hours=23)).isoformat()
+        just_within = (datetime.now(timezone.utc) - timedelta(days=29, hours=23)).isoformat()
         self.assertTrue(summary.is_cre_cache_current(just_within, summary.CRE_RESEARCH_VERSION))
 
     def test_old_version_is_immediately_stale(self):
@@ -475,7 +475,12 @@ class TestCREAPIShape(unittest.TestCase):
             }
             with app.test_request_context(
                 "/tools/fire-metrics/api/city-summary", method="POST",
-                json={"city": "Alpha", "state": "AA"},
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
+                    "cre_generation_intent": "explicit_city_selection",
+                    "cre_selection_source": "main_city_search",
+                },
             ):
                 with patch.object(summary, "openai_summary", return_value={
                     "strength_sentence": "Alpha has solid employment growth.",
@@ -531,7 +536,12 @@ class TestCREAPIShape(unittest.TestCase):
             with route_app.test_request_context(
                 "/tools/fire-metrics/api/city-summary",
                 method="POST",
-                json={"city": "Alpha", "state": "AA"},
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
+                    "cre_generation_intent": "explicit_city_selection",
+                    "cre_selection_source": "main_city_search",
+                },
             ):
                 with patch.object(
                     summary, "openai_summary",
@@ -581,7 +591,12 @@ class TestCREAPIShape(unittest.TestCase):
             with route_app.test_request_context(
                 "/tools/fire-metrics/api/city-summary",
                 method="POST",
-                json={"city": "Alpha", "state": "AA"},
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
+                    "cre_generation_intent": "explicit_city_selection",
+                    "cre_selection_source": "main_city_search",
+                },
             ):
                 with patch.object(
                     summary, "openai_summary",
@@ -1158,7 +1173,7 @@ class TestCREResultTypeCorrectness(unittest.TestCase):
         """Approved source returned but model output empty/NONE."""
         result = self._run_cre("NONE", [{"type": "url", "url": "https://cbre.com/report"}])
         self.assertEqual(result["result_type"], "no_data")
-        self.assertEqual(result["cre_sentences"], "")
+        self.assertEqual(result["cre_sentences"], "No relevant research from approved sources.")
 
     def test_unapproved_source_plus_text_is_no_data(self):
         result = self._run_cre(
@@ -1171,7 +1186,7 @@ class TestCREResultTypeCorrectness(unittest.TestCase):
     def test_none_sentinel_produces_no_data(self):
         result = self._run_cre("NONE", [])
         self.assertEqual(result["result_type"], "no_data")
-        self.assertEqual(result["cre_sentences"], "")
+        self.assertEqual(result["cre_sentences"], "No relevant research from approved sources.")
 
     def test_api_exception_is_failure(self):
         with patch("openai.OpenAI") as MockOpenAI:
@@ -1416,7 +1431,7 @@ class TestExistingBehaviorPreserved(unittest.TestCase):
         self.assertEqual(summary.CRE_RESEARCH_VERSION, "cre_v3")
 
     def test_cre_ttl_days_constant(self):
-        self.assertEqual(summary.CRE_RESEARCH_TTL_DAYS, 7)
+        self.assertEqual(summary.CRE_RESEARCH_TTL_DAYS, 30)
 
 
 # ---------------------------------------------------------------------------

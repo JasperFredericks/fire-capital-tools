@@ -39,6 +39,17 @@ from tools.fire_metrics.services import (
 
 fire_metrics_bp = Blueprint("fire_metrics", __name__)
 
+ALLOWED_CRE_SELECTION_SOURCES = frozenset({
+    "main_city_search",
+    "city_analytics",
+})
+
+
+def _cre_generation_allowed(payload: dict) -> bool:
+    intent = str(payload.get("cre_generation_intent") or "").strip()
+    source = str(payload.get("cre_selection_source") or "").strip()
+    return intent == "explicit_city_selection" and source in ALLOWED_CRE_SELECTION_SOURCES
+
 
 @fire_metrics_bp.route("/", methods=["GET", "POST"])
 @login_required
@@ -241,6 +252,7 @@ def top_cities():
 @login_required
 def city_summary():
     payload = request.get_json(silent=True) or {}
+    cre_generation_allowed = _cre_generation_allowed(payload)
     city_key = str(payload.get("city_key") or "").strip()
     city = str(payload.get("city") or "").strip()
     state = str(payload.get("state") or "").strip().upper()
@@ -323,7 +335,7 @@ def city_summary():
                     cached_cre_version, ai_summary.CRE_RESEARCH_VERSION, cre_fresh,
                 )
 
-                if not cre_fresh and _summary_enabled() and _summary_api_key():
+                if cre_generation_allowed and not cre_fresh and _summary_enabled() and _summary_api_key():
                     cre_model = _cre_research_model_name()
                     current_app.logger.info(
                         "FIRE CRE refresh needed: city=%s state=%s model=%s",
@@ -453,49 +465,51 @@ def city_summary():
             research_sources: list[dict] = []
             cre_generated_at = ai_summary.utc_now_iso()
             cre_research_version_stored: str | None = None
-            cre_model = _cre_research_model_name()
-            current_app.logger.info(
-                "FIRE CRE starting: city=%s state=%s model=%s",
-                selected_city["city"], selected_city["state"], cre_model,
-            )
-            cre_result = ai_summary.openai_cre_research(
-                api_key=api_key,
-                model_name=cre_model,
-                city=selected_city["city"],
-                state=selected_city["state"],
-                display_name=str(selected_city.get("display_name") or ""),
-            )
-            result_type = cre_result.get("result_type", "failure")
-            current_app.logger.info(
-                "FIRE CRE complete: city=%s state=%s result_type=%s sources=%d",
-                selected_city["city"], selected_city["state"],
-                result_type, len(cre_result.get("research_sources") or []),
-            )
-            if result_type == "success":
-                cre_sentences = cre_result.get("cre_sentences") or ""
-                research_sources = cre_result.get("research_sources") or []
-                cre_generated_at = cre_result.get("cre_generated_at") or cre_generated_at
-                cre_research_version_stored = cre_result.get("cre_research_version")
-            elif result_type == "no_data":
-                # Store a negative-cache timestamp so we don't retry for 24 h
-                import datetime as _dt
-                cre_generated_at = (
-                    _dt.datetime.now(_dt.timezone.utc)
-                    - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
-                    + _dt.timedelta(hours=ai_summary.CRE_NEGATIVE_CACHE_TTL_HOURS)
-                ).isoformat()
-                cre_research_version_stored = cre_result.get("cre_research_version")
-            else:  # failure
-                # Backoff: allow retry after CRE_FAILURE_BACKOFF_MINUTES; store version
-                # so is_cre_cache_current (version+TTL check) provides the backoff window.
-                # Consistent with cached-refresh failure path.
-                import datetime as _dt
-                cre_generated_at = (
-                    _dt.datetime.now(_dt.timezone.utc)
-                    - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
-                    + _dt.timedelta(minutes=ai_summary.CRE_FAILURE_BACKOFF_MINUTES)
-                ).isoformat()
-                cre_research_version_stored = cre_result.get("cre_research_version")
+            if cre_generation_allowed:
+                cre_model = _cre_research_model_name()
+                current_app.logger.info(
+                    "FIRE CRE starting: city=%s state=%s model=%s",
+                    selected_city["city"], selected_city["state"], cre_model,
+                )
+                cre_result = ai_summary.openai_cre_research(
+                    api_key=api_key,
+                    model_name=cre_model,
+                    city=selected_city["city"],
+                    state=selected_city["state"],
+                    display_name=str(selected_city.get("display_name") or ""),
+                )
+                result_type = cre_result.get("result_type", "failure")
+                current_app.logger.info(
+                    "FIRE CRE complete: city=%s state=%s result_type=%s sources=%d",
+                    selected_city["city"], selected_city["state"],
+                    result_type, len(cre_result.get("research_sources") or []),
+                )
+                if result_type == "success":
+                    cre_sentences = cre_result.get("cre_sentences") or ""
+                    research_sources = cre_result.get("research_sources") or []
+                    cre_generated_at = cre_result.get("cre_generated_at") or cre_generated_at
+                    cre_research_version_stored = cre_result.get("cre_research_version")
+                elif result_type == "no_data":
+                    # Store a negative-cache timestamp so we don't retry for 24 h
+                    import datetime as _dt
+                    cre_sentences = cre_result.get("cre_sentences") or ""
+                    cre_generated_at = (
+                        _dt.datetime.now(_dt.timezone.utc)
+                        - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
+                        + _dt.timedelta(hours=ai_summary.CRE_NEGATIVE_CACHE_TTL_HOURS)
+                    ).isoformat()
+                    cre_research_version_stored = cre_result.get("cre_research_version")
+                else:  # failure
+                    # Backoff: allow retry after CRE_FAILURE_BACKOFF_MINUTES; store version
+                    # so is_cre_cache_current (version+TTL check) provides the backoff window.
+                    # Consistent with cached-refresh failure path.
+                    import datetime as _dt
+                    cre_generated_at = (
+                        _dt.datetime.now(_dt.timezone.utc)
+                        - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
+                        + _dt.timedelta(minutes=ai_summary.CRE_FAILURE_BACKOFF_MINUTES)
+                    ).isoformat()
+                    cre_research_version_stored = cre_result.get("cre_research_version")
 
             summary_text = ai_summary.combined_summary(structured)
             full_summary = f"{summary_text} {cre_sentences}".strip() if cre_sentences else summary_text

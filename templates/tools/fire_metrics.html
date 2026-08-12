@@ -384,6 +384,7 @@
   let pendingCurrentCityPreview = { cityKey: "", panMap: false };
   let lastObservedRefreshAt = initialLastRefreshAt;
   let wasRefreshRunning = Boolean(initiallyRunning);
+  const explicitCreIntent = "explicit_city_selection";
 
   function fmtNum(value) {
     if (value === null || value === undefined || value === "") return "-";
@@ -671,6 +672,7 @@
           panMap: true,
           requestOverview: true,
           scrollAnalyticsRow: true,
+          creSelectionSource: "main_city_search",
         });
       });
       selectButton.addEventListener("keydown", (event) => {
@@ -687,6 +689,7 @@
             panMap: true,
             requestOverview: true,
             scrollAnalyticsRow: true,
+            creSelectionSource: "main_city_search",
           });
           return;
         }
@@ -862,6 +865,7 @@
       panMap: true,
       requestOverview: true,
       scrollAnalyticsRow: true,
+      creSelectionSource: "",
     });
 
     if (focusSource !== "mouse") {
@@ -911,7 +915,9 @@
 
     if (options.requestOverview !== false) {
       clearOverviewImmediate();
-      requestCityOverview(currentCity);
+      requestCityOverview(currentCity, {
+        creSelectionSource: String(options.creSelectionSource || ""),
+      });
     }
 
     renderMapPoints();
@@ -1289,6 +1295,7 @@
       panMap: true,
       requestOverview: true,
       scrollAnalyticsRow: true,
+      creSelectionSource: "",
     });
     return true;
   }
@@ -1435,6 +1442,7 @@
         panMap: true,
         requestOverview: true,
         scrollAnalyticsRow: true,
+        creSelectionSource: "",
       });
     });
 
@@ -1449,6 +1457,7 @@
           panMap: true,
           requestOverview: true,
           scrollAnalyticsRow: true,
+          creSelectionSource: "",
         });
       }
       if (event.key === "Escape") {
@@ -1791,6 +1800,7 @@
           panMap: true,
           requestOverview: true,
           scrollAnalyticsRow: false,
+          creSelectionSource: "city_analytics",
         });
       }
       tr.addEventListener("click", (event) => {
@@ -1995,7 +2005,7 @@
     setOverviewMeta(parts.join(" | "));
   }
 
-  async function requestCityOverview(city) {
+  async function requestCityOverview(city, options = {}) {
     if (!city) {
       clearOverview();
       return;
@@ -2008,6 +2018,8 @@
     summaryRequestController = new AbortController();
     summaryRequestSequence += 1;
     const mySequence = summaryRequestSequence;
+    const creSelectionSource = String(options.creSelectionSource || "").trim();
+    const creGenerationIntent = creSelectionSource ? explicitCreIntent : "";
 
     setOverviewLoading();
 
@@ -2023,6 +2035,8 @@
           city_key: city.city_key || "",
           city: getCityField(city),
           state: normalizeStateToken(getStateField(city)),
+          cre_generation_intent: creGenerationIntent,
+          cre_selection_source: creSelectionSource,
         }),
         signal: summaryRequestController.signal,
       });
@@ -2047,7 +2061,7 @@
     renderActiveCityMeta(currentCity);
 
     syncComparisonAddButton();
-    requestCityOverview(currentCity);
+    requestCityOverview(currentCity, { creSelectionSource: "" });
     renderMapPoints();
   }
 
@@ -2080,7 +2094,15 @@
         if (analyticsResult.addedCount) {
           showMessage(`Added ${analyticsResult.addedCount} city to City Analytics: ${summarizeCities(analyticsResult.addedLabels)}.`, "success");
         }
-        selectCurrentSearchCity(key);
+        selectCurrentSearchCity(key, {
+          city: foundCity,
+          ensureAnalyticsRow: false,
+          openMapPreview: true,
+          panMap: true,
+          requestOverview: true,
+          scrollAnalyticsRow: true,
+          creSelectionSource: "main_city_search",
+        });
         input.value = "";
         return;
       }
@@ -2152,7 +2174,15 @@
     if (foundCities.length) {
       const appendResult = appendToCurrentSearchCities(foundCities);
       const firstCity = appendResult.firstAdded || foundCities[0];
-      selectCurrentSearchCity(stableCityKey(firstCity));
+      selectCurrentSearchCity(stableCityKey(firstCity), {
+        city: firstCity,
+        ensureAnalyticsRow: false,
+        openMapPreview: true,
+        panMap: true,
+        requestOverview: true,
+        scrollAnalyticsRow: true,
+        creSelectionSource: "",
+      });
       input.value = "";
       setCityPickerStatus(`Added ${appendResult.added.length || 0} new searched ${appendResult.added.length === 1 ? "city" : "cities"}.`);
     }
@@ -2274,7 +2304,15 @@
       showMessage(payloadFromServer.user_message || "City found.", "success");
       const bootCity = sanitizeCity(payloadFromServer.city || {});
       appendToCurrentSearchCities([bootCity]);
-      selectCurrentSearchCity(stableCityKey(bootCity));
+      selectCurrentSearchCity(stableCityKey(bootCity), {
+        city: bootCity,
+        ensureAnalyticsRow: false,
+        openMapPreview: true,
+        panMap: true,
+        requestOverview: true,
+        scrollAnalyticsRow: true,
+        creSelectionSource: "",
+      });
     } else if (payloadFromServer.status === "suggestions") {
       showMessage(payloadFromServer.user_message || "No exact match found.", "info");
       renderSuggestions(payloadFromServer.suggestions || []);
@@ -2331,7 +2369,7 @@
     const refreshJustCompleted = previousRunning && !nextRunning;
     const refreshBecameNewer = Boolean(nextRefreshAt) && nextRefreshAt !== previousRefreshAt;
     if (refreshJustCompleted && refreshBecameNewer && currentCity) {
-      requestCityOverview(currentCity);
+      requestCityOverview(currentCity, { creSelectionSource: "" });
     }
   }
 
