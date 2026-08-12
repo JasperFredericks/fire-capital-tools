@@ -104,6 +104,7 @@
     <div class="fire-map-frame">
       <div id="fire-google-map" class="fire-google-map" aria-label="Current and compared city locations on a United States map"></div>
       <div class="fire-map-vignette" aria-hidden="true"></div>
+      <div id="fire-city-card" class="fire-city-card" style="display:none;" role="region" aria-label="Selected city details" aria-live="polite"></div>
       <div id="fire-map-fallback" class="fire-map-fallback" style="display:none;">Map unavailable. Google Maps configuration is missing.</div>
     </div>
     <div class="fire-map-legend">
@@ -292,6 +293,7 @@
   const mapContainer = document.getElementById("fire-google-map");
   const mapFallback = document.getElementById("fire-map-fallback");
   const mapNote = document.getElementById("fire-map-note");
+  const fireCityCard = document.getElementById("fire-city-card");
 
   const payloadFromServer = {{ search_payload|tojson }};
   const initiallyRunning = {{ 'true' if status.running else 'false' }};
@@ -783,6 +785,7 @@
     if (googleInfoWindow) {
       googleInfoWindow.close();
     }
+    hideCityCard();
     clearOverviewImmediate();
     resetComparisonAddButton();
     renderActiveCityMeta(null);
@@ -1081,11 +1084,53 @@
     };
   }
 
+  // ── In-map city detail card (replaces floating InfoWindow for selected city) ─
+  function showCityCard(city) {
+    if (!fireCityCard || !city) return;
+    const title = cleanDisplayFromCityObject(city);
+    const fireScore = formatFireScore(city);
+    const fireLabel = fireScoreLabelForCity(city);
+    const empGrowth = city.employment_growth_recent != null
+      ? `${(city.employment_growth_recent * 100).toFixed(2)}%` : null;
+    const popGrowth = city.population_growth_recent != null
+      ? `${(city.population_growth_recent * 100).toFixed(2)}%` : null;
+    const crimeScore = city.crime_index_score != null
+      ? `${previewNum(city.crime_index_score)}${city.crime_rating ? ` (${escapeHtml(city.crime_rating)})` : ""}` : null;
+
+    const metricRows = [
+      empGrowth ? `<div class="fcc-row"><span class="fcc-label">Emp. Growth</span><span class="fcc-value">${escapeHtml(empGrowth)}</span></div>` : "",
+      popGrowth ? `<div class="fcc-row"><span class="fcc-label">Pop. Growth</span><span class="fcc-value">${escapeHtml(popGrowth)}</span></div>` : "",
+      crimeScore ? `<div class="fcc-row"><span class="fcc-label">Crime Index</span><span class="fcc-value">${crimeScore}</span></div>` : "",
+    ].filter(Boolean).join("");
+
+    fireCityCard.innerHTML = `
+      <div class="fcc-header">
+        <div class="fcc-title">${escapeHtml(title)}</div>
+        <button class="fcc-close" type="button" aria-label="Dismiss city detail" id="fire-city-card-close">&times;</button>
+      </div>
+      <div class="fcc-score">${escapeHtml(fireScore)}<span class="fcc-score-label"> ${escapeHtml(fireLabel)}</span></div>
+      ${metricRows ? `<div class="fcc-metrics">${metricRows}</div>` : ""}
+    `;
+    fireCityCard.style.display = "block";
+    const closeBtn = document.getElementById("fire-city-card-close");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () => {
+        hideCityCard();
+      }, { once: true });
+    }
+  }
+
+  function hideCityCard() {
+    if (!fireCityCard) return;
+    fireCityCard.style.display = "none";
+    fireCityCard.innerHTML = "";
+  }
+
   function openCurrentCityPreview(panMap = false) {
     if (!currentCity) return false;
     const currentKey = stableCityKey(currentCity);
     const entry = markerRegistry.get(selectedMarkerRegistryKey);
-    if (!entry || !entry.marker || !googleMap || !googleInfoWindow) {
+    if (!entry || !entry.marker || !googleMap) {
       setPendingCurrentCityPreview(currentKey, panMap);
       return false;
     }
@@ -1096,9 +1141,17 @@
       const zoom = googleMap.getZoom() || 3;
       if (zoom < 4) googleMap.setZoom(4);
       if (zoom > 6) googleMap.setZoom(6);
+      // Offset so marker sits in the left half, clear of the right-side city card
+      googleMap.panBy(130, 0);
     }
 
-    openMarkerPreview(selectedMarkerRegistryKey, entry.marker, "click");
+    // Close any open hover InfoWindow; show the in-map card instead
+    if (googleInfoWindow) {
+      googleInfoWindow.close();
+      markerPreviewState.openKey = "";
+      markerPreviewState.pinnedKey = "";
+    }
+    showCityCard(currentCity);
     return true;
   }
 
@@ -1285,6 +1338,9 @@
     markerPreviewState.pinnedKey = force ? "" : markerPreviewState.pinnedKey;
     if (googleInfoWindow) {
       googleInfoWindow.close();
+    }
+    if (force) {
+      hideCityCard();
     }
   }
 
