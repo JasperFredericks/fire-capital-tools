@@ -37,6 +37,22 @@ screen next to loans that contradict it.
 Payment and balance arithmetic is deliberately not reimplemented: both
 delegate to deal_analyzer_math, so a single loan entered here and the
 same loan entered as an LTV produce identical numbers by construction.
+
+── BACKLOG: interest-only periods ───────────────────────────────────────
+
+Not built, and asked for. Michelle's Quick Deal Analyzer notes included
+"needs an IO period"; that request belongs here rather than there, since
+a single-point cap-rate valuation has no debt in it at all. Interest-only
+exists nowhere in this codebase today -- deal_analyzer_math's header
+lists it as explicitly out of scope.
+
+What it would take: a per-loan io_years, a payment of principal * rate /
+12 during the IO months, and a balance that stays at the original
+principal until amortization begins. annual_payment() and balance_after()
+are the two functions that would change, and both are shared with the
+single-loan path through deal_analyzer_math -- so this is a shared-engine
+change and needs the equivalence discipline every other one has had, not
+a quick edit. Scoped separately and deliberately not started here.
 """
 
 from __future__ import annotations

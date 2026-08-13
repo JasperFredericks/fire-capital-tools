@@ -2391,3 +2391,27 @@ hr.divider {
 .deal-status-closed { background: #dcfce7; border-color: #86efac; color: #166534; }
 .deal-status-passed { background: #fee2e2; border-color: #fca5a5; color: #991b1b; }
 .deal-status-archived { background: #f3f4f6; border-color: #e5e7eb; color: #374151; }
+
+/* ── Quick Deal Analyzer grading ─────────────────────────────────────────
+   Four bands, deliberately using the same colour vocabulary as the deal
+   status chips above so green/red mean the same thing across the app.
+   The colour is a prompt to look closer, not a verdict -- the thresholds
+   behind it are unconfirmed and the page says so beside every use. */
+.qa-grade { border-left: 4px solid transparent; }
+.qa-grade-green  { border-left-color: #16a34a; background: #f0fdf4; }
+.qa-grade-yellow { border-left-color: #ca8a04; background: #fefce8; }
+.qa-grade-orange { border-left-color: #ea580c; background: #fff7ed; }
+.qa-grade-red    { border-left-color: #dc2626; background: #fef2f2; }
+
+.qa-grade-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.qa-grade-dot.qa-grade-green  { background: #16a34a; }
+.qa-grade-dot.qa-grade-yellow { background: #ca8a04; }
+.qa-grade-dot.qa-grade-orange { background: #ea580c; }
+.qa-grade-dot.qa-grade-red    { background: #dc2626; }
