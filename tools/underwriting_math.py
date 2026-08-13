@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from tools import underwriting_capex as ucx
 from tools import underwriting_loans_math as ulm
 from tools import underwriting_schedule as us
 from tools.deal_analyzer_math import (  # noqa: F401  (ValidationError re-exported)
@@ -441,7 +442,8 @@ def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
 def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
                      expense_lines: list[dict[str, Any]], *,
                      loans: list[dict[str, Any]] | None = None,
-                     assumption_years: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                     assumption_years: list[dict[str, Any]] | None = None,
+                     capex_lines: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Rent roll + expenses + assumptions -> the full underwriting result.
 
     Everything after the NOI series is delegated to the shared engine, so
@@ -473,7 +475,20 @@ def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
     # deliberately not modified: itemized costs are handed over as the
     # equivalent percentage instead. Deal Analyzer therefore keeps
     # computing returns with byte-identical code.
-    engine_inputs = _engine_inputs(scenario, acq["effective_pct"])
+    # The forward capex budget is capital invested at close, so it belongs
+    # in equity alongside the acquisition costs. It reaches the engine the
+    # same way they do -- converted to a percentage of the purchase price
+    # and added to theirs -- so analyze_noi_series() sees one number of a
+    # kind it already understood and needs no change at all.
+    #
+    # Note what is NOT read here: expense_lines. The capex-tagged rows in
+    # there are the seller's historical spend out of the T12, a different
+    # quantity in the opposite direction in time. The two are never summed.
+    capex = ucx.summarize(capex_lines,
+                          unit_count=egi.get("unit_count"),
+                          contingency_pct=scenario.get("capex_contingency_pct"))
+    capex_pct = ucx.effective_pct_of_price(capex["total"], scenario.get("purchase_price"))
+    engine_inputs = _engine_inputs(scenario, acq["effective_pct"] + capex_pct)
 
     debt_stack = None
     if loans:
@@ -509,6 +524,12 @@ def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
         "expense_lines_year1": total_operating_expenses(expense_lines),
         "management_fee_year1": management_fee_year1,
         "acquisition_costs": acq,
+        # The forward budget, and the percentage it contributed to equity.
+        # Both returned so the page can show the dollars it displays and
+        # the figure the engine was actually given side by side, exactly
+        # as acquisition_costs does.
+        "capex": capex,
+        "capex_pct_of_price": capex_pct,
         "returns": returns,
         # None in single-loan mode, so a template can branch on presence
         # rather than on an empty-list sentinel that reads as "no debt".
@@ -550,7 +571,8 @@ def _engine_inputs(scenario: dict[str, Any],
 def sensitivity_grid(scenario, unit_lines, expense_lines, metric="levered_irr",
                      variable="rent_growth", *,
                      loans: list[dict[str, Any]] | None = None,
-                     assumption_years: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                     assumption_years: list[dict[str, Any]] | None = None,
+                     capex_lines: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Two-variable grid: exit cap rate against either rent growth or
     purchase price.
 
@@ -562,6 +584,12 @@ def sensitivity_grid(scenario, unit_lines, expense_lines, metric="levered_irr",
 
     121 cells cost well under a hundredth of a second, so this is recomputed
     on render and never cached or stored.
+
+    The capex budget is likewise held fixed across the grid -- it is a
+    plan in dollars, not a function of the exit cap or rent growth. Under
+    the price variable it therefore stays constant while the price moves,
+    which is correct: the roof costs what it costs regardless of what you
+    pay for the building.
 
     In multi-loan mode the stack is held fixed across the grid: the loans
     are contracted amounts, so they do not move when the exit cap or the
@@ -595,7 +623,8 @@ def sensitivity_grid(scenario, unit_lines, expense_lines, metric="levered_irr",
             s["purchase_price" if variable == "price" else "rent_growth_pct"] = col
             try:
                 res = analyze_scenario(s, unit_lines, expense_lines, loans=loans,
-                                       assumption_years=assumption_years)["returns"]
+                                       assumption_years=assumption_years,
+                                       capex_lines=capex_lines)["returns"]
                 value = res.get(metric)
                 reason = res.get(f"{metric}_reason")
             except ValidationError as exc:

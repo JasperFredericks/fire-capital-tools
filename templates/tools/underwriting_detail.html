@@ -61,6 +61,8 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-danger">Delete Scenario</button>
     </form>
+    <a class="btn btn-ghost" href="{{ url_for('underwriting.summary_pdf', scenario_id=scenario.id) }}">Summary PDF</a>
+    <a class="btn btn-ghost" href="{{ url_for('underwriting.summary_xlsx', scenario_id=scenario.id) }}">Summary Excel</a>
   </div>
   <div class="stats-grid" style="margin:14px 0 8px;">
     <div class="stat-box"><div class="stat-box-label">Going-In Cap</div>
@@ -78,6 +80,22 @@
       <div class="stat-box-value">{{ '{:,.2f}x'.format(r.equity_multiple) }}</div></div>
     <div class="stat-box"><div class="stat-box-label">Unlevered IRR</div>
       <div class="stat-box-value">{{ pct(r.unlevered_irr) }}</div></div>
+    {#
+      Loan amount and debt service were already computed and already on
+      this page -- in the sentence below the grid, and again in the Loans
+      section far down it. Neither is a new calculation; they are promoted
+      here because "I can't see the debt" was the actual complaint.
+    #}
+    <div class="stat-box"><div class="stat-box-label">Loan Amount</div>
+      <div class="stat-box-value">{{ money(r.loan_amount) }}</div>
+      <div class="stat-box-sub">
+        {%- if result.debt_stack %}{{ result.debt_stack.loans|length }} loans &middot;
+        {{ pct(result.debt_stack.implied_ltv_pct / 100 if result.debt_stack.implied_ltv_pct is not none else none) }} implied LTV
+        {%- else %}{{ pct(scenario.ltv_pct / 100 if scenario.ltv_pct is not none else none) }} LTV{% endif -%}
+      </div></div>
+    <div class="stat-box"><div class="stat-box-label">Annual Debt Service</div>
+      <div class="stat-box-value">{{ money(r.annual_debt_service) }}</div>
+      <div class="stat-box-sub">{{ money(r.monthly_debt_service) }} per month</div></div>
   </div>
   <p class="page-subtitle">
     Equity {{ money(r.equity_invested) }} &middot; loan {{ money(r.loan_amount) }} &middot;
@@ -85,6 +103,262 @@
     Every scenario on this deal is computed by the same engine, so two scenarios cannot disagree
     about the arithmetic &mdash; only about the assumptions you gave them.
   </p>
+</div>
+
+<!-- ── Property info ──────────────────────────────────────────────────── -->
+<div class="card" id="property">
+  <div class="scorecard-section-title">Property Info</div>
+  <p class="page-subtitle" style="margin:10px 0 12px;">
+    Unit count and occupancy come from the rent roll. Entering a figure here replaces the
+    derived one and says so &mdash; it never overwrites it quietly.
+  </p>
+
+  {% for f in property_info.disagreements %}
+    <div class="result-note" style="margin-bottom:10px; border-left:3px solid #d97706;">{{ f.note }}</div>
+  {% endfor %}
+
+  <div class="stats-grid" style="margin-bottom:14px;">
+    <div class="stat-box"><div class="stat-box-label">Units</div>
+      <div class="stat-box-value">{{ property_info.unit_count.value|round|int if property_info.unit_count.value is not none else '—' }}</div>
+      <div class="stat-box-sub">
+        {%- if property_info.unit_count.source == 'derived' %}From the rent roll
+        {%- elif property_info.unit_count.source == 'override_agrees' %}Entered, matches the rent roll
+        {%- elif property_info.unit_count.source == 'override_disagrees' %}Entered &mdash; differs from the rent roll
+        {%- else %}Not known yet{% endif -%}
+      </div></div>
+    <div class="stat-box"><div class="stat-box-label">Occupancy</div>
+      <div class="stat-box-value">{{ '{:,.1f}%'.format(property_info.occupancy.value) if property_info.occupancy.value is not none else '—' }}</div>
+      <div class="stat-box-sub">
+        {%- if property_info.occupied_units is not none and property_info.unit_count.derived %}
+          {{ property_info.occupied_units }} of {{ property_info.unit_count.derived }} occupied
+        {%- else %}Not known yet{% endif -%}
+      </div></div>
+    <div class="stat-box"><div class="stat-box-label">Parking</div>
+      <div class="stat-box-value">{{ property_info.parking_spaces if property_info.parking_spaces is not none else '—' }}</div>
+      <div class="stat-box-sub">
+        {%- if property_info.parking_per_unit %}{{ '{:,.2f}'.format(property_info.parking_per_unit) }} per unit
+        {%- else %}spaces{% endif -%}
+      </div></div>
+    <div class="stat-box"><div class="stat-box-label">Market</div>
+      <div class="stat-box-value" style="font-size:15px;">
+        {{ property_info.city ~ ', ' ~ property_info.state if property_info.city else '—' }}</div>
+      <div class="stat-box-sub">Used for market context below</div></div>
+  </div>
+
+  {% if property_info.parking_notes %}
+    <p class="page-subtitle" style="margin-bottom:12px;"><strong>Parking:</strong> {{ property_info.parking_notes }}</p>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('underwriting.save_property', scenario_id=scenario.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
+      <div class="form-group">
+        <label class="form-label" for="unit_count_override">Unit count</label>
+        <input class="form-input" type="text" id="unit_count_override" name="unit_count_override"
+               value="{{ scenario.unit_count_override if scenario.unit_count_override is not none else '' }}"
+               placeholder="{{ property_info.unit_count.derived if property_info.unit_count.derived else 'from rent roll' }}">
+        <span class="stat-box-sub">Leave blank to use the rent roll.</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="occupancy_pct_override">Occupancy (%)</label>
+        <input class="form-input" type="text" id="occupancy_pct_override" name="occupancy_pct_override"
+               value="{{ scenario.occupancy_pct_override if scenario.occupancy_pct_override is not none else '' }}"
+               placeholder="{{ '{:,.1f}'.format(property_info.occupancy.derived) if property_info.occupancy.derived is not none else 'from rent roll' }}">
+        <span class="stat-box-sub">Leave blank to use the rent roll.</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="parking_spaces">Parking spaces</label>
+        <input class="form-input" type="text" id="parking_spaces" name="parking_spaces"
+               value="{{ scenario.parking_spaces if scenario.parking_spaces is not none else '' }}">
+        <span class="stat-box-sub">No rent roll this tool reads carries parking.</span>
+      </div>
+    </div>
+    <div style="display:grid; grid-template-columns: 1fr 120px 2fr; gap:14px;">
+      <div class="form-group">
+        <label class="form-label" for="city">City</label>
+        <input class="form-input" type="text" id="city" name="city" value="{{ scenario.city or '' }}" placeholder="San Francisco">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="state">State</label>
+        <input class="form-input" type="text" id="state" name="state" value="{{ scenario.state or '' }}" maxlength="2" placeholder="CA">
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="parking_notes">Parking notes</label>
+        <input class="form-input" type="text" id="parking_notes" name="parking_notes"
+               value="{{ scenario.parking_notes or '' }}" placeholder="Surface lot, 1 covered space per 2BR">
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">Save Property Info</button>
+  </form>
+</div>
+
+<!-- ── Market context ─────────────────────────────────────────────────── -->
+<div class="card" id="market">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+    <div class="scorecard-section-title">Market Context</div>
+    {% if market.available %}
+      <a class="btn btn-ghost" href="{{ url_for('fire_metrics.index') }}">Open FIRE Metrics &rarr;</a>
+    {% endif %}
+  </div>
+  {#
+    Every figure here was already gathered by FIRE Metrics from documented
+    government sources. No new integration, no new key, no new cost. The
+    site originally suggested for this publishes no API and forbids
+    automated collection in its terms, so there was nothing to build there.
+  #}
+  {% if market.available %}
+    <p class="page-subtitle" style="margin:10px 0 12px;">
+      {{ market.display_name }} &mdash; from FIRE Metrics, which already holds this data.
+    </p>
+    <div class="stats-grid">
+      {% for m in market.metrics %}
+        <div class="stat-box">
+          <div class="stat-box-label">{{ m.label }}</div>
+          <div class="stat-box-value">
+            {%- if not m.available %}—
+            {%- elif m.kind == 'money' %}{{ '${:,.0f}'.format(m.value) }}
+            {%- elif m.kind == 'count' %}{{ '{:,.0f}'.format(m.value) }}
+            {%- elif m.kind == 'pct' %}{{ '{:,.2f}%'.format(m.value * 100) }}
+            {%- else %}{{ '{:,.1f}'.format(m.value) }}{% endif -%}
+          </div>
+          {% if m.rating %}<div class="stat-box-sub">{{ m.rating }}</div>
+          {% elif m.is_recent %}<div class="stat-box-sub">most recent period</div>{% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="page-subtitle" style="margin:10px 0 0;">{{ market.reason }}</p>
+  {% endif %}
+</div>
+
+<!-- ── Rent roll / T12 cross-check ────────────────────────────────────── -->
+<div class="card" id="crosscheck">
+  <div class="scorecard-section-title">Rent Roll vs T12</div>
+  {#
+    Warnings, never blocks. A value-add deal is supposed to underwrite
+    above trailing performance -- the tool has no way to know whether a
+    gap is the plan or a mistake, so it states both figures and asks.
+  #}
+  {% if not crosscheck.available %}
+    <p class="page-subtitle" style="margin:10px 0 0;">{{ crosscheck.reason }}</p>
+  {% else %}
+    <p class="page-subtitle" style="margin:10px 0 12px;">
+      {% if crosscheck.all_clear %}
+        Everything the rent roll and the T12 both describe agrees within tolerance.
+      {% else %}
+        {{ crosscheck.count }} figure{{ '' if crosscheck.count == 1 else 's' }} worth a second look.
+        Nothing here is an error &mdash; underwriting above trailing performance is often the plan.
+      {% endif %}
+    </p>
+    {% for c in crosscheck.firing %}
+      <div class="result-note" style="margin-bottom:10px; border-left:3px solid #d97706;">{{ c.message }}</div>
+    {% endfor %}
+    <div class="table-wrap">
+      <table class="rent-comps-table">
+        <thead><tr><th>Comparison</th><th>Model</th><th>T12</th><th>Difference</th><th></th></tr></thead>
+        <tbody>
+          {% for c in crosscheck.checks %}
+            <tr>
+              <td>{{ c.label }}</td>
+              <td>{{ '${:,.0f}'.format(c.model) if c.key != 'unit_count' else c.model|round|int }}</td>
+              <td>{{ '${:,.0f}'.format(c.actual) if c.key != 'unit_count' else c.actual|round|int }}</td>
+              <td{% if c.fires %} style="color:#b45309; font-weight:600;"{% endif %}>
+                {{ '{:+,.1f}%'.format(c.gap_pct) if c.gap_pct is not none else '—' }}</td>
+              <td>{{ 'worth a look' if c.fires else 'within tolerance' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</div>
+
+<!-- ── Capex budget ───────────────────────────────────────────────────── -->
+<div class="card" id="capex">
+  <div class="scorecard-section-title">Capex Budget</div>
+  <p class="page-subtitle" style="margin:10px 0 12px;">
+    What you plan to spend improving the property after closing. This is capital invested, so it
+    adds to cash to close and appears in the returns below.
+    {#
+      Stated because the word "capex" already appears elsewhere on this
+      page meaning the opposite thing: the seller's historical capex,
+      classified out of the T12 and excluded from operating expenses.
+      The two are never added together.
+    #}
+    Separate from any capex the T12 shows the seller spending &mdash; that is history, this is the plan.
+  </p>
+
+  {% set cx = result.capex if result else none %}
+  {% if cx and cx.has_lines %}
+    <div class="stats-grid" style="margin-bottom:14px;">
+      <div class="stat-box"><div class="stat-box-label">Exterior</div>
+        <div class="stat-box-value">{{ money(cx.exterior_total) }}</div></div>
+      <div class="stat-box"><div class="stat-box-label">Interior</div>
+        <div class="stat-box-value">{{ money(cx.interior_total) }}</div></div>
+      <div class="stat-box"><div class="stat-box-label">Contingency</div>
+        <div class="stat-box-value">{{ money(cx.contingency_total) }}</div>
+        <div class="stat-box-sub">{{ '{:,.1f}%'.format(cx.contingency_pct) }} of itemized</div></div>
+      <div class="stat-box"><div class="stat-box-label">Total Capex</div>
+        <div class="stat-box-value">{{ money(cx.total) }}</div>
+        <div class="stat-box-sub">{{ '{:,.2f}%'.format(result.capex_pct_of_price) }} of price</div></div>
+      <div class="stat-box"><div class="stat-box-label">Per Unit</div>
+        <div class="stat-box-value">{{ money(cx.per_unit) if cx.per_unit is not none else '—' }}</div>
+        <div class="stat-box-sub">{{ cx.per_unit_reason or (cx.unit_count ~ ' units') }}</div></div>
+      <div class="stat-box"><div class="stat-box-label">Cash to Close</div>
+        <div class="stat-box-value">{{ money(r.equity_invested) }}</div>
+        <div class="stat-box-sub">price &minus; loan + costs + capex</div></div>
+    </div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('underwriting.save_capex', scenario_id=scenario.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="table-wrap" style="margin-bottom:12px;">
+      <table class="rent-comps-table">
+        <thead>
+          <tr><th style="width:14%;">Scope</th><th style="width:16%;">Category</th><th>Item</th>
+              <th style="width:10%;">Qty</th><th style="width:12%;">Unit cost</th>
+              <th style="width:14%;">Total</th><th style="width:10%;">Contingency</th></tr>
+        </thead>
+        <tbody>
+          {% set rows = (capex_lines|length) + 3 %}
+          {% for i in range(rows) %}
+            {% set line = capex_lines[i] if i < capex_lines|length else none %}
+            <tr>
+              <td>
+                <select class="form-input" name="capex_scope_{{ i }}">
+                  {% for s in capex_scopes %}
+                    <option value="{{ s }}" {% if line and line.scope == s %}selected{% endif %}>{{ capex_scope_labels[s] }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+              <td><input class="form-input" type="text" name="capex_category_{{ i }}" value="{{ line.category or '' if line else '' }}"></td>
+              <td><input class="form-input" type="text" name="capex_label_{{ i }}" value="{{ line.label if line else '' }}"></td>
+              <td><input class="form-input" type="text" name="capex_qty_{{ i }}" value="{{ line.quantity if line and line.quantity is not none else '' }}"></td>
+              <td><input class="form-input" type="text" name="capex_unit_{{ i }}" value="{{ line.unit_cost if line and line.unit_cost is not none else '' }}"></td>
+              <td><input class="form-input" type="text" name="capex_total_{{ i }}" value="{{ line.total_cost if line and line.total_cost is not none else '' }}"></td>
+              <td style="text-align:center;">
+                <input type="checkbox" name="capex_contingency_{{ i }}" value="1" {% if line and line.is_contingency %}checked{% endif %}>
+                {# Preserved rather than forced to 'manual', so a row Site DD
+                   one day writes is not relabelled by an edit around it. #}
+                <input type="hidden" name="capex_source_{{ i }}" value="{{ line.source if line else 'manual' }}">
+                <input type="hidden" name="capex_source_ref_{{ i }}" value="{{ line.source_ref or '' if line else '' }}">
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div style="display:flex; gap:14px; align-items:end; flex-wrap:wrap;">
+      <div class="form-group" style="max-width:220px; margin-bottom:0;">
+        <label class="form-label" for="capex_contingency_pct">Contingency (%)</label>
+        <input class="form-input" type="text" id="capex_contingency_pct" name="capex_contingency_pct"
+               value="{{ scenario.capex_contingency_pct if scenario.capex_contingency_pct is not none else '' }}"
+               placeholder="{{ default_contingency_pct }}">
+        <span class="stat-box-sub">Blank uses {{ default_contingency_pct }}%. Enter 0 for none.</span>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Capex Budget</button>
+    </div>
+  </form>
 </div>
 
 <!-- ── Investor Report summary ────────────────────────────────────────── -->

@@ -108,11 +108,39 @@ CREATE TABLE IF NOT EXISTS underwriting_loans (
     amort_years INTEGER
 );
 
+-- The forward capex BUDGET: what you plan to spend improving the
+-- property after closing. Deliberately its own table and NOT the
+-- capex-tagged rows in underwriting_expense_lines, which are HISTORICAL
+-- capex the seller already spent, classified out of the T12 by
+-- KPICalculator. Same word, different money, opposite direction in time.
+-- Nothing anywhere sums the two.
+--
+-- source/source_ref are the Site DD hook. Every row written today is
+-- 'manual'; when Site DD's repair list exists it writes rows with
+-- source='site_dd' and the id of the item it came from, so the page can
+-- show which lines came from an inspection and which were typed. No
+-- Site DD code exists yet and none is required for this to work.
+CREATE TABLE IF NOT EXISTS underwriting_capex_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scenario_id INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    scope TEXT NOT NULL DEFAULT 'interior',
+    category TEXT,
+    label TEXT NOT NULL,
+    quantity REAL,
+    unit_cost REAL,
+    total_cost REAL,
+    is_contingency INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'manual',
+    source_ref TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_uw_deal ON underwriting_scenarios (deal_id);
 CREATE INDEX IF NOT EXISTS idx_uw_exp ON underwriting_expense_lines (scenario_id);
 CREATE INDEX IF NOT EXISTS idx_uw_unit ON underwriting_unit_lines (scenario_id);
 CREATE INDEX IF NOT EXISTS idx_uw_loan ON underwriting_loans (scenario_id);
 CREATE INDEX IF NOT EXISTS idx_uw_years ON underwriting_assumption_years (scenario_id);
+CREATE INDEX IF NOT EXISTS idx_uw_capex ON underwriting_capex_lines (scenario_id);
 """
 
 SCENARIO_NUMERIC = (
@@ -123,6 +151,21 @@ SCENARIO_NUMERIC = (
     "concessions_pct", "bad_debt_pct", "other_income_annual",
     "rent_growth_pct", "expense_growth_pct", "amort_years",
 )
+
+# Deliberately NOT in SCENARIO_NUMERIC. That tuple drives the assumptions
+# form, which rewrites every column in it and defaults whatever it did not
+# post -- so listing a property-info column there would mean saving the
+# assumptions silently wiped the unit-count override. These columns are
+# only ever written through update_scenario_partial() by the form that
+# owns them.
+
+SCENARIO_PARTIAL_ONLY = ("unit_count_override", "occupancy_pct_override",
+                         "parking_spaces", "parking_notes", "city", "state",
+                         "capex_contingency_pct")
+
+# Free-text scenario fields create() carries through alongside the
+# numerics. Kept separate because they must not be coerced to floats.
+SCENARIO_TEXT = ("city", "state", "parking_notes")
 
 
 def get_db_path() -> Path:
@@ -140,6 +183,24 @@ _SCENARIO_ADDED_COLUMNS = (
     ("acquisition_fee_pct", "REAL"),
     ("capital_transaction_fee_pct", "REAL"),
     ("management_fee_pct", "REAL"),
+    # Property info. The two *_override columns are deliberately nullable
+    # and deliberately named "override": NULL means "use the figure
+    # derived from the rent roll", which is the normal case. A value here
+    # replaces the derived one AND is reported as a replacement, never
+    # swapped in silently.
+    ("unit_count_override", "INTEGER"),
+    ("occupancy_pct_override", "REAL"),
+    ("parking_spaces", "INTEGER"),
+    ("parking_notes", "TEXT"),
+    # A scenario had no city at all, which is why market context could not
+    # be looked up even in principle. Free text rather than a foreign key:
+    # FIRE Metrics covers 343 cities and most properties are not in one.
+    ("city", "TEXT"),
+    ("state", "TEXT"),
+    # Percentage of the capex subtotal held back as contingency. NULL
+    # falls back to DEFAULT_CONTINGENCY_PCT, so the 5% is a default rather
+    # than a hardcoded rule -- a scenario can set 0 and mean it.
+    ("capex_contingency_pct", "REAL"),
 )
 
 
@@ -194,6 +255,7 @@ def create_scenario(conn, fields: dict[str, Any]) -> int:
         "notes": fields.get("notes"),
         "created_at": now, "updated_at": now,
     })
+    payload.update({k: fields.get(k) for k in SCENARIO_TEXT})
     cols = ", ".join(payload)
     binds = ", ".join(f":{k}" for k in payload)
     cur = conn.execute(f"INSERT INTO underwriting_scenarios ({cols}) VALUES ({binds})", payload)
@@ -243,6 +305,7 @@ def delete_scenario(conn, scenario_id: int) -> None:
     conn.execute("DELETE FROM underwriting_unit_lines WHERE scenario_id = ?", (scenario_id,))
     conn.execute("DELETE FROM underwriting_loans WHERE scenario_id = ?", (scenario_id,))
     conn.execute("DELETE FROM underwriting_assumption_years WHERE scenario_id = ?", (scenario_id,))
+    conn.execute("DELETE FROM underwriting_capex_lines WHERE scenario_id = ?", (scenario_id,))
     conn.execute("DELETE FROM underwriting_scenarios WHERE id = ?", (scenario_id,))
     conn.commit()
 
@@ -389,4 +452,77 @@ def replace_assumption_years(conn, scenario_id: int, rows: list[dict[str, Any]])
           "vacancy_pct": r.get("vacancy_pct"), "concessions_pct": r.get("concessions_pct"),
           "bad_debt_pct": r.get("bad_debt_pct"), "rent_growth_pct": r.get("rent_growth_pct")}
          for r in keep])
+    conn.commit()
+
+
+PROPERTY_FIELDS = ("unit_count_override", "occupancy_pct_override",
+                   "parking_spaces", "parking_notes", "city", "state")
+
+
+def update_scenario_partial(conn, scenario_id: int, fields: dict[str, Any],
+                            allowed: tuple[str, ...]) -> None:
+    """Update only the named columns, leaving every other one alone.
+
+    update_scenario() rewrites the whole assumptions payload, defaulting
+    anything the form did not send. That is right for the assumptions
+    form, which posts all of them, and catastrophic for any smaller form:
+    a property-info card posting four fields through it would blank the
+    purchase price. So a partial form gets a partial update, and the
+    caller states explicitly which columns it is allowed to touch.
+    """
+    payload = {k: fields.get(k) for k in allowed if k in fields}
+    if not payload:
+        return
+    payload["updated_at"] = _now()
+    payload["scenario_id"] = scenario_id
+    sets = ", ".join(f"{k} = :{k}" for k in payload if k != "scenario_id")
+    conn.execute(f"UPDATE underwriting_scenarios SET {sets} WHERE id = :scenario_id", payload)
+    conn.commit()
+
+
+# ── Capex budget ─────────────────────────────────────────────────────────
+#
+# Whole-list replacement, the same shape as replace_loans and
+# replace_expense_lines: the capex form posts the entire budget, and a row
+# the user deleted has to disappear rather than linger.
+
+CAPEX_SCOPES = ("exterior", "interior")
+
+
+def list_capex_lines(conn, scenario_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM underwriting_capex_lines WHERE scenario_id = ? "
+        "ORDER BY sort_order, id", (scenario_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def replace_capex_lines(conn, scenario_id: int, lines: list[dict[str, Any]]) -> None:
+    """Rewrite the whole capex budget for a scenario.
+
+    `source` defaults to 'manual' and is preserved when supplied, so a row
+    Site DD wrote survives a save of the form around it. Nothing here
+    validates against Site DD or knows what a valid source_ref looks like
+    -- that is the point of leaving the hook unused rather than guessing
+    at a contract with a tool that does not exist yet.
+    """
+    conn.execute("DELETE FROM underwriting_capex_lines WHERE scenario_id = ?", (scenario_id,))
+    conn.executemany(
+        """INSERT INTO underwriting_capex_lines
+           (scenario_id, sort_order, scope, category, label, quantity,
+            unit_cost, total_cost, is_contingency, source, source_ref)
+           VALUES (:scenario_id,:sort_order,:scope,:category,:label,:quantity,
+                   :unit_cost,:total_cost,:is_contingency,:source,:source_ref)""",
+        [{"scenario_id": scenario_id,
+          "sort_order": l.get("sort_order", i),
+          "scope": (l.get("scope") if l.get("scope") in CAPEX_SCOPES else "interior"),
+          "category": (str(l.get("category") or "").strip() or None),
+          "label": (str(l.get("label") or f"Item {i + 1}")[:MAX_LABEL_LEN]).strip()
+                   or f"Item {i + 1}",
+          "quantity": l.get("quantity"),
+          "unit_cost": l.get("unit_cost"),
+          "total_cost": l.get("total_cost"),
+          "is_contingency": 1 if l.get("is_contingency") else 0,
+          "source": (str(l.get("source") or "manual").strip() or "manual"),
+          "source_ref": l.get("source_ref")}
+         for i, l in enumerate(lines)])
     conn.commit()
