@@ -82,13 +82,70 @@
   </div>
 </div>
 
+<!-- ── Units & common areas ───────────────────────────────────────────── -->
+<div class="card" id="units">
+  <div class="scorecard-section-title">Units &amp; Common Areas</div>
+  <p class="page-subtitle" style="margin:10px 0 12px;">
+    The checklist above covers the property as a whole. Each unit and common area is walked
+    separately, room by room, in whatever order the floor plan flows.
+  </p>
+
+  {% if area_rollups %}
+    {% for r in area_rollups %}
+      <div style="display:flex; align-items:center; gap:10px; border-bottom:1px solid #e5e7eb;">
+        <a class="sdd-room-row" style="flex:1 1 auto; border-bottom:0;"
+           href="{{ url_for('site_dd.area_detail', assessment_id=assessment.id, area_id=r.area.id) }}">
+          <span class="sdd-seq">{{ loop.index }}</span>
+          <span style="flex:1 1 auto;">
+            <span style="font-weight:600; color:#111827;">{{ r.area.label }}</span>
+            <span class="stat-box-sub" style="display:block;">
+              {{ 'Unit' if r.area.kind == 'unit' else 'Common area' }}
+              {%- if r.area.status %} &middot; {{ r.area.status|title }}{% endif %}
+              &middot; {{ r.room_count }} room{{ '' if r.room_count == 1 else 's' }}
+              &middot; {{ '%.0f%%'|format(r.summary.completion_pct) }} complete
+              {%- if r.summary.work_count %} &middot; <span style="color:#b45309;">{{ r.summary.work_count }} need work</span>{% endif %}
+            </span>
+          </span>
+          <span class="stat-box-sub">&rsaquo;</span>
+        </a>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p class="page-subtitle" style="margin:0 0 12px;">No units added yet.</p>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('site_dd.create_area', assessment_id=assessment.id) }}"
+        class="sdd-form-grid" style="margin-top:14px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-group" style="flex:1 1 140px; margin-bottom:0;">
+      <label class="form-label" for="area_label">Unit / area</label>
+      <input class="form-input sdd-touch" type="text" id="area_label" name="label" placeholder="204">
+    </div>
+    <div class="form-group" style="flex:0 1 140px; margin-bottom:0;">
+      <label class="form-label" for="area_kind">Type</label>
+      <select class="form-input sdd-touch" id="area_kind" name="kind">
+        <option value="unit">Unit</option>
+        <option value="common">Common area</option>
+      </select>
+    </div>
+    <div class="form-group" style="flex:0 1 140px; margin-bottom:0;">
+      <label class="form-label" for="area_status">Status</label>
+      <select class="form-input sdd-touch" id="area_status" name="status">
+        <option value="">Not stated</option>
+        {% for st in area_statuses %}<option value="{{ st }}">{{ st|title }}</option>{% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary sdd-touch">Add</button>
+  </form>
+</div>
+
 <!-- ── Checklist ──────────────────────────────────────────────────────── -->
 <form method="POST" action="{{ url_for('site_dd.save', assessment_id=assessment.id) }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
   <div class="card">
     <div class="scorecard-section-title">Assessment Details</div>
-    <div style="display:grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap:12px; margin-top:14px;">
+    <div class="sdd-form-grid" style="margin-top:14px;">
       <div class="form-group">
         <label class="form-label" for="property_label">Property</label>
         <input class="form-input" type="text" id="property_label" name="property_label" value="{{ assessment.property_label }}">
@@ -195,7 +252,7 @@
 
   <form method="POST" action="{{ url_for('site_dd.upload_photo', assessment_id=assessment.id) }}" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div style="display:grid; grid-template-columns: 1.2fr 1fr 1.4fr auto; gap:12px; align-items:end;">
+    <div class="sdd-form-grid">
       <div class="form-group" style="margin-bottom:0;">
         <label class="form-label" for="photo">File</label>
         <input class="form-input" type="file" id="photo" name="photo" required>
