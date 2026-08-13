@@ -224,7 +224,8 @@
     #}
     {% if candidates %}
       {% set subject_beds = (rentcast.property.bedrooms if rentcast.property else none) %}
-      <div class="rc-filters" style="display:flex; gap:14px; align-items:end; flex-wrap:wrap; margin-bottom:10px;">
+      <div class="rc-filters" data-preview="{{ candidate_preview }}"
+           style="display:flex; gap:14px; align-items:end; flex-wrap:wrap; margin-bottom:10px;">
         <div class="form-group" style="margin-bottom:0;">
           <label class="form-label" for="rc-filter-beds">Bedrooms</label>
           <select class="form-input" id="rc-filter-beds"
@@ -294,6 +295,25 @@
                 </td>
               </tr>
             {% endfor %}
+            {#
+              Shown by the filters when they match nothing. A bare "0 of 15
+              match" in the note left an empty table with no way out and no
+              statement of what to do about it -- the same dead end the Deal
+              Dive search box had. The message names the filters responsible
+              and says what would widen the result; the button undoes them.
+
+              Deliberately separate from the "RentCast found no comparable
+              rentals" row above: nothing was returned and nothing survived
+              your filters are different situations, and they can never
+              occur together -- this row only exists when candidates do.
+            #}
+            <tr id="rc-filter-empty" hidden>
+              <td colspan="{{ columns|length + 1 }}">
+                <span id="rc-filter-empty-msg"></span>
+                <button type="button" class="btn btn-ghost" id="rc-clear-filters"
+                        style="padding:4px 10px; font-size:12px; margin-left:10px;">Clear filters</button>
+              </td>
+            </tr>
           {% endif %}
         </tbody>
       </table>
@@ -403,7 +423,16 @@
   var rows = Array.prototype.slice.call(document.querySelectorAll("tr.rc-cand"));
   var shownCount = document.getElementById("rc-shown");
   var note = document.getElementById("rc-filter-note");
+  var emptyRow = document.getElementById("rc-filter-empty");
+  var emptyMsg = document.getElementById("rc-filter-empty-msg");
+  var clearBtn = document.getElementById("rc-clear-filters");
   var OUTLIER_PCT = 0.40;
+
+  // How many rows the table shows before "Show all". Falls back to showing
+  // everything rather than guessing a cut that does not match the markup.
+  var filterHost = document.querySelector(".rc-filters");
+  var PREVIEW = parseInt(filterHost && filterHost.getAttribute("data-preview"), 10);
+  if (isNaN(PREVIEW) || PREVIEW < 1) { PREVIEW = rows.length; }
 
   // Populate the bedroom options from the rows actually present.
   var beds = [];
@@ -427,10 +456,11 @@
     bedsSel.value = subject;
   }
 
-  function passes(row) {
-    var wantBeds = bedsSel.value;
+  // Takes the filter values explicitly rather than reading the selects, so
+  // the empty state can ask "how many would match if you dropped one of
+  // these?" without touching the controls.
+  function matches(row, wantBeds, rec) {
     if (wantBeds !== "" && row.getAttribute("data-beds") !== wantBeds) return false;
-    var rec = recencySel.value;
     if (rec === "listed") {
       if (row.getAttribute("data-status") !== "active") return false;
     } else if (rec !== "") {
@@ -438,6 +468,43 @@
       if (d === "" || parseFloat(d) > parseFloat(rec)) return false;
     }
     return true;
+  }
+
+  function passes(row) { return matches(row, bedsSel.value, recencySel.value); }
+
+  function countMatching(wantBeds, rec) {
+    var n = 0;
+    rows.forEach(function (r) { if (matches(r, wantBeds, rec)) n++; });
+    return n;
+  }
+
+  function labelOf(sel) {
+    var opt = sel.options[sel.selectedIndex];
+    return opt ? opt.textContent.trim() : "";
+  }
+
+  // "No comps match 3 bed + currently listed only. 4 match 3 bed on its
+  // own; 15 available with no filters."
+  function emptyMessage() {
+    var b = bedsSel.value, r = recencySel.value;
+    var bl = labelOf(bedsSel), rl = labelOf(recencySel).toLowerCase();
+    var desc;
+    if (b !== "" && r !== "") { desc = bl + " + " + rl; }
+    else if (b !== "")       { desc = bl; }
+    else if (r !== "")       { desc = rl; }
+    else                     { desc = "the current filters"; }
+
+    var msg = "No comps match " + desc + ".";
+    var alts = [];
+    if (b !== "" && r !== "") {
+      var nb = countMatching(b, "");
+      var nr = countMatching("", r);
+      if (nb) alts.push(nb + " match " + bl + " on its own");
+      if (nr) alts.push(nr + " match " + rl + " on its own");
+    }
+    if (rows.length) { alts.push(rows.length + " available with no filters"); }
+    if (alts.length) { msg += " " + alts.join("; ") + "."; }
+    return msg;
   }
 
   function apply() {
@@ -448,10 +515,14 @@
       if (ok) visible.push(row);
     });
 
-    // Re-apply the preview collapse over whatever survived, so "Show all"
-    // keeps working after filtering.
+    // Re-apply the preview collapse over whatever survived, by position in
+    // the FILTERED list rather than by the rc-extra class. The class records
+    // where a row sat in the unfiltered table, which stops meaning anything
+    // once a filter is on: keying off it hid every match that happened to
+    // start beyond the preview cut, so a filter matching rows 6-9 displayed
+    // an empty table while the note counted four matches.
     visible.forEach(function (row, i) {
-      if (row.classList.contains("rc-extra") && !expanded) { row.setAttribute("hidden", ""); }
+      if (i >= PREVIEW && !expanded) { row.setAttribute("hidden", ""); }
       else { row.removeAttribute("hidden"); }
     });
     rows.forEach(function (row) {
@@ -488,18 +559,52 @@
       });
     }
 
+    var none = visible.length === 0;
+
+    // At zero the note has nothing to describe: a count of nothing, no
+    // median, and "too few to flag outliers" reads as a statement about
+    // the data when it is really a statement about the filters. The empty
+    // row below carries the whole message instead.
     if (note) {
-      var bits = [];
-      bits.push(visible.length + " of " + rows.length + " match");
-      if (median) bits.push("median $" + median.toLocaleString());
-      if (flagged) bits.push(flagged + " flagged as unusual");
-      else if (rents.length < 4) bits.push("too few to flag outliers");
-      // Said when RentCast did not tell us the subject's own size, so the
-      // reader knows why the list was not narrowed for them.
-      if (subject === "" && bedsSel.value === "") {
-        bits.push("subject size unknown — showing all sizes");
+      if (none) {
+        note.textContent = "";
+        note.style.display = "none";
+      } else {
+        note.style.display = "";
+        var bits = [];
+        bits.push(visible.length + " of " + rows.length + " match");
+        if (median) bits.push("median $" + median.toLocaleString());
+        if (flagged) bits.push(flagged + " flagged as unusual");
+        else if (rents.length < 4) bits.push("too few to flag outliers");
+        // Said when RentCast did not tell us the subject's own size, so the
+        // reader knows why the list was not narrowed for them.
+        if (subject === "" && bedsSel.value === "") {
+          bits.push("subject size unknown — showing all sizes");
+        }
+        note.textContent = bits.join(" · ");
       }
-      note.textContent = bits.join(" · ");
+    }
+
+    if (emptyRow) {
+      if (none) {
+        if (emptyMsg) emptyMsg.textContent = emptyMessage();
+        emptyRow.removeAttribute("hidden");
+      } else {
+        emptyRow.setAttribute("hidden", "");
+      }
+    }
+
+    // "Show all 15" was static: it kept both its label and its presence
+    // regardless of the filter, so it offered to reveal rows that no longer
+    // matched and stayed on screen with nothing left to show.
+    if (expander) {
+      if (visible.length > PREVIEW) {
+        expander.style.display = "";
+        expander.textContent = expanded ? ("Show top " + PREVIEW)
+                                        : ("Show all " + visible.length);
+      } else {
+        expander.style.display = "none";
+      }
     }
   }
 
@@ -509,6 +614,14 @@
   var expander = document.querySelector('[data-expand="rc-extra"]');
   if (expander) {
     expander.addEventListener("click", function () { expanded = !expanded; setTimeout(apply, 0); });
+  }
+
+  if (clearBtn) {
+    clearBtn.addEventListener("click", function () {
+      bedsSel.value = "";
+      recencySel.value = "";
+      apply();
+    });
   }
 
   bedsSel.addEventListener("change", apply);
