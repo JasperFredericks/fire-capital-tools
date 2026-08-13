@@ -435,7 +435,7 @@
         `if every unit were occupied), and occupancy is measured against it. ` +
         `${n === 1 ? "That month is" : "Those months are"} left out of the average ` +
         "occupancy figure; every other number is unaffected.",
-        `Show the ${n} month${n === 1 ? "" : "s"}`,
+        n === 1 ? "Show the month" : `Show the ${n} months`,
         missing.join(", "),
       );
     }
@@ -446,7 +446,7 @@
         list,
         `Occupancy really is 0% for ${n} month${n === 1 ? "" : "s"}. ` +
         "This is a genuine reading from the file, not missing data.",
-        `Show the ${n} month${n === 1 ? "" : "s"}`,
+        n === 1 ? "Show the month" : `Show the ${n} months`,
         zero.join(", "),
       );
     }
@@ -458,9 +458,12 @@
       addExpandableNote(
         list,
         `This file has no "Total Expenses" row, so total expenses were added up ` +
-        `from the ${fallbackCodes.length} individual expense accounts instead. ` +
+        `from the ${fallbackCodes.length} individual expense ` +
+        `account${fallbackCodes.length === 1 ? "" : "s"} instead. ` +
         "The total is exact — this note is only here so you know where it came from.",
-        `Show the ${fallbackCodes.length} accounts used`,
+        fallbackCodes.length === 1
+          ? "Show the account used"
+          : `Show the ${fallbackCodes.length} accounts used`,
         fallbackCodes.join(", "),
       );
     }
@@ -478,7 +481,8 @@
         `For ${monthCount} month${monthCount === 1 ? "" : "s"}, this file's own ` +
         `"Total Operating ${kinds.join(" and ")}" row${kinds.length > 1 ? "s do" : " does"} ` +
         "not equal the individual rows listed underneath. " +
-        "This report uses the total stated in the file, so those months will not match " +
+        "This report uses the total stated in the file, so " +
+        `${monthCount === 1 ? "that month" : "those months"} will not match ` +
         "what you get by adding the individual rows up yourself. " +
         "That usually means the individual rows were edited without updating the total above them.";
       const detailText = overrideMismatches.map(m =>
@@ -488,7 +492,9 @@
         `(difference ${fmtCurrency(Math.abs(m.total - m.detail))})`
       ).join("\n");
       addExpandableNote(list, summaryText,
-        `Show the difference for each of the ${monthCount} month${monthCount === 1 ? "" : "s"}`,
+        monthCount === 1
+          ? "Show the difference for that month"
+          : `Show the difference for each of the ${monthCount} months`,
         detailText);
     }
     const hasNotes = warnings.length || missing.length || zero.length || fallbackCodes.length || overrideMismatches.length;
