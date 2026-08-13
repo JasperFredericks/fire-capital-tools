@@ -1,187 +1,206 @@
 """
-Unit tests for tools/site_dd_checklist.py scoring.
+Unit tests for tools/site_dd_conditions.py and the re-homed checklist.
 
-Same discipline as tests/test_deal_analyzer_math.py: assertions restate the
-arithmetic independently rather than comparing against whatever the module
-happened to produce, so a copy-paste error cannot validate itself. A wrong
-inspection score is silently plausible -- nothing about a 3.8 looks wrong --
-which is exactly why the roll-up is tested directly rather than only
-through the UI.
+Replaces the tests for the old 1-5 numeric scale, which tested a scale
+that no longer exists. Same discipline as tests/test_deal_analyzer_math.py:
+assertions restate the expected result independently rather than calling
+the function under test to compute its own expected value.
 """
 
 import unittest
 
 from tools import site_dd_checklist as cl
+from tools import site_dd_conditions as cond
 
 
-def all_scored(value):
-    """Every one of the 32 items scored the same."""
-    return {k: value for k in cl.ITEM_KEYS}
+def responses(**kw):
+    """A conditions map keyed by real checklist keys."""
+    return dict(kw)
 
 
-class TestChecklistShape(unittest.TestCase):
-    def test_thirty_two_items_across_six_categories(self):
-        self.assertEqual(len(cl.CATEGORIES), 6)
+class ScaleTests(unittest.TestCase):
+    def test_the_five_states_in_order(self):
+        self.assertEqual(cond.CONDITIONS,
+                         ("excellent", "good", "satisfactory", "repair", "replace"))
+        self.assertEqual([cond.CONDITION_LABELS[c] for c in cond.CONDITIONS],
+                         ["Excellent", "Good", "Satisfactory", "Repair", "Replace"])
+
+    def test_only_repair_and_replace_count_as_work(self):
+        self.assertEqual(cond.WORK_CONDITIONS, ("repair", "replace"))
+        for c in ("excellent", "good", "satisfactory"):
+            self.assertFalse(cond.needs_work(c))
+        for c in ("repair", "replace"):
+            self.assertTrue(cond.needs_work(c))
+
+    def test_every_state_has_a_label_hint_and_colour(self):
+        for c in cond.CONDITIONS:
+            self.assertTrue(cond.CONDITION_LABELS[c])
+            self.assertTrue(cond.CONDITION_HINTS[c])
+            self.assertTrue(cond.CONDITION_COLOURS[c])
+
+    def test_old_numeric_scores_are_rejected_not_translated(self):
+        """A stored 2 meant 'Poor' on a scale that no longer exists.
+        Reading it as 'Repair' would invent an inspector's opinion."""
+        for value in (1, 2, 3, 4, 5, 0, True, False, None, "", "Poor", "REPAIR", 2.0):
+            with self.subTest(value=value):
+                self.assertFalse(cond.is_valid(value))
+        for value in cond.CONDITIONS:
+            self.assertTrue(cond.is_valid(value))
+
+    def test_label_of_anything_invalid_reads_not_assessed(self):
+        self.assertEqual(cond.label(None), "Not assessed")
+        self.assertEqual(cond.label(2), "Not assessed")
+        self.assertEqual(cond.label("replace"), "Replace")
+
+    def test_unassessed_ranks_below_every_real_state(self):
+        for c in cond.CONDITIONS:
+            self.assertGreater(cond.rank(c), cond.rank(None))
+
+
+class SummaryTests(unittest.TestCase):
+    KEYS = cl.ITEM_KEYS
+
+    def test_empty_assessment(self):
+        s = cond.summarize({}, cl.CATEGORIES)
+        self.assertEqual(s["work_count"], 0)
+        self.assertEqual(s["assessed_count"], 0)
+        self.assertEqual(s["not_assessed_count"], 32)
+        self.assertEqual(s["completion_pct"], 0.0)
+        self.assertIsNone(s["worst"])
+        self.assertEqual(s["headline"], "Nothing assessed yet.")
+
+    def test_counts_are_counts(self):
+        given = {
+            self.KEYS[0]: "excellent",
+            self.KEYS[1]: "good",
+            self.KEYS[2]: "good",
+            self.KEYS[3]: "satisfactory",
+            self.KEYS[4]: "repair",
+            self.KEYS[5]: "replace",
+            self.KEYS[6]: "replace",
+        }
+        s = cond.summarize(given, cl.CATEGORIES)
+        self.assertEqual(s["counts"]["excellent"], 1)
+        self.assertEqual(s["counts"]["good"], 2)
+        self.assertEqual(s["counts"]["satisfactory"], 1)
+        self.assertEqual(s["counts"]["repair"], 1)
+        self.assertEqual(s["counts"]["replace"], 2)
+        self.assertEqual(s["work_count"], 3)          # 1 repair + 2 replace
+        self.assertEqual(s["repair_count"], 1)
+        self.assertEqual(s["replace_count"], 2)
+        self.assertEqual(s["assessed_count"], 7)
+        self.assertEqual(s["not_assessed_count"], 25)
+        self.assertAlmostEqual(s["completion_pct"], 7 / 32 * 100, places=9)
+
+    def test_there_is_deliberately_no_overall_score(self):
+        """The central design decision of this rebuild. If an 'overall'
+        key ever reappears, this test fails and someone has to justify it."""
+        s = cond.summarize({self.KEYS[0]: "good"}, cl.CATEGORIES)
+        for banned in ("overall", "score", "risk_band", "mean", "average"):
+            self.assertNotIn(banned, s)
+
+    def test_worst_is_the_worst_present_not_an_average(self):
+        s = cond.summarize({self.KEYS[0]: "excellent", self.KEYS[1]: "replace"},
+                           cl.CATEGORIES)
+        self.assertEqual(s["worst"], "replace")
+        self.assertEqual(s["worst_label"], "Replace")
+        # Nine excellents do not dilute one replace.
+        many = {self.KEYS[i]: "excellent" for i in range(9)}
+        many[self.KEYS[9]] = "replace"
+        self.assertEqual(cond.summarize(many, cl.CATEGORIES)["worst"], "replace")
+
+    def test_work_items_are_ordered_worst_first(self):
+        given = {
+            self.KEYS[0]: "repair",
+            self.KEYS[1]: "replace",
+            self.KEYS[2]: "repair",
+            self.KEYS[3]: "good",
+        }
+        s = cond.summarize(given, cl.CATEGORIES)
+        self.assertEqual(s["work_items"][0], self.KEYS[1], "replace sorts above repair")
+        self.assertEqual(set(s["work_items"]), {self.KEYS[0], self.KEYS[1], self.KEYS[2]})
+        self.assertNotIn(self.KEYS[3], s["work_items"])
+
+    def test_ordered_counts_are_worst_first_for_display(self):
+        s = cond.summarize({}, cl.CATEGORIES)
+        self.assertEqual([c["key"] for c in s["ordered_counts"]],
+                         ["replace", "repair", "satisfactory", "good", "excellent"])
+        self.assertEqual([c["is_work"] for c in s["ordered_counts"]],
+                         [True, True, False, False, False])
+
+    def test_unknown_keys_are_ignored_not_fatal(self):
+        s = cond.summarize({"a_key_that_never_existed": "replace",
+                            self.KEYS[0]: "good"}, cl.CATEGORIES)
+        self.assertEqual(s["assessed_count"], 1)
+        self.assertEqual(s["work_count"], 0)
+
+    def test_invalid_values_count_as_not_assessed(self):
+        s = cond.summarize({self.KEYS[0]: 2, self.KEYS[1]: "", self.KEYS[2]: None,
+                            self.KEYS[3]: "good"}, cl.CATEGORIES)
+        self.assertEqual(s["assessed_count"], 1)
+        self.assertEqual(s["not_assessed_count"], 31)
+
+    def test_category_rollup(self):
+        first = cl.CATEGORIES[0]
+        keys = [k for k, _ in first["items"]]
+        given = {keys[0]: "replace", keys[1]: "repair", keys[2]: "good"}
+        s = cond.summarize(given, cl.CATEGORIES)
+        cat = next(c for c in s["categories"] if c["key"] == first["key"])
+        self.assertEqual(cat["assessed_count"], 3)
+        self.assertEqual(cat["item_count"], len(keys))
+        self.assertEqual(cat["work_count"], 2)
+        self.assertEqual(cat["worst"], "replace")
+        # Every other category is untouched.
+        others = [c for c in s["categories"] if c["key"] != first["key"]]
+        self.assertTrue(all(c["assessed_count"] == 0 for c in others))
+        self.assertTrue(all(c["worst"] is None for c in others))
+
+    def test_category_counts_sum_to_the_overall_counts(self):
+        given = {k: c for k, c in zip(cl.ITEM_KEYS,
+                                      list(cond.CONDITIONS) * 10)}
+        s = cond.summarize(given, cl.CATEGORIES)
+        for state in cond.CONDITIONS:
+            self.assertEqual(sum(c["counts"][state] for c in s["categories"]),
+                             s["counts"][state],
+                             f"category counts must reconcile for {state}")
+
+    def test_headline_reads_as_english(self):
+        self.assertEqual(
+            cond.summarize({self.KEYS[0]: "good"}, cl.CATEGORIES)["headline"],
+            "1 of 32 assessed — nothing needs work.")
+        self.assertEqual(
+            cond.summarize({self.KEYS[0]: "repair", self.KEYS[1]: "replace"},
+                           cl.CATEGORIES)["headline"],
+            "2 of 32 assessed — 1 to repair, 1 to replace.")
+
+
+class ChecklistTests(unittest.TestCase):
+    def test_the_32_items_survived_the_rebuild_unchanged(self):
+        """Re-homed, not rebuilt. Item keys are the stable identity of a
+        question; renaming one to celebrate a rewrite would silently
+        reassign an answer to a different question."""
         self.assertEqual(cl.TOTAL_ITEMS, 32)
-        self.assertEqual(len(cl.ITEM_KEYS), 32)
+        self.assertEqual(len(cl.CATEGORIES), 6)
+        for key in ("parking_paving", "foundation", "roof_covering", "hvac_units",
+                    "alarms_detectors", "flooring", "hazmat_indicators"):
+            self.assertIn(key, cl.ITEM_LABELS)
 
-    def test_item_keys_are_unique(self):
-        self.assertEqual(len(set(cl.ITEM_KEYS)), len(cl.ITEM_KEYS))
+    def test_keys_are_unique_across_categories(self):
+        self.assertEqual(len(cl.ITEM_KEYS), len(set(cl.ITEM_KEYS)))
 
-    def test_every_item_maps_to_its_category(self):
-        for cat in cl.CATEGORIES:
-            for key, _ in cat["items"]:
-                self.assertEqual(cl.ITEM_CATEGORY[key], cat["key"])
+    def test_scope_is_property(self):
+        self.assertEqual(cl.SCOPE, cond.SCOPE_PROPERTY)
 
-    def test_checklist_version_is_stamped(self):
-        self.assertIsInstance(cl.CHECKLIST_VERSION, int)
+    def test_the_old_numeric_api_is_gone(self):
+        for gone in ("score_assessment", "SCORE_LABELS", "RISK_BANDS",
+                     "CRITICAL_THRESHOLD", "valid_score", "risk_band"):
+            self.assertFalse(hasattr(cl, gone), f"{gone} should have been removed")
 
-
-class TestRiskBands(unittest.TestCase):
-    def test_band_boundaries_are_contiguous(self):
-        cases = [
-            (5.00, "Low"), (4.50, "Low"),
-            (4.49, "Moderate"), (3.50, "Moderate"),
-            (3.49, "Elevated"), (2.50, "Elevated"),
-            (2.49, "High"), (1.00, "High"),
-        ]
-        for score, expected in cases:
-            with self.subTest(score=score):
-                self.assertEqual(cl.risk_band(score), expected)
-
-    def test_nothing_scored_is_not_assessed_not_high(self):
-        """A blank form is an absence of information, not a bad building."""
-        self.assertEqual(cl.risk_band(None), cl.NOT_ASSESSED)
-        self.assertEqual(cl.score_assessment({})["risk_band"], cl.NOT_ASSESSED)
-
-
-class TestOverallAndCategoryAverages(unittest.TestCase):
-    def test_uniform_scores_average_to_that_score(self):
-        for v in (1, 3, 5):
-            with self.subTest(score=v):
-                r = cl.score_assessment(all_scored(v))
-                self.assertAlmostEqual(r["overall"], float(v))
-                for c in r["categories"]:
-                    self.assertAlmostEqual(c["score"], float(v))
-
-    def test_overall_is_item_weighted_not_category_weighted(self):
-        """The two differ whenever categories have unequal item counts.
-        Structural & Envelope has 6 items, Site & Exterior has 5 -- score
-        one 5 and the other 1 and the item-weighted mean must land nearer
-        the 6-item category."""
-        items = {}
-        for k, _ in cl.CATEGORIES[0]["items"]:   # site_exterior, 5 items
-            items[k] = 1
-        for k, _ in cl.CATEGORIES[1]["items"]:   # structural_envelope, 6 items
-            items[k] = 5
-        r = cl.score_assessment(items)
-        expected_item_weighted = (5 * 1 + 6 * 5) / 11
-        expected_category_mean = (1 + 5) / 2
-        self.assertAlmostEqual(r["overall"], expected_item_weighted)
-        self.assertNotAlmostEqual(r["overall"], expected_category_mean)
-
-    def test_category_score_is_mean_of_its_own_items_only(self):
-        items = {"parking_paving": 5, "drainage_grading": 3, "foundation": 1}
-        r = cl.score_assessment(items)
-        by_key = {c["key"]: c for c in r["categories"]}
-        self.assertAlmostEqual(by_key["site_exterior"]["score"], 4.0)      # (5+3)/2
-        self.assertAlmostEqual(by_key["structural_envelope"]["score"], 1.0)
-        self.assertIsNone(by_key["mep"]["score"])                          # untouched
-        self.assertAlmostEqual(r["overall"], 3.0)                          # (5+3+1)/3
-
-    def test_mixed_scores_average_correctly(self):
-        items = dict(zip(cl.ITEM_KEYS, [5, 4, 3, 2, 1] * 7))  # 35 -> first 32 used
-        r = cl.score_assessment(items)
-        expected = sum(items[k] for k in cl.ITEM_KEYS) / 32
-        self.assertAlmostEqual(r["overall"], expected)
-        self.assertEqual(r["scored_count"], 32)
-
-
-class TestNAExclusion(unittest.TestCase):
-    def test_na_items_excluded_from_averages(self):
-        """N/A must not be averaged as zero or as a middling three."""
-        items = {"parking_paving": 4, "drainage_grading": None, "landscaping": 2}
-        r = cl.score_assessment(items)
-        by_key = {c["key"]: c for c in r["categories"]}
-        self.assertAlmostEqual(by_key["site_exterior"]["score"], 3.0)   # (4+2)/2, not /3
-        self.assertAlmostEqual(r["overall"], 3.0)
-        self.assertEqual(r["scored_count"], 2)
-        self.assertEqual(r["na_count"], 1)
-
-    def test_all_na_behaves_like_nothing_scored(self):
-        r = cl.score_assessment({k: None for k in cl.ITEM_KEYS})
-        self.assertIsNone(r["overall"])
-        self.assertEqual(r["risk_band"], cl.NOT_ASSESSED)
-        self.assertEqual(r["scored_count"], 0)
-        self.assertEqual(r["na_count"], 32)
-
-    def test_na_does_not_count_toward_completion(self):
-        items = {k: None for k in cl.ITEM_KEYS}
-        items["foundation"] = 4
-        r = cl.score_assessment(items)
-        self.assertEqual(r["scored_count"], 1)
-        self.assertAlmostEqual(r["completion_pct"], 1 / 32 * 100)
-
-    def test_invalid_scores_are_treated_as_unscored(self):
-        for bad in (0, 6, -1, "4", 4.5, True):
-            with self.subTest(value=bad):
-                r = cl.score_assessment({"foundation": bad})
-                self.assertEqual(r["scored_count"], 0, f"{bad!r} was accepted")
-
-
-class TestCriticalFindings(unittest.TestCase):
-    def test_counts_ones_and_twos_only(self):
-        items = {"foundation": 1, "roof_covering": 2, "framing_walls": 3,
-                 "windows_doors": 4, "facade_siding": 5}
-        r = cl.score_assessment(items)
-        self.assertEqual(r["critical_count"], 2)
-        self.assertEqual(r["critical_items"], ["foundation", "roof_covering"])
-
-    def test_none_when_all_healthy(self):
-        self.assertEqual(cl.score_assessment(all_scored(3))["critical_count"], 0)
-
-    def test_all_critical(self):
-        r = cl.score_assessment(all_scored(1))
-        self.assertEqual(r["critical_count"], 32)
-        self.assertEqual(r["risk_band"], "High")
-
-    def test_per_category_critical_counts(self):
-        items = {"foundation": 1, "roof_covering": 1, "parking_paving": 2}
-        by_key = {c["key"]: c for c in cl.score_assessment(items)["categories"]}
-        self.assertEqual(by_key["structural_envelope"]["critical_count"], 2)
-        self.assertEqual(by_key["site_exterior"]["critical_count"], 1)
-        self.assertEqual(by_key["mep"]["critical_count"], 0)
-
-    def test_good_average_can_still_hide_criticals(self):
-        """The reason critical count is reported separately: a healthy
-        average and a life-safety failure must be distinguishable."""
-        items = all_scored(5)
-        items["alarms_detectors"] = 1
-        r = cl.score_assessment(items)
-        self.assertGreater(r["overall"], 4.5)
-        self.assertEqual(r["risk_band"], "Low")
-        self.assertEqual(r["critical_count"], 1)
-
-
-class TestCompletion(unittest.TestCase):
-    def test_full_and_empty(self):
-        self.assertAlmostEqual(cl.score_assessment(all_scored(4))["completion_pct"], 100.0)
-        self.assertAlmostEqual(cl.score_assessment({})["completion_pct"], 0.0)
-
-    def test_partial(self):
-        items = {k: 4 for k in cl.ITEM_KEYS[:8]}
-        r = cl.score_assessment(items)
-        self.assertEqual(r["scored_count"], 8)
-        self.assertAlmostEqual(r["completion_pct"], 25.0)
-
-    def test_unknown_keys_ignored_not_counted(self):
-        """A stale key from a future checklist revision must not inflate
-        completion or break scoring."""
-        items = {"foundation": 4, "no_such_item_v2": 5}
-        r = cl.score_assessment(items)
-        self.assertEqual(r["scored_count"], 1)
-        self.assertAlmostEqual(r["overall"], 4.0)
+    def test_checklist_version_advanced(self):
+        """The stored version stamps which question set an assessment was
+        taken against. The scale changed, so the version had to move."""
+        self.assertGreaterEqual(cl.CHECKLIST_VERSION, 2)
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()

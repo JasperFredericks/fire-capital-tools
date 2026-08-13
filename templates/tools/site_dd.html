@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Site DD - FIRE Capital Tools{% endblock %}
 
-{% macro band_chip(band) %}
-  {%- set colours = {'Low':'#059669','Moderate':'#2563eb','Elevated':'#f59e0b','High':'#b91c1c'} -%}
-  <span class="source-badge" style="color:{{ colours.get(band, '#6b7280') }};">{{ band }}</span>
+{# Worst condition present, not a band derived from an average. #}
+{% macro worst_chip(worst, label) %}
+  {%- set colours = {'excellent':'#059669','good':'#16a34a','satisfactory':'#ca8a04','repair':'#ea580c','replace':'#b91c1c'} -%}
+  {%- if worst -%}
+    <span class="source-badge" style="color:{{ colours.get(worst, '#6b7280') }};">{{ label }}</span>
+  {%- else -%}<span class="stat-box-sub">—</span>{%- endif -%}
 {% endmacro %}
 
 {% block content %}
@@ -16,8 +19,9 @@
   </a>
   <h1 class="page-title">Site DD <span class="tool-tag tag-soon" style="vertical-align:middle; font-size:11px;">Beta</span></h1>
   <p class="page-subtitle">
-    A structured site walkthrough &mdash; 32 inspection points across six categories, scored and rolled up
-    into category and overall risk, with photos and an exportable report.
+    A structured site walkthrough &mdash; 32 property and common-area inspection points across six
+    categories, each rated Excellent to Replace, rolled up into what needs repairing and what needs
+    replacing, with photos and an exportable report.
   </p>
 </div>
 
@@ -77,16 +81,16 @@
     <table class="rent-comps-table">
       <thead>
         <tr>
-          <th>Property</th><th>Date</th><th>Inspector</th><th>Overall</th>
-          <th>Risk</th><th>Critical</th><th>Complete</th><th>Status</th><th></th>
+          <th>Property</th><th>Date</th><th>Inspector</th>
+          <th>Worst</th><th>Needs work</th><th>Complete</th><th>Status</th><th></th>
         </tr>
       </thead>
       <tbody>
         {% if not assessments %}
-          <tr><td colspan="9">No assessments yet — start one above.</td></tr>
+          <tr><td colspan="8">No assessments yet — start one above.</td></tr>
         {% else %}
           {% for a in assessments %}
-            {% set s = a.scores %}
+            {% set s = a.summary %}
             <tr>
               <td>
                 {{ a.property_label }}
@@ -94,9 +98,8 @@
               </td>
               <td>{{ a.assessed_on or '—' }}</td>
               <td>{{ a.inspector or '—' }}</td>
-              <td>{{ '%.2f'|format(s.overall) if s.overall is not none else '—' }}</td>
-              <td>{{ band_chip(s.risk_band) }}</td>
-              <td{% if s.critical_count %} style="color:#b91c1c; font-weight:700;"{% endif %}>{{ s.critical_count }}</td>
+              <td>{{ worst_chip(s.worst, s.worst_label) }}</td>
+              <td{% if s.work_count %} style="color:#b45309; font-weight:700;"{% endif %}>{{ s.work_count }}</td>
               <td>{{ '%.0f%%'|format(s.completion_pct) }}</td>
               <td>{{ a.status|title }}</td>
               <td><a href="{{ url_for('site_dd.detail', assessment_id=a.id) }}" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Open</a></td>

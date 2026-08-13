@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ assessment.property_label }} - Site DD{% endblock %}
 
-{% set band_colours = {'Low':'#059669','Moderate':'#2563eb','Elevated':'#f59e0b','High':'#b91c1c'} %}
 
 {% block content %}
 <div class="page-header">
@@ -20,9 +19,9 @@
 </div>
 
 <!-- ── Scores ─────────────────────────────────────────────────────────── -->
-<div class="card" id="scores">
+<div class="card" id="summary">
   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
-    <div class="scorecard-section-title">Risk Summary</div>
+    <div class="scorecard-section-title">Condition Summary</div>
     <div style="display:flex; gap:8px;">
       <a href="{{ url_for('site_dd.download_report', assessment_id=assessment.id) }}" class="btn btn-primary">Download PDF Report</a>
       <form method="POST" action="{{ url_for('site_dd.delete', assessment_id=assessment.id) }}"
@@ -33,43 +32,49 @@
     </div>
   </div>
 
-  <div class="stats-grid" style="margin:14px 0 8px;">
-    <div class="stat-box">
-      <div class="stat-box-label">Overall Score</div>
-      <div class="stat-box-value">{{ '%.2f'|format(scores.overall) if scores.overall is not none else '—' }}{% if scores.overall is not none %} <span class="stat-box-sub">/ 5</span>{% endif %}</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-label">Risk Band</div>
-      <div class="stat-box-value" style="color:{{ band_colours.get(scores.risk_band, '#6b7280') }};">{{ scores.risk_band }}</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-label">Critical Findings</div>
-      <div class="stat-box-value"{% if scores.critical_count %} style="color:#b91c1c;"{% endif %}>{{ scores.critical_count }}</div>
-      <div class="stat-box-sub">Items scored 1 or 2</div>
-    </div>
+  {#
+    Counts, not a mean. Excellent/Good/Satisfactory/Repair/Replace is an
+    ordinal scale: the gap from Good to Satisfactory is an opinion about
+    wear, the gap from Repair to Replace is the difference between a work
+    order and a purchase order. Averaging them invents an interval scale
+    the words do not support and then hides the invention behind two
+    decimal places. Every figure here is a count of things you can point at.
+  #}
+  <p class="page-subtitle" style="margin:14px 0 10px;"><strong>{{ summary.headline }}</strong></p>
+
+  <div class="stats-grid" style="margin:0 0 8px;">
+    {% for c in summary.ordered_counts %}
+      <div class="stat-box"{% if c.is_work and c.count %} style="border-left:3px solid {{ c.colour }};"{% endif %}>
+        <div class="stat-box-label">{{ c.label }}</div>
+        <div class="stat-box-value" style="color:{{ c.colour if c.count else '#9ca3af' }};">{{ c.count }}</div>
+        <div class="stat-box-sub">{{ condition_hints[c.key] }}</div>
+      </div>
+    {% endfor %}
     <div class="stat-box">
       <div class="stat-box-label">Completion</div>
-      <div class="stat-box-value">{{ '%.0f%%'|format(scores.completion_pct) }}</div>
-      <div class="stat-box-sub">{{ scores.scored_count }} of {{ scores.total_items }} scored &middot; {{ scores.na_count }} N/A</div>
+      <div class="stat-box-value">{{ '%.0f%%'|format(summary.completion_pct) }}</div>
+      <div class="stat-box-sub">{{ summary.assessed_count }} of {{ summary.total_items }} assessed
+        &middot; {{ summary.not_assessed_count }} left</div>
     </div>
   </div>
 
   <p class="page-subtitle" style="margin-bottom:12px;">
-    Overall is the plain average of every item you scored &mdash; N/A items are excluded entirely.
-    Critical findings are counted separately rather than weighted into the average, so a healthy
-    average with a serious problem behind it stays visible.
+    <strong>{{ summary.work_count }}</strong> item{{ '' if summary.work_count == 1 else 's' }} need
+    work &mdash; these are the ones that become budget lines.
+    {%- if summary.worst %} Worst condition recorded: <strong>{{ summary.worst_label }}</strong>.{% endif %}
+    There is deliberately no overall score: an ordinal scale has no meaningful average.
   </p>
 
   <div class="table-wrap">
     <table class="rent-comps-table">
-      <thead><tr><th>Category</th><th>Score</th><th>Scored</th><th>Critical</th></tr></thead>
+      <thead><tr><th>Category</th><th>Assessed</th><th>Needs work</th><th>Worst</th></tr></thead>
       <tbody>
-        {% for c in scores.categories %}
+        {% for c in summary.categories %}
           <tr>
             <td>{{ c.name }}</td>
-            <td>{{ '%.2f'|format(c.score) if c.score is not none else '—' }}</td>
-            <td>{{ c.scored_count }} / {{ c.item_count }}</td>
-            <td{% if c.critical_count %} style="color:#b91c1c; font-weight:700;"{% endif %}>{{ c.critical_count }}</td>
+            <td>{{ c.assessed_count }} / {{ c.item_count }}</td>
+            <td{% if c.work_count %} style="color:#b45309; font-weight:700;"{% endif %}>{{ c.work_count }}</td>
+            <td{% if c.worst %} style="color:{{ condition_colours[c.worst] }};"{% endif %}>{{ c.worst_label or '—' }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -113,23 +118,25 @@
     <div class="card">
       <div class="scorecard-section-title">{{ cat.name }}</div>
       <p class="page-subtitle" style="margin:8px 0 12px;">
-        Score 5 (excellent) to 1 (critical), or N/A if it doesn't apply.
+        Rate each item Excellent to Replace, or leave it blank if you haven't assessed it.
+        <strong>Repair</strong> and <strong>Replace</strong> are the two that become budget lines.
         Notes over {{ note_truncate_at }} characters are shortened with an ellipsis in the exported PDF.
       </p>
       <div class="table-wrap">
         <table class="rent-comps-table">
-          <thead><tr><th style="width:26%;">Item</th><th style="width:20%;">Score</th><th>Note</th><th style="width:14%;">Photos</th></tr></thead>
+          <thead><tr><th style="width:26%;">Item</th><th style="width:22%;">Condition</th><th>Note</th><th style="width:14%;">Photos</th></tr></thead>
           <tbody>
             {% for key, label in cat['items'] %}
               {% set row = items.get(key) %}
-              {% set current = row.score if row else none %}
+              {% set current = row.condition if row else none %}
               <tr>
                 <td>{{ label }}</td>
                 <td>
-                  <select class="form-input" name="score_{{ key }}" style="padding:5px 8px; font-size:12px;">
-                    <option value="" {% if current is none %}selected{% endif %}>N/A</option>
-                    {% for n in [5,4,3,2,1] %}
-                      <option value="{{ n }}" {% if current == n %}selected{% endif %}>{{ n }} — {{ score_labels[n] }}</option>
+                  <select class="form-input" name="condition_{{ key }}" style="padding:5px 8px; font-size:12px;"
+                          {% if current %}data-condition="{{ current }}"{% endif %}>
+                    <option value="" {% if not current %}selected{% endif %}>Not assessed</option>
+                    {% for c in conditions %}
+                      <option value="{{ c }}" {% if current == c %}selected{% endif %}>{{ condition_labels[c] }}</option>
                     {% endfor %}
                   </select>
                 </td>
@@ -151,7 +158,7 @@
 
   <div class="card">
     <button type="submit" class="btn btn-primary">Save Assessment</button>
-    <span class="page-subtitle" style="margin-left:10px;">Scores recalculate on save.</span>
+    <span class="page-subtitle" style="margin-left:10px;">The summary above recalculates on save.</span>
   </div>
 </form>
 
