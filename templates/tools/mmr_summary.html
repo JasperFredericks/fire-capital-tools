@@ -10,11 +10,13 @@
     Back to Dashboard
   </a>
   <h1 class="page-title">Weekly Property Summary</h1>
-  <p class="page-subtitle">Upload a Resman MMR Excel file. A formatted Summary tab will be added and the file returned to you instantly.</p>
+  <p class="page-subtitle">Upload a ResMan or AppFolio MMR export. A formatted Summary tab is
+     added and the file returned to you instantly.</p>
 </div>
 
 <!-- ── Upload card ───────────────────────────────────────────────────── -->
 <div class="card">
+  <div class="scorecard-section-title">Upload MMR File</div>
 
   <div id="upload-zone" class="upload-zone" role="button" tabindex="0" aria-label="Upload MMR Excel file">
     <input type="file" id="file-input" accept=".xlsx" aria-label="Choose .xlsx file">
@@ -57,6 +59,7 @@
 
 <!-- ── Results card ──────────────────────────────────────────────────── -->
 <div class="card result-panel" id="result-panel">
+  <div class="scorecard-section-title">Summary</div>
   <div class="result-header">
     <div>
       <div class="result-title-line">
@@ -84,7 +87,6 @@
           <div class="occ-gauge-fill" id="occ-gauge-fill"></div>
         </div>
         <div class="occ-gauge-value" id="res-occupancy">&mdash;</div>
-        <div class="occ-gauge-label">occupancy</div>
       </div>
       <div class="stat-box-sub" id="res-units-sub"></div>
     </div>
@@ -116,6 +118,9 @@
 
   <p class="result-note">Summary tab added. Download the file above to open in Excel.</p>
 </div>
+
+{% set feedback_tool = "Weekly Property Summary" %}
+{% include "_feedback.html" %}
 
 <script>
 (function () {
