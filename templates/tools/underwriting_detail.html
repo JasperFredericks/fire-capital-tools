@@ -43,7 +43,7 @@
 {% set r = result.returns %}{% set e = result.egi %}{% set p = result.projection %}
 <!-- ── Returns ────────────────────────────────────────────────────────── -->
 <div class="card" id="returns">
-  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+  <div class="uw-page-actions" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
     <div class="scorecard-section-title">Returns</div>
     <form method="POST" action="{{ url_for('underwriting.delete', scenario_id=scenario.id) }}"
           onsubmit="return confirm('Delete this scenario permanently? Its assumptions, expense lines, rent roll and uploads are removed.');">
@@ -190,9 +190,9 @@
 <!-- ── Sensitivity ────────────────────────────────────────────────────── -->
 {% if grid %}
 <div class="card" id="sensitivity">
-  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+  <div class="uw-page-actions" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
     <div class="scorecard-section-title">Sensitivity</div>
-    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+    <div class="uw-page-actions" style="display:flex; gap:6px; flex-wrap:wrap;">
       {% for m, lbl in [('levered_irr','Levered IRR'), ('equity_multiple','Equity Multiple')] %}
         <a class="btn {{ 'btn-primary' if grid_metric == m else 'btn-ghost' }}"
            href="{{ url_for('underwriting.detail', scenario_id=scenario.id, metric=m, variable=grid_variable) }}#sensitivity">{{ lbl }}</a>
@@ -242,7 +242,7 @@
   <div class="scorecard-section-title">Assumptions</div>
   <form method="POST" action="{{ url_for('underwriting.save', scenario_id=scenario.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-top:14px;">
+    <div class="uw-assumptions-grid" style="display:grid; grid-template-columns: repeat(4, 1fr); gap:12px; margin-top:14px;">
       <div class="form-group"><label class="form-label" for="name">Scenario name</label>
         <input class="form-input" type="text" id="name" name="name" value="{{ scenario.name }}"></div>
       <div class="form-group"><label class="form-label" for="property_label">Property</label>

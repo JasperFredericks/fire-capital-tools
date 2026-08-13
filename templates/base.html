@@ -14,15 +14,24 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="FIRE Tools">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='pwa-pass2') }}">
 </head>
 <body>
 <div class="layout">
 
+  <button
+    type="button"
+    class="mobile-nav-backdrop"
+    id="mobile-nav-backdrop"
+    aria-hidden="true"
+    tabindex="-1"
+    hidden
+  ></button>
+
   <!-- ── Sidebar ─────────────────────────────────────────── -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="app-sidebar" aria-label="Primary navigation">
     <a class="sidebar-brand" href="{{ url_for('dashboard') }}">
-      <img class="brand-mark" src="{{ url_for('static', filename='img/logo-mark.svg') }}" alt="">
+      <img class="brand-mark" src="{{ url_for('static', filename='img/logo-mark.svg') }}" alt="" width="28" height="28" style="width:28px; height:28px; max-width:28px; max-height:28px; display:block;">
       <span class="brand-text">
         <span class="brand-name">FIRE Capital</span>
         <span class="brand-tag">Tools Platform</span>
@@ -137,6 +146,22 @@
 
   <!-- ── Main content ──────────────────────────────────────── -->
   <main class="main-content">
+    <header class="mobile-topbar" id="mobile-topbar">
+      <a class="mobile-topbar-brand" href="{{ url_for('dashboard') }}" aria-label="Go to dashboard">
+        <img class="mobile-topbar-mark" src="{{ url_for('static', filename='img/logo-mark.svg') }}" alt="" width="32" height="32" style="width:32px; height:32px; max-width:32px; max-height:32px; display:block;">
+        <span class="mobile-topbar-name">FIRE Capital Tools</span>
+      </a>
+      <button
+        type="button"
+        class="mobile-nav-toggle"
+        id="mobile-nav-toggle"
+        aria-label="Open navigation menu"
+        aria-controls="app-sidebar"
+        aria-expanded="false"
+      >
+        <span class="mobile-nav-toggle-glyph" aria-hidden="true">☰</span>
+      </button>
+    </header>
     <div class="content-wrapper">
 
       {% with messages = get_flashed_messages(with_categories=true) %}
@@ -154,6 +179,90 @@
 
 </div>
 <script>
+  (function () {
+    var sidebar = document.getElementById('app-sidebar');
+    var toggle = document.getElementById('mobile-nav-toggle');
+    var backdrop = document.getElementById('mobile-nav-backdrop');
+    if (!sidebar || !toggle || !backdrop) return;
+
+    var mobileQuery = window.matchMedia('(max-width: 768px)');
+    var firstNavLinkSelector = '.sidebar-nav .nav-link';
+
+    function isMobile() {
+      return mobileQuery.matches;
+    }
+
+    function setExpanded(isOpen) {
+      sidebar.classList.toggle('open', isOpen);
+      toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      toggle.setAttribute('aria-label', isOpen ? 'Close navigation menu' : 'Open navigation menu');
+      document.body.classList.toggle('mobile-nav-open', isOpen);
+      backdrop.hidden = !isOpen;
+      if (isMobile()) {
+        sidebar.style.setProperty('left', isOpen ? '0px' : 'calc(-1 * min(85vw, 320px))', 'important');
+      } else {
+        sidebar.style.removeProperty('left');
+      }
+      if (isOpen) {
+        var firstLink = sidebar.querySelector(firstNavLinkSelector);
+        if (firstLink) firstLink.focus();
+      }
+    }
+
+    function closeNav() {
+      setExpanded(false);
+      toggle.focus();
+    }
+
+    toggle.addEventListener('click', function () {
+      if (!isMobile()) return;
+      setExpanded(!sidebar.classList.contains('open'));
+    });
+
+    backdrop.addEventListener('click', function () {
+      if (!isMobile() || !sidebar.classList.contains('open')) return;
+      closeNav();
+    });
+
+    sidebar.addEventListener('click', function (event) {
+      if (!isMobile()) return;
+      var link = event.target.closest('.nav-link, .logout-btn');
+      if (link) {
+        setExpanded(false);
+      }
+    });
+
+    document.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape') return;
+      if (isMobile() && sidebar.classList.contains('open')) {
+        closeNav();
+      }
+    });
+
+    function handleViewportChange() {
+      if (!isMobile()) {
+        setExpanded(false);
+        backdrop.hidden = true;
+      }
+    }
+
+    function initializeNavState() {
+      setExpanded(false);
+      if (!isMobile()) {
+        backdrop.hidden = true;
+      }
+    }
+
+    if (mobileQuery.addEventListener) {
+      mobileQuery.addEventListener('change', handleViewportChange);
+    } else {
+      mobileQuery.addListener(handleViewportChange);
+    }
+
+    window.addEventListener('pageshow', initializeNavState);
+    initializeNavState();
+  })();
+
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
       navigator.serviceWorker.register('/service-worker.js', { scope: '/' });

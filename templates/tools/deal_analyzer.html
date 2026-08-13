@@ -58,7 +58,7 @@
     {% if deal_id %}<input type="hidden" name="deal_id" value="{{ deal_id }}">{% endif %}
 
     <div class="scorecard-mini-title" style="margin:14px 0 8px;">Purchase</div>
-    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
+    <div class="da-grid-3" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
       <div class="form-group">
         <label class="form-label" for="purchase_price">Purchase Price ($)</label>
         <input class="form-input" type="text" id="purchase_price" name="purchase_price" value="{{ form.purchase_price }}" placeholder="1,000,000" required>
@@ -74,7 +74,7 @@
     </div>
 
     <div class="scorecard-mini-title" style="margin:8px 0;">Financing</div>
-    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
+    <div class="da-grid-3" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
       <div class="form-group">
         <label class="form-label" for="ltv_pct">LTV (%)</label>
         <input class="form-input" type="text" id="ltv_pct" name="ltv_pct" value="{{ form.ltv_pct }}">
@@ -91,7 +91,7 @@
     </div>
 
     <div class="scorecard-mini-title" style="margin:8px 0;">Growth &amp; Exit</div>
-    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:14px;">
+    <div class="da-grid-4" style="display:grid; grid-template-columns: repeat(4, 1fr); gap:14px;">
       <div class="form-group">
         <label class="form-label" for="noi_growth_pct">NOI Growth (%/yr)</label>
         <input class="form-input" type="text" id="noi_growth_pct" name="noi_growth_pct" value="{{ form.noi_growth_pct }}">

@@ -14,7 +14,7 @@
 </div>
 
 <div class="card">
-  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+  <div class="deal-page-actions" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
     <div class="status-chip-row">
       <a href="{{ url_for('deal_dive.index') }}" class="btn {{ 'btn-primary' if not status_filter else 'btn-ghost' }}">All</a>
       {% for s in statuses %}

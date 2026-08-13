@@ -126,7 +126,7 @@
 
   <div id="comparison-empty-message" class="result-note">Search and add cities to build City Analytics.</div>
 
-  <details style="margin:10px 0 12px 0;">
+  <details class="fire-mobile-details" style="margin:10px 0 12px 0;">
     <summary class="dashboard-section-title" style="cursor:pointer; font-size:14px;">How FIRE Score works</summary>
     <div style="margin-top:10px; display:grid; gap:6px;">
       <div class="result-note">Preliminary market-screening score (0-100), percentile-based and relative to the current eligible tracked city universe.</div>
@@ -184,7 +184,7 @@
     been uploaded below.
   </p>
 
-  <form id="admin-actions-form" method="post" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:14px;">
+  <form id="admin-actions-form" class="deal-page-actions" method="post" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:14px;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button id="btn-refresh-all" type="submit" name="action" value="refresh_all" class="btn btn-primary" {% if status.running %}disabled{% endif %}>Refresh All Data</button>
     <button id="btn-refresh-live" type="submit" name="action" value="refresh_live_only" class="btn btn-ghost" {% if status.running %}disabled{% endif %}>Refresh Live Metrics Only</button>
@@ -247,7 +247,7 @@
 </div>
 
 <div class="card">
-  <details>
+  <details class="fire-mobile-details">
     <summary class="dashboard-section-title" style="cursor:pointer;">Source notes and methodology</summary>
     <div style="margin-top:12px; display:grid; gap:8px;">
       <div class="result-note">Higher crime and climate risk scores are worse.</div>

@@ -15,10 +15,10 @@
 </div>
 
 <div class="card">
-  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
+  <div class="dd-detail-actions" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
     <span class="source-badge deal-status-{{ deal.status }}" style="font-size:13px; padding:6px 12px;">{{ deal.status.replace('_', ' ')|title }}</span>
-    <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
-      <form method="POST" action="{{ url_for('deal_dive.update_status', deal_id=deal.id) }}" style="display:flex; gap:8px; align-items:center;">
+    <div class="dd-detail-actions" style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
+      <form method="POST" action="{{ url_for('deal_dive.update_status', deal_id=deal.id) }}" class="dd-status-form" style="display:flex; gap:8px; align-items:center;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <select class="form-input" name="status" style="width:auto;">
           {% for s in statuses %}
@@ -28,7 +28,7 @@
         <button type="submit" class="btn btn-ghost">Update Status</button>
       </form>
       <div style="width:1px; align-self:stretch; background:#f3f4f6;"></div>
-      <div style="display:flex; gap:8px; align-items:center;">
+      <div class="dd-detail-actions" style="display:flex; gap:8px; align-items:center;">
         <a href="{{ url_for('deal_dive.edit_deal', deal_id=deal.id) }}" class="btn btn-ghost">Edit</a>
         <form method="POST" action="{{ url_for('deal_dive.delete_deal', deal_id=deal.id) }}"
               onsubmit="return confirm('Delete this deal permanently? This removes all its comps and uploaded files and cannot be undone.');">
@@ -91,7 +91,7 @@
 
   <form method="POST" action="{{ url_for('deal_dive.update_financials', deal_id=deal.id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
+    <div class="dd-financial-form-grid" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
       <div class="form-group">
         <label class="form-label" for="asking_price">Asking Price ($)</label>
         <input class="form-input" type="text" id="asking_price" name="asking_price" value="{{ deal.asking_price if deal.asking_price is not none else '' }}">
@@ -181,9 +181,9 @@
 
   <hr class="divider" style="margin:20px 0;">
 
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+  <div class="dd-detail-actions" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
     <div class="scorecard-mini-title">Auto-Pulled Market Data (RentCast / Google Places)</div>
-    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+    <div class="dd-detail-actions" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       {% if auto_market_data %}
         <form method="POST" action="{{ url_for('deal_dive.reload_market_data', deal_id=deal.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -281,7 +281,7 @@
 
   <form method="POST" action="{{ url_for('deal_dive.add_comp', deal_id=deal.id) }}" id="addSalesCompForm">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div style="display:grid; grid-template-columns: repeat(5, 1fr); gap:10px; align-items:end;">
+    <div class="dd-comps-form-grid-primary" style="display:grid; grid-template-columns: repeat(5, 1fr); gap:10px; align-items:end;">
       <div class="form-group" style="margin-bottom:0; grid-column: span 2;">
         <label class="form-label" for="comp_address">Address</label>
         <input class="form-input" type="text" id="comp_address" name="address">
@@ -299,7 +299,7 @@
         <input class="form-input" type="date" id="comp_date" name="comp_date">
       </div>
     </div>
-    <div style="display:grid; grid-template-columns: 1fr 2fr; gap:10px;">
+    <div class="dd-comps-form-grid-secondary" style="display:grid; grid-template-columns: 1fr 2fr; gap:10px;">
       <div class="form-group">
         <label class="form-label" for="comp_source">Source</label>
         <select class="form-input" id="comp_source" name="source">

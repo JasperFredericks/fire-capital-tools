@@ -23,12 +23,12 @@
 <div class="card">
   {% if deal %}
     <div class="scorecard-section-title">Scenarios for this property</div>
-    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-top:10px;">
+    <div class="uw-page-actions" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-top:10px;">
       <div>
         <div class="stat-box-value" style="font-size:15px;">{{ deal.address }}</div>
         <div class="stat-box-sub">{{ deal.city }}, {{ deal.state }} {{ deal.zip or '' }}</div>
       </div>
-      <div style="display:flex; gap:8px;">
+      <div class="uw-page-actions" style="display:flex; gap:8px;">
         <a href="{{ url_for('deal_dive.detail', deal_id=deal.id) }}" class="btn btn-ghost">Back to Deal</a>
         {% if scenarios|length > 1 %}
           <a href="{{ url_for('underwriting.compare', deal_id=deal.id) }}" class="btn btn-ghost">Compare Scenarios</a>
@@ -44,7 +44,7 @@
   <form method="POST" action="{{ url_for('underwriting.new_scenario') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% if deal %}<input type="hidden" name="deal_id" value="{{ deal.id }}">{% endif %}
-    <div style="display:grid; grid-template-columns: {% if deal %}1fr 1fr auto{% else %}2fr 1fr 1fr auto{% endif %}; gap:12px; align-items:end;">
+    <div class="uw-scenario-create-grid" style="display:grid; grid-template-columns: {% if deal %}1fr 1fr auto{% else %}2fr 1fr 1fr auto{% endif %}; gap:12px; align-items:end;">
       {% if not deal %}
         <div class="form-group" style="margin-bottom:0;">
           <label class="form-label" for="property_label">Property name or address</label>
