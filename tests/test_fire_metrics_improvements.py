@@ -276,11 +276,11 @@ class TestCREAPIShape(unittest.TestCase):
         src = self._inspect_source_code()
         self.assertIn('"low"', src)
 
-    def test_allowed_domains_in_filters(self):
-        """Domain filtering is under filters.allowed_domains."""
+    def test_openai_tool_payload_omits_filters(self):
+        """gpt-4.1-mini web_search payload must omit unsupported filters."""
         src = self._inspect_source_code()
-        self.assertIn('"filters"', src)
-        self.assertIn('"allowed_domains"', src)
+        self.assertNotIn('"filters"', src)
+        self.assertNotIn('"allowed_domains"', src)
 
     def test_tool_choice_required_present(self):
         """tool_choice='required' forces web search to happen."""
@@ -339,8 +339,8 @@ class TestCREAPIShape(unittest.TestCase):
         self.assertEqual(len(tools), 1)
         self.assertEqual(tools[0].get("type"), "web_search")
         self.assertEqual(tools[0].get("search_context_size"), "low")
-        self.assertIn("filters", tools[0])
-        self.assertIn("allowed_domains", tools[0]["filters"])
+        self.assertNotIn("filters", tools[0])
+        self.assertNotIn("allowed_domains", tools[0])
 
         self.assertNotIn("instructions", captured)
         self.assertNotIn("max_output_tokens", captured)

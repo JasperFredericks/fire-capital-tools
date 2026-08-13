@@ -1640,7 +1640,6 @@ def openai_cre_research(
 
         tool_config: dict[str, Any] = {
             "type": "web_search",
-            "filters": {"allowed_domains": list(CRE_ALLOWED_DOMAINS)},
             "search_context_size": "low",
         }
 
