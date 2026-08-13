@@ -189,7 +189,8 @@ def analyze(inputs: dict[str, Any]) -> dict[str, Any]:
 
 
 def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
-                       noi_exit: float) -> dict[str, Any]:
+                       noi_exit: float, *,
+                       debt: dict[str, Any] | None = None) -> dict[str, Any]:
     """The engine. Capital stack, debt service, cash flows, returns.
 
     `noi_series` is NOI for operating years 1..H, one entry per year, in
@@ -199,8 +200,20 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
     no single growth rate to extrapolate from, and guessing one here would
     silently disagree with the model the user actually entered.
 
-    Everything downstream of the NOI series -- financing, exit, IRR,
-    multiples -- is identical for both callers by construction."""
+    `debt` is an optional override for the three financing figures this
+    function would otherwise derive from a single LTV-sized loan:
+    loan_amount, annual_debt_service and balance_at_exit. It exists for
+    Underwriting's multi-loan mode, where a stack of independently
+    amortizing loans cannot be described by one rate and one term.
+
+    When `debt` is None -- which is every Deal Analyzer call, and every
+    single-loan Underwriting scenario -- the code below is exactly what it
+    was before the override existed, so the default path cannot have
+    moved. A test asserts that equivalence directly.
+
+    Everything downstream of the NOI series -- exit, IRR, multiples -- is
+    identical for both callers, and for both financing modes, by
+    construction."""
     _validate(inputs)
 
     H = int(inputs["hold_years"])
@@ -219,7 +232,7 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
     sc_pct = float(inputs["selling_costs_pct"]) / 100.0
 
     closing_costs = P * cc_pct
-    loan = P * ltv
+    loan = P * ltv if debt is None else float(debt["loan_amount"])
     equity = P - loan + closing_costs
 
     if equity <= 0:
@@ -227,7 +240,10 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
             "Total cash invested works out to zero or less — reduce LTV or add closing costs."
         )
 
-    debt_service = monthly_payment(loan, rate, amort_years) * 12 if loan > 0 else 0.0
+    if debt is None:
+        debt_service = monthly_payment(loan, rate, amort_years) * 12 if loan > 0 else 0.0
+    else:
+        debt_service = float(debt["annual_debt_service"])
 
     # Year-by-year operations, from the supplied NOI series.
     years = []
@@ -251,9 +267,19 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
     noi_exit = float(noi_exit)
     gross_sale = noi_exit / exit_cap
     selling_costs = gross_sale * sc_pct
-    balance_at_exit = remaining_balance(loan, rate, amort_years, H * 12)
-    net_sale_levered = gross_sale - selling_costs - balance_at_exit
-    net_sale_unlevered = gross_sale - selling_costs
+    # A capital transaction fee is charged on the gross sale price, like
+    # the selling costs beside it, and is absent (0.0) for every Deal
+    # Analyzer call -- that tool has no such field, so .get() keeps its
+    # arithmetic literally unchanged rather than merely equivalent.
+    ctf_pct = float(inputs.get("capital_transaction_fee_pct") or 0.0) / 100.0
+    capital_transaction_fee = gross_sale * ctf_pct
+    # The multi-loan override supplies the summed payoff of the stack; with
+    # no override this is the single LTV-sized loan, exactly as before.
+    balance_at_exit = (remaining_balance(loan, rate, amort_years, H * 12)
+                       if debt is None else float(debt["balance_at_exit"]))
+    net_sale_levered = (gross_sale - selling_costs - capital_transaction_fee
+                        - balance_at_exit)
+    net_sale_unlevered = gross_sale - selling_costs - capital_transaction_fee
 
     # Levered: equity out at t0, operating cash flow, plus sale net of debt.
     levered_flows = [-equity] + operating_cf[:]
@@ -297,6 +323,7 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
         "noi_exit_year": noi_exit,
         "gross_sale_price": gross_sale,
         "selling_costs": selling_costs,
+        "capital_transaction_fee": capital_transaction_fee,
         "loan_balance_at_exit": balance_at_exit,
         "net_sale_proceeds": net_sale_levered,
         "total_distributions": total_distributions,

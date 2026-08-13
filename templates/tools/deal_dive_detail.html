@@ -73,7 +73,7 @@
     {% endif %}
   </div>
 
-  <p class="page-subtitle" style="margin-bottom:10px;">Summary-level figures for reference &mdash; for a returns analysis with leverage and IRR, see <a href="{{ url_for('deal_analyzer.index', deal_id=deal.id) }}">Deal Analyzer</a>; to build the NOI from a rent roll and itemized expenses, see <a href="{{ url_for('underwriting.index', deal_id=deal.id) }}">Underwriting</a>.</p>
+  <p class="page-subtitle" style="margin-bottom:10px;">Summary-level figures for reference &mdash; to turn a NOI and a target cap rate into what this property is worth, see <a href="{{ url_for('deal_analyzer.index', deal_id=deal.id) }}">Quick Deal Analyzer</a>; for a full model with leverage, IRR and a rent roll, see <a href="{{ url_for('underwriting.index', deal_id=deal.id) }}">Underwriting</a>.</p>
   {% set uw = underwriting_summary %}
   <p class="page-subtitle" style="margin-bottom:10px;">
     {% if uw %}
@@ -399,13 +399,18 @@
   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-top:12px;">
     <p class="page-subtitle" style="margin:0;">
       {% if s %}
-        {% set sc = s.scores %}
-        {% set band_colours = {'Low':'#059669','Moderate':'#2563eb','Elevated':'#f59e0b','High':'#b91c1c'} %}
-        Overall
-        <strong>{{ '%.2f'|format(sc.overall) if sc.overall is not none else '—' }}{% if sc.overall is not none %} / 5{% endif %}</strong>
-        &middot; <strong style="color:{{ band_colours.get(sc.risk_band, '#6b7280') }};">{{ sc.risk_band }}</strong>
-        &middot; <strong{% if sc.critical_count %} style="color:#b91c1c;"{% endif %}>{{ sc.critical_count }}</strong>
-        critical finding{{ '' if sc.critical_count == 1 else 's' }}
+        {% set sc = s.summary %}
+        {% set cond_colours = {'excellent':'#059669','good':'#16a34a','satisfactory':'#ca8a04','repair':'#ea580c','replace':'#b91c1c'} %}
+        {#
+          Counts, not a score. The old card led with "Overall 3.90 / 5" and
+          a colour band derived from it; both are gone because an ordinal
+          condition scale has no meaningful average. What replaces them is
+          longer to read and harder to argue with.
+        #}
+        <strong{% if sc.work_count %} style="color:#b45309;"{% endif %}>{{ sc.work_count }}</strong>
+        item{{ '' if sc.work_count == 1 else 's' }} need work
+        {%- if sc.replace_count %} &middot; <strong style="color:#b91c1c;">{{ sc.replace_count }}</strong> to replace{% endif %}
+        {%- if sc.worst %} &middot; worst <strong style="color:{{ cond_colours.get(sc.worst, '#6b7280') }};">{{ sc.worst_label }}</strong>{% endif %}
         &middot; {{ '%.0f%%'|format(sc.completion_pct) }} complete
         {%- if s.assessed_on %} &middot; inspected {{ s.assessed_on }}{% endif %}
         {%- if s.total_count > 1 %} &middot; {{ s.total_count }} assessments on file{% endif %}

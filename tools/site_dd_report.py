@@ -41,6 +41,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from tools import site_dd_checklist as cl
+from tools import site_dd_conditions as cond
 
 PAGE_SIZE = (11, 8.5)
 INK = "#1a2744"
@@ -53,14 +54,6 @@ CRITICAL = "#b91c1c"
 NOTE_TRUNCATE_AT = 110
 CATEGORIES_PER_PAGE = 2
 MAX_THUMBNAILS = 12
-
-BAND_COLOURS = {
-    "Low": "#059669",
-    "Moderate": "#2563eb",
-    "Elevated": "#f59e0b",
-    "High": "#b91c1c",
-    cl.NOT_ASSESSED: "#9ca3af",
-}
 
 
 def truncate_note(note: str | None, limit: int = NOTE_TRUNCATE_AT) -> str:
@@ -89,18 +82,14 @@ def _header(fig, title: str, subtitle: str, meta: str, logo_path: Path | None) -
     fig.text(0.94, 0.845, meta, ha="right", fontsize=9, color=MUTED)
 
 
-def _fmt_score(value: float | None) -> str:
-    return "—" if value is None else f"{value:.2f}"
-
-
 def build_report(path, assessment: dict[str, Any], items: dict[str, dict[str, Any]],
-                 scores: dict[str, Any], photos: list[dict[str, Any]],
+                 summary: dict[str, Any], photos: list[dict[str, Any]],
                  photo_dir: Path | None = None, logo_path: Path | None = None) -> Path:
     """Write the PDF to `path` and return it.
 
-    `scores` is the output of site_dd_checklist.score_assessment(); it is
-    passed in rather than recomputed so the report can never disagree with
-    what the screen showed.
+    `summary` is the output of site_dd_conditions.summarize(); it is passed
+    in rather than recomputed so the report can never disagree with what
+    the screen showed.
     """
     path = Path(path)
     label = assessment.get("property_label") or "Untitled Property"
@@ -114,45 +103,51 @@ def build_report(path, assessment: dict[str, Any], items: dict[str, dict[str, An
         fig = plt.figure(figsize=PAGE_SIZE)
         _header(fig, "Site Due Diligence Report", subtitle, meta, logo_path)
 
-        band = scores["risk_band"]
         fig.text(0.06, 0.76, "Assessment Summary", fontsize=15, fontweight="bold", color=INK)
 
+        # Counts, not a mean -- see site_dd_conditions' docstring. The
+        # report shows exactly what the screen shows, including the
+        # deliberate absence of an overall score.
         tiles = [
-            ("Overall Score", _fmt_score(scores["overall"]) + " / 5", BODY),
-            ("Risk Band", band, BAND_COLOURS.get(band, BODY)),
-            ("Critical Findings", str(scores["critical_count"]),
-             CRITICAL if scores["critical_count"] else BODY),
-            ("Completion", f"{scores['completion_pct']:.0f}%", BODY),
+            ("Needs Work", str(summary["work_count"]),
+             CRITICAL if summary["work_count"] else BODY),
+            ("To Replace", str(summary["replace_count"]),
+             CRITICAL if summary["replace_count"] else BODY),
+            ("To Repair", str(summary["repair_count"]), BODY),
+            ("Completion", f"{summary['completion_pct']:.0f}%", BODY),
         ]
         for idx, (lbl, val, colour) in enumerate(tiles):
             x = 0.06 + idx * 0.225
             fig.text(x, 0.69, lbl, fontsize=9, color=MUTED, fontweight="bold")
             fig.text(x, 0.645, val, fontsize=17, color=colour, fontweight="bold")
 
-        fig.text(0.06, 0.60, f"{scores['scored_count']} of {scores['total_items']} items scored"
-                             f" · {scores['na_count']} marked N/A"
-                             f" · checklist v{assessment.get('checklist_version', '?')}",
+        fig.text(0.06, 0.60, summary["headline"]
+                             + f" · checklist v{assessment.get('checklist_version', '?')}",
                  fontsize=8.5, color=MUTED)
 
-        # Per-category bar chart
-        cats = scores["categories"]
+        # Per-category stacked counts. A stacked bar of states is the
+        # honest chart for an ordinal scale: it shows the distribution
+        # rather than collapsing it into a position on an invented axis.
+        cats = summary["categories"]
         ax = fig.add_axes([0.10, 0.14, 0.82, 0.40])
         names = [c["name"] for c in cats]
-        vals = [c["score"] if c["score"] is not None else 0 for c in cats]
-        colours = ["#d1d5db" if c["score"] is None else
-                   ("#b91c1c" if c["score"] < 2.5 else
-                    "#f59e0b" if c["score"] < 3.5 else
-                    "#2563eb" if c["score"] < 4.5 else "#059669") for c in cats]
-        bars = ax.barh(names, vals, color=colours, alpha=0.85)
-        ax.set_xlim(0, 5)
+        left = [0] * len(cats)
+        for state in cond.CONDITIONS:
+            widths = [c["counts"][state] for c in cats]
+            if not any(widths):
+                continue
+            ax.barh(names, widths, left=left, height=0.62,
+                    color=cond.CONDITION_COLOURS[state], alpha=0.88,
+                    label=cond.CONDITION_LABELS[state])
+            left = [a + b for a, b in zip(left, widths)]
         ax.invert_yaxis()
-        ax.set_xlabel("Category score (1–5)")
+        ax.set_xlabel("Items by condition")
         ax.grid(axis="x", alpha=0.18)
-        for bar, c in zip(bars, cats):
-            txt = "not scored" if c["score"] is None else f"{c['score']:.2f}"
-            ax.text(min(bar.get_width() + 0.08, 4.9), bar.get_y() + bar.get_height() / 2,
-                    txt, va="center", fontsize=8.5, color=MUTED)
-        ax.set_title("Category Scores", loc="left", fontweight="bold")
+        ax.legend(loc="lower right", fontsize=7.5, frameon=False, ncol=5)
+        for i, c in enumerate(cats):
+            if not c["assessed_count"]:
+                ax.text(0.1, i, "not assessed", va="center", fontsize=8, color=MUTED)
+        ax.set_title("Condition by Category", loc="left", fontweight="bold")
 
         if assessment.get("overall_notes"):
             fig.text(0.06, 0.075, "Overall notes: " + truncate_note(assessment["overall_notes"], 200),
@@ -172,25 +167,26 @@ def build_report(path, assessment: dict[str, Any], items: dict[str, dict[str, An
                     f"Checklist detail {page_no} of {len(groups)}", logo_path)
             y = 0.78
             for cat in group:
-                summary = by_key[cat["key"]]
+                cat_summary = by_key[cat["key"]]
                 fig.text(0.06, y, cat["name"], fontsize=12.5, fontweight="bold", color=INK)
-                fig.text(0.94, y, f"{_fmt_score(summary['score'])} / 5"
-                                  f"   ({summary['scored_count']}/{summary['item_count']} scored)",
+                fig.text(0.94, y, f"{cat_summary['work_count']} need work"
+                                  f"   ({cat_summary['assessed_count']}/{cat_summary['item_count']} assessed)",
                          ha="right", fontsize=9.5, color=MUTED)
                 y -= 0.035
                 for item_key, item_label in cat["items"]:
                     row = items.get(item_key) or {}
-                    score = row.get("score")
-                    if score is None:
-                        shown, colour = "N/A", MUTED
+                    value = row.get("condition")
+                    if not cond.is_valid(value):
+                        shown, colour = "Not assessed", MUTED
                     else:
-                        shown = str(score)
-                        colour = CRITICAL if score <= cl.CRITICAL_THRESHOLD else BODY
+                        shown = cond.CONDITION_LABELS[value]
+                        colour = (cond.CONDITION_COLOURS[value]
+                                  if cond.needs_work(value) else BODY)
                     fig.text(0.075, y, item_label, fontsize=9, color=BODY)
-                    fig.text(0.44, y, shown, fontsize=9, fontweight="bold", color=colour)
+                    fig.text(0.42, y, shown, fontsize=9, fontweight="bold", color=colour)
                     note = truncate_note(row.get("note"))
                     if note:
-                        fig.text(0.49, y, note, fontsize=8, color=MUTED)
+                        fig.text(0.56, y, note, fontsize=8, color=MUTED)
                     y -= 0.026
                 y -= 0.025
             pdf.savefig(fig, bbox_inches="tight")

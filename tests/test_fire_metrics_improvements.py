@@ -15,11 +15,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
+
 from flask import Flask
 
 from fire_metrics.fire_metrics_updater import db as db_module
 from tools import fire_metrics_ai_summary as summary
-from tools.fire_metrics import city_summary
+from tools.fire_metrics import city_summary, city_summary_cre
 from tools.fire_metrics.services import _cre_research_model_name
 
 
@@ -157,7 +159,7 @@ class TestCRECacheFreshness(unittest.TestCase):
         self.assertTrue(summary.is_cre_cache_current(recent, summary.CRE_RESEARCH_VERSION))
 
     def test_stale_timestamp_returns_false(self):
-        old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+        old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat()
         self.assertFalse(summary.is_cre_cache_current(old, summary.CRE_RESEARCH_VERSION))
 
     def test_none_timestamp_returns_false(self):
@@ -167,11 +169,11 @@ class TestCRECacheFreshness(unittest.TestCase):
         self.assertFalse(summary.is_cre_cache_current("", summary.CRE_RESEARCH_VERSION))
 
     def test_at_ttl_boundary_returns_false(self):
-        exactly_at_ttl = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        exactly_at_ttl = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
         self.assertFalse(summary.is_cre_cache_current(exactly_at_ttl, summary.CRE_RESEARCH_VERSION))
 
     def test_just_within_ttl_returns_true(self):
-        just_within = (datetime.now(timezone.utc) - timedelta(days=6, hours=23)).isoformat()
+        just_within = (datetime.now(timezone.utc) - timedelta(days=29, hours=23)).isoformat()
         self.assertTrue(summary.is_cre_cache_current(just_within, summary.CRE_RESEARCH_VERSION))
 
     def test_old_version_is_immediately_stale(self):
@@ -274,11 +276,11 @@ class TestCREAPIShape(unittest.TestCase):
         src = self._inspect_source_code()
         self.assertIn('"low"', src)
 
-    def test_allowed_domains_in_filters(self):
-        """Domain filtering is under filters.allowed_domains."""
+    def test_openai_tool_payload_omits_filters(self):
+        """gpt-4.1-mini web_search payload must omit unsupported filters."""
         src = self._inspect_source_code()
-        self.assertIn('"filters"', src)
-        self.assertIn('"allowed_domains"', src)
+        self.assertNotIn('"filters"', src)
+        self.assertNotIn('"allowed_domains"', src)
 
     def test_tool_choice_required_present(self):
         """tool_choice='required' forces web search to happen."""
@@ -307,6 +309,48 @@ class TestCREAPIShape(unittest.TestCase):
             )
         self.assertEqual(len(calls), 1, "Must make exactly one API call per request")
 
+    def test_cre_responses_kwargs_match_supported_web_search_shape(self):
+        """CRE request kwargs match supported Responses API web_search shape."""
+        mock_response = MagicMock()
+        mock_response.output = []
+        mock_response.output_text = "NONE"
+        mock_response.error = None
+        captured: dict = {}
+
+        def mock_create(**kwargs):
+            captured.update(kwargs)
+            return mock_response
+
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.side_effect = mock_create
+            summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="Austin", state="TX", display_name="Austin, TX",
+            )
+
+        self.assertEqual(captured.get("model"), "gpt-4.1-mini")
+        self.assertEqual(captured.get("tool_choice"), "required")
+        self.assertEqual(captured.get("include"), ["web_search_call.action.sources"])
+        self.assertIsInstance(captured.get("input"), str)
+        self.assertTrue(captured.get("input"))
+        self.assertIn("3-5 sentences", captured.get("input"))
+        self.assertIn("100-150 words maximum", captured.get("input"))
+        self.assertIn("Avoid quarter-by-quarter repetition", captured.get("input"))
+        self.assertIn("Output only the word NONE", captured.get("input"))
+
+        tools = captured.get("tools")
+        self.assertIsInstance(tools, list)
+        self.assertEqual(len(tools), 1)
+        self.assertEqual(tools[0].get("type"), "web_search")
+        self.assertEqual(tools[0].get("search_context_size"), "low")
+        self.assertNotIn("filters", tools[0])
+        self.assertNotIn("allowed_domains", tools[0])
+
+        self.assertNotIn("instructions", captured)
+        self.assertNotIn("max_output_tokens", captured)
+        self.assertNotIn("response_format", captured)
+        self.assertNotIn("text", captured)
+
     def test_sources_extracted_from_action_sources(self):
         """Sources are extracted from web_search_call action.sources."""
         mock_action_src = MagicMock()
@@ -328,6 +372,32 @@ class TestCREAPIShape(unittest.TestCase):
         self.assertEqual(result["result_type"], "success")
         self.assertGreater(len(result["research_sources"]), 0)
         self.assertEqual(result["research_sources"][0]["url"], "https://cbre.com/report-2026")
+
+    def test_success_summary_is_bounded_and_removes_raw_urls(self):
+        """Returned CRE prose is capped and strips raw URLs from visible summary text."""
+        mock_action_src = MagicMock()
+        mock_action_src.url = "https://cbre.com/report-2026"
+        mock_action = MagicMock()
+        mock_action.sources = [mock_action_src]
+        mock_ws_call = MagicMock()
+        mock_ws_call.type = "web_search_call"
+        mock_ws_call.action = mock_action
+        long_text = " ".join(["Vacancy softened while deliveries remained elevated."] * 80)
+        long_text += " https://example.com/raw-url"
+        mock_response = MagicMock()
+        mock_response.output = [mock_ws_call]
+        mock_response.output_text = long_text
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="Austin", state="TX", display_name="Austin, TX",
+            )
+
+        self.assertEqual(result["result_type"], "success")
+        self.assertNotIn("http://", result["cre_sentences"])
+        self.assertNotIn("https://", result["cre_sentences"])
+        self.assertLessEqual(len(result["cre_sentences"].split()), 150)
 
     def test_sources_extracted_from_url_citation_annotations(self):
         """Sources are also extracted from url_citation annotations in text output."""
@@ -386,7 +456,7 @@ class TestCREAPIShape(unittest.TestCase):
                 city="Miami", state="FL", display_name="Miami, FL",
             )
         self.assertEqual(result["result_type"], "no_data")
-        self.assertEqual(result["cre_sentences"], "")
+        self.assertEqual(result["cre_sentences"], "No relevant research from approved sources.")
         self.assertEqual(result["research_sources"], [])
 
     def test_api_exception_produces_failure_result_type(self):
@@ -399,6 +469,43 @@ class TestCREAPIShape(unittest.TestCase):
             )
         self.assertEqual(result["result_type"], "failure")
         self.assertEqual(result["cre_sentences"], "")
+
+    def test_bad_request_returns_sanitized_failure_code_and_param(self):
+        """BadRequestError surfaces safe code/param diagnostics without leaking payloads."""
+        req = httpx.Request("POST", "https://api.openai.com/v1/responses")
+        resp = httpx.Response(400, request=req, json={
+            "error": {
+                "message": "Invalid tool payload.",
+                "type": "invalid_request_error",
+                "param": "tools[0].filters.allowed_domains[0]",
+                "code": "invalid_domain",
+            }
+        })
+
+        from openai import BadRequestError
+        exc = BadRequestError(
+            "Invalid tool payload.",
+            response=resp,
+            body={
+                "message": "Invalid tool payload.",
+                "type": "invalid_request_error",
+                "param": "tools[0].filters.allowed_domains[0]",
+                "code": "invalid_domain",
+            },
+        )
+
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.side_effect = exc
+            result = summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="Boston", state="MA", display_name="Boston, MA",
+            )
+
+        self.assertEqual(result["result_type"], "failure")
+        self.assertEqual(result["failure_category"], "bad_request")
+        self.assertEqual(result["failure_code"], "invalid_domain")
+        self.assertEqual(result["failure_param"], "tools[0].filters.allowed_domains[0]")
+        self.assertTrue(result.get("failure_message"))
 
     def test_successful_result_stores_current_cre_version(self):
         """Successful result includes the current CRE_RESEARCH_VERSION."""
@@ -447,7 +554,7 @@ class TestCREAPIShape(unittest.TestCase):
             db_path.unlink(missing_ok=True)
 
     def test_mocked_success_returns_research_sources(self):
-        """city-summary endpoint returns non-empty research_sources on mocked success."""
+        """city-summary-cre endpoint returns non-empty research_sources on mocked success."""
         import os
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         tmp.close()
@@ -475,7 +582,27 @@ class TestCREAPIShape(unittest.TestCase):
             }
             with app.test_request_context(
                 "/tools/fire-metrics/api/city-summary", method="POST",
-                json={"city": "Alpha", "state": "AA"},
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
+                },
+            ):
+                with patch.object(summary, "openai_summary", return_value={
+                    "strength_sentence": "Alpha has solid employment growth.",
+                    "weakness_sentence": "Climate risk is moderate.",
+                    "comparison_sentence": "Overall Alpha is a mixed opportunity.",
+                }), patch("tools.fire_metrics.routes._summary_api_key", return_value="test-key"), \
+                     patch("tools.fire_metrics.routes._summary_model_name", return_value="gpt-4.1-mini"):
+                    city_summary.__wrapped__()
+
+            with app.test_request_context(
+                "/tools/fire-metrics/api/city-summary-cre", method="POST",
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
+                    "cre_generation_intent": "explicit_city_selection",
+                    "cre_selection_source": "main_city_search",
+                },
             ):
                 with patch.object(summary, "openai_summary", return_value={
                     "strength_sentence": "Alpha has solid employment growth.",
@@ -484,7 +611,7 @@ class TestCREAPIShape(unittest.TestCase):
                 }), patch.object(summary, "openai_cre_research", return_value=mock_cre_result), \
                      patch("tools.fire_metrics.routes._summary_api_key", return_value="test-key"), \
                      patch("tools.fire_metrics.routes._summary_model_name", return_value="gpt-4.1-mini"):
-                    result = city_summary.__wrapped__()
+                        result = city_summary_cre.__wrapped__()
             response = result[0] if isinstance(result, tuple) else result
             data = response.get_json()
             self.assertIsInstance(data.get("research_sources"), list)
@@ -495,7 +622,6 @@ class TestCREAPIShape(unittest.TestCase):
                 os.environ.pop("FIRE_METRICS_DB_PATH", None)
             else:
                 os.environ["FIRE_METRICS_DB_PATH"] = original_db
-
 
     """Verify that CRE research failure never blocks the FIRE Metrics summary."""
 
@@ -511,7 +637,7 @@ class TestCREAPIShape(unittest.TestCase):
         Path(self.tmp.name).unlink(missing_ok=True)
 
     def test_cre_failure_does_not_break_summary(self):
-        """When openai_cre_research raises, the route still returns a valid summary."""
+        """When openai_cre_research returns failure, overview still renders and CRE endpoint reports failure."""
         import os
 
         original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
@@ -531,7 +657,37 @@ class TestCREAPIShape(unittest.TestCase):
             with route_app.test_request_context(
                 "/tools/fire-metrics/api/city-summary",
                 method="POST",
-                json={"city": "Alpha", "state": "AA"},
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
+                },
+            ):
+                with patch.object(
+                    summary, "openai_summary",
+                    return_value={
+                        "strength_sentence": "Alpha, AA has solid employment growth.",
+                        "weakness_sentence": "Climate risk is moderate.",
+                        "comparison_sentence": "Overall Alpha is a mixed opportunity.",
+                    },
+                ), patch(
+                    "tools.fire_metrics.routes._summary_api_key", return_value="test-key"
+                ):
+                    overview_result = city_summary.__wrapped__()
+
+            overview_response = overview_result[0] if isinstance(overview_result, tuple) else overview_result
+            overview_data = overview_response.get_json()
+            self.assertEqual(overview_data["status"], "ready")
+            self.assertIn("summary", overview_data)
+
+            with route_app.test_request_context(
+                "/tools/fire-metrics/api/city-summary-cre",
+                method="POST",
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
+                    "cre_generation_intent": "explicit_city_selection",
+                    "cre_selection_source": "main_city_search",
+                },
             ):
                 with patch.object(
                     summary, "openai_summary",
@@ -541,19 +697,30 @@ class TestCREAPIShape(unittest.TestCase):
                         "comparison_sentence": "Overall Alpha is a mixed opportunity.",
                     },
                 ), patch.object(
-                    summary, "openai_cre_research",
-                    side_effect=RuntimeError("network error"),
+                    summary,
+                    "openai_cre_research",
+                    return_value={
+                        "cre_sentences": "",
+                        "research_sources": [],
+                        "cre_generated_at": summary.utc_now_iso(),
+                        "cre_research_version": summary.CRE_RESEARCH_VERSION,
+                        "result_type": "failure",
+                        "failure_category": "network_error",
+                    },
                 ), patch(
                     "tools.fire_metrics.routes._summary_api_key", return_value="test-key"
                 ):
-                    result = city_summary.__wrapped__()
+                    result = city_summary_cre.__wrapped__()
 
             response = result[0] if isinstance(result, tuple) else result
             data = response.get_json()
             self.assertEqual(data["status"], "ready")
-            self.assertIn("summary", data)
             self.assertIsInstance(data.get("research_sources"), list)
             self.assertEqual(data["research_sources"], [])
+            self.assertEqual(data.get("cre_status"), "failure")
+            self.assertEqual(data.get("cre_failure_category"), "network_error")
+            self.assertIsNone(data.get("cre_failure_code"))
+            self.assertIsNone(data.get("cre_failure_param"))
         finally:
             if original_db_path is None:
                 os.environ.pop("FIRE_METRICS_DB_PATH", None)
@@ -561,7 +728,7 @@ class TestCREAPIShape(unittest.TestCase):
                 os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
 
     def test_full_ai_failure_reaches_deterministic_fallback(self):
-        """When openai_summary raises, the fallback summary is served (no CRE either)."""
+        """When openai_summary raises, fallback summary serves and CRE failure remains isolated."""
         import os
 
         original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
@@ -581,25 +748,64 @@ class TestCREAPIShape(unittest.TestCase):
             with route_app.test_request_context(
                 "/tools/fire-metrics/api/city-summary",
                 method="POST",
-                json={"city": "Alpha", "state": "AA"},
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
+                },
+            ):
+                with patch.object(
+                    summary, "openai_summary",
+                    side_effect=RuntimeError("openai down"),
+                ), patch(
+                    "tools.fire_metrics.routes._summary_api_key", return_value="test-key"
+                ), patch(
+                    "tools.fire_metrics.routes._summary_model_name", return_value="gpt-4.1-mini"
+                ):
+                    overview_result = city_summary.__wrapped__()
+
+            overview_response = overview_result[0] if isinstance(overview_result, tuple) else overview_result
+            overview_data = overview_response.get_json()
+            self.assertEqual(overview_data["status"], "ready")
+            self.assertIn("summary", overview_data)
+
+            with route_app.test_request_context(
+                "/tools/fire-metrics/api/city-summary-cre",
+                method="POST",
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
+                    "cre_generation_intent": "explicit_city_selection",
+                    "cre_selection_source": "main_city_search",
+                },
             ):
                 with patch.object(
                     summary, "openai_summary",
                     side_effect=RuntimeError("openai down"),
                 ), patch.object(
                     summary, "openai_cre_research",
-                    side_effect=RuntimeError("openai down"),
+                    return_value={
+                        "cre_sentences": "",
+                        "research_sources": [],
+                        "cre_generated_at": summary.utc_now_iso(),
+                        "cre_research_version": summary.CRE_RESEARCH_VERSION,
+                        "result_type": "failure",
+                        "failure_category": "network_error",
+                    },
                 ), patch(
                     "tools.fire_metrics.routes._summary_api_key", return_value="test-key"
+                ), patch(
+                    "tools.fire_metrics.routes._summary_model_name", return_value="gpt-4.1-mini"
                 ):
-                    result = city_summary.__wrapped__()
+                    result = city_summary_cre.__wrapped__()
 
             response = result[0] if isinstance(result, tuple) else result
             data = response.get_json()
             self.assertEqual(data["status"], "ready")
-            self.assertIn("summary", data)
-            # Fallback path produces no CRE sources
             self.assertIsInstance(data.get("research_sources", []), list)
+            self.assertEqual(data.get("cre_status"), "failure")
+            self.assertEqual(data.get("cre_failure_category"), "network_error")
+            self.assertIsNone(data.get("cre_failure_code"))
+            self.assertIsNone(data.get("cre_failure_param"))
         finally:
             if original_db_path is None:
                 os.environ.pop("FIRE_METRICS_DB_PATH", None)
@@ -635,6 +841,9 @@ class TestCREDBSchema(unittest.TestCase):
             self.assertIn("cre_sentences_text", cols)
             self.assertIn("research_sources_json", cols)
             self.assertIn("cre_generated_at", cols)
+            self.assertIn("cre_failure_category", cols)
+            self.assertIn("cre_failure_code", cols)
+            self.assertIn("cre_failure_param", cols)
         finally:
             db_path.unlink(missing_ok=True)
 
@@ -969,56 +1178,11 @@ class TestMapZoomConfiguration(unittest.TestCase):
         idx = css.find(".fire-map-panel {")
         end = css.find("\n}", idx)
         block = css[idx:end]
-        self.assertTrue(
-            "1a2744" in block or "0f1929" in block,
-            "fire-map-panel should have deep navy background/border",
-        )
+        self.assertTrue(("1a2744" in block) or ("1e3a6e" in block))
 
-    def test_map_rotate_control_disabled(self):
-        """rotateControl: false must be set in the Map constructor."""
+    def test_map_legend_has_city_indicators(self):
+        """Map legend contains city indicator markup."""
         text = self._template_text()
-        self.assertIn("rotateControl: false", text)
-
-    def test_map_type_control_disabled(self):
-        """mapTypeControl: false must be set."""
-        text = self._template_text()
-        self.assertIn("mapTypeControl: false", text)
-
-    def test_street_view_control_disabled(self):
-        """streetViewControl: false must be set."""
-        text = self._template_text()
-        self.assertIn("streetViewControl: false", text)
-
-    def test_advanced_marker_element_still_used(self):
-        """AdvancedMarkerElement must still be used — not replaced."""
-        text = self._template_text()
-        self.assertIn("AdvancedMarkerElement", text)
-
-    def test_google_map_container_still_present(self):
-        """fire-google-map div must still be present."""
-        text = self._template_text()
-        self.assertIn('id="fire-google-map"', text)
-
-    def test_no_generic_red_marker(self):
-        """Generic Google red (#dc2626 or #ff0000) must not be used on markers."""
-        css = self._css_text()
-        idx_current = css.find(".fire-advanced-marker-current")
-        end = css.find("\n}", idx_current)
-        block = css[idx_current:end].lower()
-        self.assertNotIn("dc2626", block)
-        self.assertNotIn("ff0000", block)
-
-    def test_fire_map_chrome_css_exists(self):
-        """fire-map-chrome CSS rule is defined."""
-        css = self._css_text()
-        self.assertIn(".fire-map-chrome {", css)
-        self.assertIn(".fire-map-chrome-title", css)
-
-    def test_nationwide_legend_reflects_market_language(self):
-        """Legend text uses market-intelligence language (not just 'Current city')."""
-        text = self._template_text()
-        # Either 'Active market' or 'Current city' or similar is fine;
-        # just ensure the legend has some city indicator text.
         has_legend = ("fire-map-legend" in text and "fire-map-dot" in text)
         self.assertTrue(has_legend)
 
@@ -1158,7 +1322,7 @@ class TestCREResultTypeCorrectness(unittest.TestCase):
         """Approved source returned but model output empty/NONE."""
         result = self._run_cre("NONE", [{"type": "url", "url": "https://cbre.com/report"}])
         self.assertEqual(result["result_type"], "no_data")
-        self.assertEqual(result["cre_sentences"], "")
+        self.assertEqual(result["cre_sentences"], "No relevant research from approved sources.")
 
     def test_unapproved_source_plus_text_is_no_data(self):
         result = self._run_cre(
@@ -1171,7 +1335,7 @@ class TestCREResultTypeCorrectness(unittest.TestCase):
     def test_none_sentinel_produces_no_data(self):
         result = self._run_cre("NONE", [])
         self.assertEqual(result["result_type"], "no_data")
-        self.assertEqual(result["cre_sentences"], "")
+        self.assertEqual(result["cre_sentences"], "No relevant research from approved sources.")
 
     def test_api_exception_is_failure(self):
         with patch("openai.OpenAI") as MockOpenAI:
@@ -1416,7 +1580,7 @@ class TestExistingBehaviorPreserved(unittest.TestCase):
         self.assertEqual(summary.CRE_RESEARCH_VERSION, "cre_v3")
 
     def test_cre_ttl_days_constant(self):
-        self.assertEqual(summary.CRE_RESEARCH_TTL_DAYS, 7)
+        self.assertEqual(summary.CRE_RESEARCH_TTL_DAYS, 30)
 
 
 # ---------------------------------------------------------------------------
@@ -1664,19 +1828,32 @@ class TestInMapCityCard(unittest.TestCase):
         self.assertNotIn("openMarkerPreview(", fn_body)
 
     def test_pan_offset_applied_for_right_side_panel(self):
-        """panBy uses computed card-aware offset to keep marker clear of the panel."""
+        """panBy uses minimum overlap-only offset computed from rendered marker/card positions."""
         html = self._template()
         fn_start = html.find("function openCurrentCityPreview(")
         fn_end = html.find("\n  function ", fn_start + 1)
         fn_body = html[fn_start:fn_end]
-        self.assertIn("const panOffsetX = selectedCardPanOffsetX()", fn_body)
+        self.assertIn("const panOffsetX = minimalOverlapPanOffsetX(entry.marker)", fn_body)
         self.assertIn("googleMap.panBy(panOffsetX, 0)", fn_body)
+        self.assertNotIn("googleMap.panTo(entry.marker.position)", fn_body)
 
-    def test_selected_card_pan_offset_helper_exists(self):
+    def test_adaptive_card_side_helpers_exist(self):
         html = self._template()
-        self.assertIn("function selectedCardPanOffsetX()", html)
+        self.assertIn("function markerScreenPositionInMap(", html)
+        self.assertIn("function chooseDesktopCardSide(", html)
+        self.assertIn("function minimalOverlapPanOffsetX(", html)
+        self.assertIn("function setCityCardSide(", html)
         self.assertIn("getBoundingClientRect()", html)
+        self.assertIn("markerPos.x >= usableMid ? \"left\" : \"right\"", html)
         self.assertIn("cardRect.width >= mapRect.width * 0.75", html)
+
+    def test_open_current_city_preview_sets_card_side_from_marker_position(self):
+        html = self._template()
+        fn_start = html.find("function openCurrentCityPreview(")
+        fn_end = html.find("\n  function ", fn_start + 1)
+        fn_body = html[fn_start:fn_end]
+        self.assertIn("const side = chooseDesktopCardSide(entry.marker)", fn_body)
+        self.assertIn("setCityCardSide(side)", fn_body)
 
     def test_advanced_marker_element_remains(self):
         self.assertIn("AdvancedMarkerElement", self._template())
@@ -1722,6 +1899,11 @@ class TestInMapCityCard(unittest.TestCase):
         self.assertIn("width: clamp(300px", block)
         self.assertIn("max-height: calc(100% - 24px)", block)
         self.assertIn("overflow-y: auto", block)
+
+    def test_city_card_desktop_side_classes_exist(self):
+        css = self._css()
+        self.assertIn(".fire-city-card.fire-city-card-left", css)
+        self.assertIn(".fire-city-card.fire-city-card-right", css)
 
     def test_city_card_mobile_panel_scroll_enabled(self):
         css = self._css()

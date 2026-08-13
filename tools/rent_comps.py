@@ -25,8 +25,12 @@ so there is one definition of "at cap" across both tools:
 
 from __future__ import annotations
 
+import csv
+import io
+
 from flask import (
     Blueprint,
+    Response,
     flash,
     redirect,
     render_template,
@@ -51,6 +55,15 @@ MAX_COMP_ADDRESS_LEN = 255
 # limit, never a data limit. Saved comps in particular are never truncated
 # away: the user chose to save them, and silently hiding that work is the
 # opposite of what a cap is for.
+# Plain-language labels for RentCast's Active/Inactive, kept next to the
+# export that uses them. The template renders the same wording via the
+# shared _rent_comp_table.html macro -- both exist because the CSV cannot
+# call a Jinja macro, and a reader of either should see the same words.
+LISTING_STATUS_LABELS = {
+    "active": "Currently Listed",
+    "inactive": "No Longer Listed",
+}
+
 CANDIDATE_PREVIEW_COUNT = 5
 SAVED_PREVIEW_COUNT = 5
 
@@ -137,6 +150,18 @@ def _redirect_to_view(ctx):
     )
 
 
+def _scope_query(ctx) -> dict:
+    """The scope as url_for kwargs, so a GET link (the CSV export) lands on
+    the same address/deal the page is showing. Same rule as
+    _redirect_to_view: deal_id alone when scoped to a deal, otherwise the
+    address parts."""
+    if ctx["deal_id"] is not None:
+        return {"deal_id": ctx["deal_id"]}
+    return {k: v for k, v in (
+        ("address", ctx["address"]), ("city", ctx["city"]),
+        ("state", ctx["state"]), ("zip", ctx["zip"])) if v}
+
+
 def _has_address(ctx) -> bool:
     return bool(ctx["address"] and ctx["city"] and ctx["state"])
 
@@ -160,6 +185,13 @@ def index():
     with db.get_connection() as conn:
         saved = db.list_comps(conn, ctx["deal_id"])
         already_saved = db.saved_addresses(conn, ctx["deal_id"])
+        # Saved comps are scoped, deliberately -- one deal's comps must not
+        # leak into another's. But that means comps saved standalone simply
+        # vanish when the tool is opened from a deal, with nothing on screen
+        # saying where they went. That is the "it says saved but I can't
+        # access them" report: they are reachable, just not from here.
+        standalone_count = (len(db.list_comps(conn, None))
+                            if ctx["deal_id"] is not None else 0)
 
     rentcast = (cached or {}).get("rentcast") or None
     candidates = []
@@ -187,6 +219,77 @@ def index():
         candidate_preview=CANDIDATE_PREVIEW_COUNT,
         saved_preview=SAVED_PREVIEW_COUNT,
         rentcast_quota=market_data_service.rentcast_quota(),
+        standalone_count=standalone_count,
+        ctx_query=_scope_query(ctx),
+    )
+
+
+@rent_comps_bp.route("/export.csv")
+@login_required
+def export_csv():
+    """Download the comps on screen as CSV.
+
+    Reads the same two sources the page renders -- the market-data cache
+    and the saved table -- and never calls RentCast, so an export can
+    never spend a lookup. `set=candidates` (default) exports the pulled
+    comparables for the current address; `set=saved` exports this scope's
+    saved comps.
+    """
+    ctx = _context_from_request()
+    which = (request.args.get("set") or "candidates").strip().lower()
+
+    if which == "saved":
+        with db.get_connection() as conn:
+            rows = db.list_comps(conn, ctx["deal_id"])
+        label = "saved"
+    else:
+        rows = []
+        if _has_address(ctx):
+            address_key = market_data_cache.normalize_address_key(
+                ctx["address"], ctx["city"], ctx["state"], ctx["zip"]
+            )
+            with market_data_cache.get_connection() as conn:
+                cached = market_data_cache.get_cached(conn, address_key)
+            rentcast = (cached or {}).get("rentcast") or {}
+            if rentcast.get("available"):
+                rows = rentcast.get("comparables") or []
+        label = "comparables"
+
+    header = ["Address", "Rent", "Bedrooms", "Bathrooms", "Square Footage",
+              "Rent per Sqft", "Distance (mi)", "Match %", "Days Old",
+              "Listing Status", "Source"]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    for r in rows:
+        rent = r.get("rent") if r.get("rent") is not None else r.get("price")
+        sqft = r.get("square_footage")
+        corr = r.get("correlation")
+        status_raw = (r.get("listing_status") or "").strip()
+        writer.writerow([
+            r.get("address") or "",
+            "" if rent is None else rent,
+            "" if r.get("bedrooms") is None else r.get("bedrooms"),
+            "" if r.get("bathrooms") is None else r.get("bathrooms"),
+            "" if sqft is None else sqft,
+            "" if (rent is None or not sqft) else round(rent / sqft, 2),
+            "" if r.get("distance_miles") is None else r.get("distance_miles"),
+            "" if corr in (None, "") else round(float(corr) * 100),
+            "" if r.get("days_old") is None else r.get("days_old"),
+            # The plain-language label, with the raw API value beside it so
+            # the export reconciles against RentCast without a lookup table.
+            LISTING_STATUS_LABELS.get(status_raw.lower(), status_raw),
+            r.get("source") or "rentcast",
+        ])
+
+    where = (ctx.get("address") or "deal-%s" % ctx["deal_id"] if ctx["deal_id"] else "rent-comps")
+    safe = "".join(ch if (ch.isalnum() or ch in " -_") else "_" for ch in str(where)).strip()
+    safe = "_".join(safe.split()) or "rent-comps"
+    filename = f"{safe}_{label}.csv"
+    return Response(
+        buf.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

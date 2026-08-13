@@ -39,6 +39,204 @@ from tools.fire_metrics.services import (
 
 fire_metrics_bp = Blueprint("fire_metrics", __name__)
 
+ALLOWED_CRE_SELECTION_SOURCES = frozenset({
+    "main_city_search",
+    "city_analytics",
+})
+
+
+def _cre_generation_allowed(payload: dict) -> bool:
+    intent = str(payload.get("cre_generation_intent") or "").strip()
+    source = str(payload.get("cre_selection_source") or "").strip()
+    return intent == "explicit_city_selection" and source in ALLOWED_CRE_SELECTION_SOURCES
+
+
+def _cre_payload_for_city(
+    conn,
+    *,
+    selected_city: dict,
+    data_fingerprint: str,
+    model_name: str,
+    cre_generation_allowed: bool,
+) -> dict:
+    """Resolve CRE status for a city, refreshing once when cache is stale and explicitly allowed."""
+    try:
+        cache_row = db_module.fetch_cached_city_summary(
+            conn,
+            city=selected_city["city"],
+            state=selected_city["state"],
+            data_fingerprint=data_fingerprint,
+            model_name=model_name,
+            prompt_version=ai_summary.PROMPT_VERSION,
+        )
+    except Exception as exc:
+        current_app.logger.warning(
+            "FIRE Metrics CRE cache read failed: %s",
+            exc.__class__.__name__,
+        )
+        cache_row = None
+
+    if not cre_generation_allowed:
+        return {
+            "cre_status": "skipped",
+            "cre_summary": "",
+            "research_sources": [],
+            "cre_failure_category": None,
+            "cre_failure_code": None,
+            "cre_failure_param": None,
+        }
+
+    cached_cre_result_type = ""
+    cached_cre_failure_category = None
+    cached_cre_failure_code = None
+    cached_cre_failure_param = None
+    cre_sentences = ""
+    research_sources: list[dict] = []
+    cre_fresh = False
+
+    if cache_row:
+        cached_cre_version = cache_row.get("cre_research_version")
+        cre_fresh_base = ai_summary.is_cre_cache_current(
+            cache_row.get("cre_generated_at"),
+            cached_cre_version,
+        )
+        cached_cre_result_type = str(cache_row.get("cre_result_type") or "").strip().lower()
+        cached_cre_failure_category = str(cache_row.get("cre_failure_category") or "").strip() or None
+        cached_cre_failure_code = str(cache_row.get("cre_failure_code") or "").strip() or None
+        cached_cre_failure_param = str(cache_row.get("cre_failure_param") or "").strip() or None
+        cre_sentences = str(cache_row.get("cre_sentences_text") or "").strip()
+        try:
+            research_sources = json.loads(cache_row.get("research_sources_json") or "[]") or []
+        except (json.JSONDecodeError, ValueError):
+            research_sources = []
+
+        if cached_cre_result_type == "success":
+            cre_fresh = cre_fresh_base and bool(cre_sentences) and bool(research_sources)
+        elif cached_cre_result_type in ("no_data", "failure"):
+            cre_fresh = cre_fresh_base
+        else:
+            cre_fresh = cre_fresh_base and (bool(cre_sentences) or bool(research_sources))
+
+        current_app.logger.info(
+            "FIRE CRE cache state: city=%s|%s version=%s expected=%s fresh=%s",
+            selected_city["city"], selected_city["state"],
+            cached_cre_version, ai_summary.CRE_RESEARCH_VERSION, cre_fresh,
+        )
+
+    if cre_fresh:
+        cre_status = cached_cre_result_type if cached_cre_result_type in {"success", "no_data", "failure"} else "skipped"
+        if cre_status == "skipped" and cre_sentences:
+            cre_status = "success"
+        return {
+            "cre_status": cre_status,
+            "cre_summary": cre_sentences if cre_status == "success" else (
+                "No relevant research from approved sources." if cre_status == "no_data" else ""
+            ),
+            "research_sources": research_sources if cre_status == "success" else [],
+            "cre_failure_category": cached_cre_failure_category if cre_status == "failure" else None,
+            "cre_failure_code": cached_cre_failure_code if cre_status == "failure" else None,
+            "cre_failure_param": cached_cre_failure_param if cre_status == "failure" else None,
+        }
+
+    api_key = _summary_api_key()
+    if not _summary_enabled() or not api_key:
+        return {
+            "cre_status": "failure",
+            "cre_summary": "",
+            "research_sources": [],
+            "cre_failure_category": "config_error",
+            "cre_failure_code": None,
+            "cre_failure_param": None,
+        }
+
+    cre_model = _cre_research_model_name()
+    current_app.logger.info(
+        "FIRE CRE refresh needed: city=%s state=%s model=%s",
+        selected_city["city"], selected_city["state"], cre_model,
+    )
+    cre_result = ai_summary.openai_cre_research(
+        api_key=api_key,
+        model_name=cre_model,
+        city=selected_city["city"],
+        state=selected_city["state"],
+        display_name=str(selected_city.get("display_name") or ""),
+    )
+    result_type = str(cre_result.get("result_type") or "failure").strip().lower() or "failure"
+    cached_cre_failure_category = str(cre_result.get("failure_category") or "").strip() or None
+    cached_cre_failure_code = str(cre_result.get("failure_code") or "").strip() or None
+    cached_cre_failure_param = str(cre_result.get("failure_param") or "").strip() or None
+
+    refreshed_text = cre_result.get("cre_sentences") or ""
+    refreshed_sources = cre_result.get("research_sources") or []
+
+    if result_type == "failure":
+        import datetime as _dt
+
+        store_at = (
+            _dt.datetime.now(_dt.timezone.utc)
+            - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
+            + _dt.timedelta(minutes=ai_summary.CRE_FAILURE_BACKOFF_MINUTES)
+        ).isoformat()
+    elif result_type == "no_data":
+        import datetime as _dt
+
+        store_at = (
+            _dt.datetime.now(_dt.timezone.utc)
+            - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
+            + _dt.timedelta(hours=ai_summary.CRE_NEGATIVE_CACHE_TTL_HOURS)
+        ).isoformat()
+    else:
+        store_at = cre_result.get("cre_generated_at") or ai_summary.utc_now_iso()
+
+    store_version = cre_result.get("cre_research_version") or ai_summary.CRE_RESEARCH_VERSION
+
+    if cache_row:
+        store_cre_text = refreshed_text if result_type != "failure" else (cache_row.get("cre_sentences_text") or "")
+        store_sources = refreshed_sources if result_type != "failure" else research_sources
+        db_module.update_city_summary_cre_fields(
+            conn,
+            city=selected_city["city"],
+            state=selected_city["state"],
+            data_fingerprint=data_fingerprint,
+            model_name=model_name,
+            prompt_version=ai_summary.PROMPT_VERSION,
+            cre_sentences_text=store_cre_text,
+            research_sources_json=json.dumps(store_sources),
+            cre_generated_at=store_at,
+            cre_research_version=store_version,
+            cre_result_type=result_type,
+            cre_failure_category=cached_cre_failure_category,
+            cre_failure_code=cached_cre_failure_code,
+            cre_failure_param=cached_cre_failure_param,
+        )
+
+    if result_type == "success":
+        return {
+            "cre_status": "success",
+            "cre_summary": refreshed_text,
+            "research_sources": refreshed_sources,
+            "cre_failure_category": None,
+            "cre_failure_code": None,
+            "cre_failure_param": None,
+        }
+    if result_type == "no_data":
+        return {
+            "cre_status": "no_data",
+            "cre_summary": "No relevant research from approved sources.",
+            "research_sources": [],
+            "cre_failure_category": None,
+            "cre_failure_code": None,
+            "cre_failure_param": None,
+        }
+    return {
+        "cre_status": "failure",
+        "cre_summary": "",
+        "research_sources": [],
+        "cre_failure_category": cached_cre_failure_category,
+        "cre_failure_code": cached_cre_failure_code,
+        "cre_failure_param": cached_cre_failure_param,
+    }
+
 
 @fire_metrics_bp.route("/", methods=["GET", "POST"])
 @login_required
@@ -273,12 +471,18 @@ def city_summary():
             benchmarks = ai_summary.compute_benchmarks(selected_city, all_cities)
 
             if not _summary_enabled():
-                return jsonify(_summary_unavailable_response(
+                response_payload = _summary_unavailable_response(
                     selected_city=selected_city,
                     benchmark_data=benchmarks,
                     reason="AI summaries are disabled.",
                     data_refreshed_at=metadata.get("last_refresh_at"),
-                ))
+                )
+                response_payload["research_sources"] = []
+                response_payload["cre_status"] = "skipped"
+                response_payload["cre_failure_category"] = None
+                response_payload["cre_failure_code"] = None
+                response_payload["cre_failure_param"] = None
+                return jsonify(response_payload)
 
             model_name = _summary_model_name()
             fingerprint_input = ai_summary.fingerprint_payload(
@@ -305,93 +509,7 @@ def city_summary():
                 )
                 cache_row = None
             if cache_row:
-                cached_cre_version = cache_row.get("cre_research_version")
-                cre_fresh = ai_summary.is_cre_cache_current(
-                    cache_row.get("cre_generated_at"),
-                    cached_cre_version,
-                )
-                cre_sentences = str(cache_row.get("cre_sentences_text") or "").strip()
-                research_sources: list[dict] = []
-                try:
-                    research_sources = json.loads(cache_row.get("research_sources_json") or "[]") or []
-                except (json.JSONDecodeError, ValueError):
-                    research_sources = []
-
-                current_app.logger.info(
-                    "FIRE CRE cache state: city=%s|%s version=%s expected=%s fresh=%s",
-                    selected_city["city"], selected_city["state"],
-                    cached_cre_version, ai_summary.CRE_RESEARCH_VERSION, cre_fresh,
-                )
-
-                if not cre_fresh and _summary_enabled() and _summary_api_key():
-                    cre_model = _cre_research_model_name()
-                    current_app.logger.info(
-                        "FIRE CRE refresh needed: city=%s state=%s model=%s",
-                        selected_city["city"], selected_city["state"], cre_model,
-                    )
-                    cre_result = ai_summary.openai_cre_research(
-                        api_key=_summary_api_key(),
-                        model_name=cre_model,
-                        city=selected_city["city"],
-                        state=selected_city["state"],
-                        display_name=str(selected_city.get("display_name") or ""),
-                    )
-                    result_type = cre_result.get("result_type", "failure")
-                    current_app.logger.info(
-                        "FIRE CRE refresh result: city=%s state=%s result_type=%s sources=%d",
-                        selected_city["city"], selected_city["state"],
-                        result_type, len(cre_result.get("research_sources") or []),
-                    )
-                    # Only update visible CRE content when we actually got useful data
-                    if result_type in ("success", "no_data"):
-                        cre_sentences = cre_result.get("cre_sentences") or ""
-                        research_sources = cre_result.get("research_sources") or []
-                    # Determine what TTL to store
-                    if result_type == "failure":
-                        import datetime as _dt
-                        backoff_at = (
-                            _dt.datetime.now(_dt.timezone.utc)
-                            - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
-                            + _dt.timedelta(minutes=ai_summary.CRE_FAILURE_BACKOFF_MINUTES)
-                        ).isoformat()
-                        store_at = backoff_at
-                    elif result_type == "no_data":
-                        import datetime as _dt
-                        no_data_at = (
-                            _dt.datetime.now(_dt.timezone.utc)
-                            - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
-                            + _dt.timedelta(hours=ai_summary.CRE_NEGATIVE_CACHE_TTL_HOURS)
-                        ).isoformat()
-                        store_at = no_data_at
-                    else:
-                        store_at = cre_result.get("cre_generated_at") or ai_summary.utc_now_iso()
-                    # Store version for all result types; version + TTL together drive backoff
-                    store_version = cre_result.get("cre_research_version") or ai_summary.CRE_RESEARCH_VERSION
-                    # Preserve old CRE text when the refresh fails (don't overwrite with empty)
-                    store_cre_text = (
-                        cre_sentences if result_type != "failure"
-                        else (cache_row.get("cre_sentences_text") or "")
-                    )
-                    store_sources = (
-                        research_sources if result_type != "failure"
-                        else research_sources
-                    )
-                    db_module.update_city_summary_cre_fields(
-                        conn,
-                        city=selected_city["city"],
-                        state=selected_city["state"],
-                        data_fingerprint=data_fingerprint,
-                        model_name=model_name,
-                        prompt_version=ai_summary.PROMPT_VERSION,
-                        cre_sentences_text=store_cre_text,
-                        research_sources_json=json.dumps(store_sources),
-                        cre_generated_at=store_at,
-                        cre_research_version=store_version,
-                    )
-
                 full_summary = cache_row["summary_text"]
-                if cre_sentences:
-                    full_summary = f"{full_summary} {cre_sentences}"
 
                 return jsonify({
                     "status": "ready",
@@ -401,7 +519,7 @@ def city_summary():
                         "weakness_sentence": cache_row["weakness_sentence"],
                         "comparison_sentence": cache_row["comparison_sentence"],
                     },
-                    "research_sources": research_sources,
+                    "research_sources": [],
                     "generated_at": cache_row["generated_at"],
                     "data_refreshed_at": metadata.get("last_refresh_at"),
                     "cached": True,
@@ -417,88 +535,45 @@ def city_summary():
                     "tracked_city_count": benchmarks.get("tracked_city_count"),
                     "percentile": benchmarks.get("selected_percentile"),
                     "source": "cache",
+                    "cre_status": "skipped",
+                    "cre_failure_category": None,
+                    "cre_failure_code": None,
+                    "cre_failure_param": None,
                 })
 
             generated_at = ai_summary.utc_now_iso()
             api_key = _summary_api_key()
             if not api_key:
-                return jsonify(_summary_unavailable_response(
+                response_payload = _summary_unavailable_response(
                     selected_city=selected_city,
                     benchmark_data=benchmarks,
                     reason="OPENAI_API_KEY is not configured.",
                     data_refreshed_at=metadata.get("last_refresh_at"),
-                ))
+                )
+                response_payload["research_sources"] = []
+                response_payload["cre_status"] = "skipped"
+                response_payload["cre_failure_category"] = None
+                response_payload["cre_failure_code"] = None
+                response_payload["cre_failure_param"] = None
+                return jsonify(response_payload)
 
             if not model_name:
-                return jsonify(_summary_unavailable_response(
-                    selected_city=selected_city,
-                    benchmark_data=benchmarks,
-                    reason="FIRE_METRICS_SUMMARY_MODEL is not configured.",
-                    data_refreshed_at=metadata.get("last_refresh_at"),
-                ))
-
-            try:
-                structured = ai_summary.openai_summary(
-                    api_key=api_key,
-                    model_name=model_name,
-                    selected_city=selected_city,
-                    benchmarks=benchmarks,
-                )
-                structured = ai_summary.normalize_summary(structured, selected_city, benchmarks)
-            except Exception:
+                # Keep overview deterministic when summary model is unset,
+                # but continue into explicit CRE evaluation below.
                 structured = ai_summary.fallback_summary(selected_city, benchmarks)
-
-            # CRE research: never raises; returns result_type="failure" on errors
-            cre_sentences = ""
-            research_sources: list[dict] = []
-            cre_generated_at = ai_summary.utc_now_iso()
-            cre_research_version_stored: str | None = None
-            cre_model = _cre_research_model_name()
-            current_app.logger.info(
-                "FIRE CRE starting: city=%s state=%s model=%s",
-                selected_city["city"], selected_city["state"], cre_model,
-            )
-            cre_result = ai_summary.openai_cre_research(
-                api_key=api_key,
-                model_name=cre_model,
-                city=selected_city["city"],
-                state=selected_city["state"],
-                display_name=str(selected_city.get("display_name") or ""),
-            )
-            result_type = cre_result.get("result_type", "failure")
-            current_app.logger.info(
-                "FIRE CRE complete: city=%s state=%s result_type=%s sources=%d",
-                selected_city["city"], selected_city["state"],
-                result_type, len(cre_result.get("research_sources") or []),
-            )
-            if result_type == "success":
-                cre_sentences = cre_result.get("cre_sentences") or ""
-                research_sources = cre_result.get("research_sources") or []
-                cre_generated_at = cre_result.get("cre_generated_at") or cre_generated_at
-                cre_research_version_stored = cre_result.get("cre_research_version")
-            elif result_type == "no_data":
-                # Store a negative-cache timestamp so we don't retry for 24 h
-                import datetime as _dt
-                cre_generated_at = (
-                    _dt.datetime.now(_dt.timezone.utc)
-                    - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
-                    + _dt.timedelta(hours=ai_summary.CRE_NEGATIVE_CACHE_TTL_HOURS)
-                ).isoformat()
-                cre_research_version_stored = cre_result.get("cre_research_version")
-            else:  # failure
-                # Backoff: allow retry after CRE_FAILURE_BACKOFF_MINUTES; store version
-                # so is_cre_cache_current (version+TTL check) provides the backoff window.
-                # Consistent with cached-refresh failure path.
-                import datetime as _dt
-                cre_generated_at = (
-                    _dt.datetime.now(_dt.timezone.utc)
-                    - _dt.timedelta(days=ai_summary.CRE_RESEARCH_TTL_DAYS)
-                    + _dt.timedelta(minutes=ai_summary.CRE_FAILURE_BACKOFF_MINUTES)
-                ).isoformat()
-                cre_research_version_stored = cre_result.get("cre_research_version")
+            else:
+                try:
+                    structured = ai_summary.openai_summary(
+                        api_key=api_key,
+                        model_name=model_name,
+                        selected_city=selected_city,
+                        benchmarks=benchmarks,
+                    )
+                    structured = ai_summary.normalize_summary(structured, selected_city, benchmarks)
+                except Exception:
+                    structured = ai_summary.fallback_summary(selected_city, benchmarks)
 
             summary_text = ai_summary.combined_summary(structured)
-            full_summary = f"{summary_text} {cre_sentences}".strip() if cre_sentences else summary_text
             cache_payload = {
                 "city": selected_city["city"],
                 "state": selected_city["state"],
@@ -511,10 +586,14 @@ def city_summary():
                 "weakness_sentence": structured["weakness_sentence"],
                 "comparison_sentence": structured["comparison_sentence"],
                 "generated_at": generated_at,
-                "cre_sentences_text": cre_sentences,
-                "research_sources_json": json.dumps(research_sources),
-                "cre_generated_at": cre_generated_at,
-                "cre_research_version": cre_research_version_stored,
+                "cre_sentences_text": "",
+                "research_sources_json": "[]",
+                "cre_generated_at": None,
+                "cre_research_version": None,
+                "cre_result_type": None,
+                "cre_failure_category": None,
+                "cre_failure_code": None,
+                "cre_failure_param": None,
             }
 
             try:
@@ -527,9 +606,9 @@ def city_summary():
 
             return jsonify({
                 "status": "ready",
-                "summary": full_summary,
+                "summary": summary_text,
                 "summary_structured": structured,
-                "research_sources": research_sources,
+                "research_sources": [],
                 "generated_at": generated_at,
                 "data_refreshed_at": metadata.get("last_refresh_at"),
                 "cached": False,
@@ -545,6 +624,10 @@ def city_summary():
                 "tracked_city_count": benchmarks.get("tracked_city_count"),
                 "percentile": benchmarks.get("selected_percentile"),
                 "source": "generated",
+                "cre_status": "skipped",
+                "cre_failure_category": None,
+                "cre_failure_code": None,
+                "cre_failure_param": None,
             })
     except Exception as exc:
         current_app.logger.exception("FIRE Metrics city-summary endpoint failed: %s", exc.__class__.__name__)
@@ -556,6 +639,76 @@ def city_summary():
         )
         response["error_code"] = "summary_endpoint_failed"
         return jsonify(response), 500
+
+
+@fire_metrics_bp.route("/api/city-summary-cre", methods=["POST"])
+@login_required
+def city_summary_cre():
+    payload = request.get_json(silent=True) or {}
+    cre_generation_allowed = _cre_generation_allowed(payload)
+    city_key = str(payload.get("city_key") or "").strip()
+    city = str(payload.get("city") or "").strip()
+    state = str(payload.get("state") or "").strip().upper()
+
+    if not city_key and (not city or not state):
+        return jsonify({
+            "status": "error",
+            "error_code": "invalid_city_identifier",
+            "user_message": "City identifier is required.",
+        }), 400
+
+    try:
+        with db_module.get_connection() as conn:
+            selected_city = db_module.fetch_city_by_summary_identity(
+                conn,
+                city_key=city_key or None,
+                city=city or None,
+                state=state or None,
+            )
+            if not selected_city:
+                return jsonify({
+                    "status": "error",
+                    "error_code": "city_not_found",
+                    "user_message": "City not found in tracked FIRE Metrics data.",
+                }), 404
+
+            all_cities = db_module.fetch_all_included_cities(conn)
+            metadata = db_module.get_metadata(conn)
+            benchmarks = ai_summary.compute_benchmarks(selected_city, all_cities)
+            model_name = _summary_model_name()
+            fingerprint_input = ai_summary.fingerprint_payload(
+                selected_city=selected_city,
+                benchmarks=benchmarks,
+                model_name=model_name,
+                refresh_last_at=metadata.get("last_refresh_at"),
+            )
+            data_fingerprint = ai_summary.build_fingerprint(fingerprint_input)
+
+            cre_payload = _cre_payload_for_city(
+                conn,
+                selected_city=selected_city,
+                data_fingerprint=data_fingerprint,
+                model_name=model_name,
+                cre_generation_allowed=cre_generation_allowed,
+            )
+
+            return jsonify({
+                "status": "ready",
+                "city_key": ai_summary.city_key(selected_city),
+                "cre_status": cre_payload.get("cre_status") or "skipped",
+                "cre_summary": cre_payload.get("cre_summary") or "",
+                "research_sources": cre_payload.get("research_sources") or [],
+                "cre_failure_category": cre_payload.get("cre_failure_category"),
+                "cre_failure_code": cre_payload.get("cre_failure_code"),
+                "cre_failure_param": cre_payload.get("cre_failure_param"),
+            })
+    except Exception as exc:
+        current_app.logger.exception("FIRE Metrics city-summary-cre endpoint failed: %s", exc.__class__.__name__)
+        return jsonify({
+            "status": "error",
+            "error_code": "cre_endpoint_failed",
+            "user_message": "Institutional research is currently unavailable.",
+        }), 500
 
 
 @fire_metrics_bp.route("/refresh-status")

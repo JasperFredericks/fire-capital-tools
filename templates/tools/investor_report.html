@@ -143,7 +143,11 @@
         </div>
         <div class="form-group" style="margin-bottom:0;">
           <label class="form-label" for="promote_gp_pct">GP Promote (%)</label>
-          <input class="form-input" type="text" id="promote_gp_pct" name="promote_gp_pct" value="20">
+          {# Prefilled from the module default so the form and the stored default
+   cannot disagree -- hardcoding it here is what left this at 20 after
+   the default moved to 30. #}
+          <input class="form-input" type="text" id="promote_gp_pct" name="promote_gp_pct"
+                 value="{{ '{:g}'.format(default_promote_gp_pct) }}">
         </div>
         <button type="submit" class="btn btn-primary">Create</button>
       </div>

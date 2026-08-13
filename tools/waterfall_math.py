@@ -64,10 +64,17 @@ IRR_QUANTIZATION_BOUND = 1e-6
 PREF_CONVENTION_ACCRUAL = "accrual"
 PREF_CONVENTION_IRR_LOOKBACK = "irr_lookback"   # not implemented in the beta
 
+# Fallback tiers for a terms dict that carries none. FIRE Capital's stated
+# standard promote split is 70/30; it is a default only, and every stored
+# scenario supplies its own tier rows rather than falling back to these.
+DEFAULT_PROMOTE_LP_PCT = 70.0
+DEFAULT_PROMOTE_GP_PCT = 30.0
+
 DEFAULT_TIERS = (
     {"sort_order": 0, "tier_type": TIER_RETURN_OF_CAPITAL, "lp_share_pct": 100.0, "gp_share_pct": 0.0},
     {"sort_order": 1, "tier_type": TIER_PREF, "lp_share_pct": 100.0, "gp_share_pct": 0.0},
-    {"sort_order": 2, "tier_type": TIER_PROMOTE, "lp_share_pct": 80.0, "gp_share_pct": 20.0},
+    {"sort_order": 2, "tier_type": TIER_PROMOTE,
+     "lp_share_pct": DEFAULT_PROMOTE_LP_PCT, "gp_share_pct": DEFAULT_PROMOTE_GP_PCT},
 )
 
 

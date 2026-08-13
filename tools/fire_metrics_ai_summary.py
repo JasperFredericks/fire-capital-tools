@@ -12,11 +12,11 @@ PROMPT_VERSION = "fire_metrics_summary_v5"
 SUMMARY_SCHEMA_NAME = "fire_metrics_market_overview"
 
 CRE_RESEARCH_VERSION = "cre_v3"  # increment to bust stale cached broken results
-CRE_RESEARCH_TTL_DAYS = 7
+CRE_RESEARCH_TTL_DAYS = 30
 CRE_NEGATIVE_CACHE_TTL_HOURS = 24   # no-useful-result cache: try again after 24 h
 CRE_FAILURE_BACKOFF_MINUTES = 30    # API error backoff: retry after 30 min
 
-# Approved CRE publisher domains — server-side validation; also sent as allowed_domains hint
+# Approved CRE publisher domains — server-side validation of returned sources
 CRE_ALLOWED_DOMAINS: tuple[str, ...] = (
     "costar.com",
     "yardimatrix.com",
@@ -1577,7 +1577,45 @@ def openai_cre_research(
         "research_sources": [],
         "cre_generated_at": utc_now_iso(),
         "cre_research_version": CRE_RESEARCH_VERSION,
+        "failure_category": None,
+        "failure_code": None,
+        "failure_param": None,
+        "failure_message": None,
     }
+
+    def _failure_category_from_exception(exc: Exception) -> str:
+        # Keep diagnostics non-secret by returning only coarse categories.
+        try:
+            from openai import (
+                APIConnectionError,
+                APIStatusError,
+                APITimeoutError,
+                AuthenticationError,
+                BadRequestError,
+                PermissionDeniedError,
+                RateLimitError,
+            )
+        except Exception:
+            return "openai_exception"
+
+        if isinstance(exc, AuthenticationError):
+            return "auth_error"
+        if isinstance(exc, PermissionDeniedError):
+            return "permission_error"
+        if isinstance(exc, RateLimitError):
+            return "rate_limit"
+        if isinstance(exc, APITimeoutError):
+            return "timeout"
+        if isinstance(exc, APIConnectionError):
+            return "network_error"
+        if isinstance(exc, BadRequestError):
+            return "bad_request"
+        if isinstance(exc, APIStatusError):
+            status = getattr(exc, "status_code", None)
+            if status is not None:
+                return f"api_status_{status}"
+            return "api_status_error"
+        return "unexpected_exception"
 
     try:
         client = OpenAI(api_key=api_key)
@@ -1595,14 +1633,16 @@ def openai_cre_research(
             f"Colliers, CBRE, JLL, Cushman & Wakefield, Newmark, Berkadia, Freddie Mac Multifamily, "
             f"CommercialEdge. "
             f"Prefer research from the past 12 months; if unavailable, use up to 18-24 months old. "
-            f"Return 1-2 concise factual sentences on: vacancy/occupancy, rent growth, "
-            f"new supply/deliveries, absorption, investment/transaction activity, or cap rates. "
+            f"Write a synthesized institutional CRE summary in 3-5 sentences and about 100-150 words maximum. "
+            f"Paraphrase findings across reports instead of listing each report separately. "
+            f"Prioritize only decision-useful points on multifamily vacancy/occupancy, rent growth, "
+            f"new supply/deliveries/construction, absorption, and major market direction. "
+            f"Avoid quarter-by-quarter repetition, long excerpts, and raw URLs in prose. "
             f"Output only the word NONE if no useful approved-source research is found."
         )
 
         tool_config: dict[str, Any] = {
             "type": "web_search",
-            "filters": {"allowed_domains": list(CRE_ALLOWED_DOMAINS)},
             "search_context_size": "low",
         }
 
@@ -1611,8 +1651,29 @@ def openai_cre_research(
             tools=[tool_config],
             tool_choice="required",
             include=["web_search_call.action.sources"],
-            input=[{"role": "user", "content": [{"type": "input_text", "text": search_prompt}]}],
+            # Keep request shape canonical to reduce schema drift risk.
+            input=search_prompt,
         )
+
+        response_error = _safe_get(response, "error", None)
+        err_code_raw = _safe_get(response_error, "code", None) if response_error is not None else None
+        err_msg_raw = _safe_get(response_error, "message", None) if response_error is not None else None
+        err_code = err_code_raw.strip() if isinstance(err_code_raw, str) else ""
+        err_msg = err_msg_raw.strip() if isinstance(err_msg_raw, str) else ""
+        if err_code or err_msg:
+            failure_category = f"response_error_{err_code}" if err_code else "response_error"
+            log.warning(
+                "FIRE CRE response error: city_key=%s|%s category=%s",
+                city, state, failure_category,
+            )
+            return {
+                **_result_base,
+                "result_type": "failure",
+                "failure_category": failure_category,
+                "failure_code": err_code or None,
+                "failure_param": None,
+                "failure_message": (" ".join(err_msg.split())[:200] if err_msg else None),
+            }
 
         output_items = _safe_get(response, "output", None) or []
 
@@ -1698,8 +1759,23 @@ def openai_cre_research(
             if len(validated_sources) >= 3:
                 break
 
-        # Strip citation markers; check for no-data sentinel
+        # Strip citation markers/raw URLs and keep response concise for UI readability.
         cre_sentences = re.sub(r"\[\d+\]", "", raw_text).strip()
+        cre_sentences = re.sub(r"https?://\S+", "", cre_sentences).strip()
+        cre_sentences = re.sub(r"\s+", " ", cre_sentences).strip()
+        if cre_sentences:
+            sentence_parts = [
+                part.strip()
+                for part in re.split(r"(?<=[.!?])\s+", cre_sentences)
+                if part.strip()
+            ]
+            if len(sentence_parts) > 5:
+                cre_sentences = " ".join(sentence_parts[:5]).strip()
+            words = cre_sentences.split()
+            if len(words) > 150:
+                cre_sentences = " ".join(words[:150]).rstrip(" ,;:")
+                if cre_sentences and cre_sentences[-1] not in ".!?":
+                    cre_sentences += "."
         if cre_sentences.upper() == "NONE" or not cre_sentences:
             cre_sentences = ""
 
@@ -1713,6 +1789,7 @@ def openai_cre_research(
             result_type = "success"
         else:
             result_type = "no_data"
+            cre_sentences = "No relevant research from approved sources."
 
         return {
             **_result_base,
@@ -1720,14 +1797,29 @@ def openai_cre_research(
             "research_sources": validated_sources,
             "cre_generated_at": utc_now_iso(),
             "result_type": result_type,
+            "failure_category": None,
+            "failure_code": None,
+            "failure_param": None,
+            "failure_message": None,
         }
 
     except Exception as exc:
+        failure_category = _failure_category_from_exception(exc)
+        failure_code = str(getattr(exc, "code", "") or "").strip() or None
+        failure_param = str(getattr(exc, "param", "") or "").strip() or None
+        failure_message = " ".join(str(getattr(exc, "message", "") or "").split())[:200] or None
         log.warning(
-            "FIRE CRE failed: city_key=%s|%s error=%s: %s",
-            city, state, type(exc).__name__, str(exc)[:200],
+            "FIRE CRE failed: city_key=%s|%s category=%s code=%s param=%s error=%s",
+            city, state, failure_category, failure_code, failure_param, type(exc).__name__,
         )
-        return {**_result_base, "result_type": "failure"}
+        return {
+            **_result_base,
+            "result_type": "failure",
+            "failure_category": failure_category,
+            "failure_code": failure_code,
+            "failure_param": failure_param,
+            "failure_message": failure_message,
+        }
 
 
 

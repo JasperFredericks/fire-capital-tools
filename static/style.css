@@ -634,7 +634,10 @@ a { color: inherit; text-decoration: none; }
 .upload-zone {
   border: 2px dashed #d1d5db;
   border-radius: 12px;
-  padding: 52px 32px;
+  /* Was 52px 32px, which made the drop target ~300px tall and the visual
+     centre of gravity of the whole page. Sized to read as a control now,
+     not a canvas. .upload-zone is used only by Weekly Property Summary. */
+  padding: 26px 24px;
   text-align: center;
   cursor: pointer;
   transition: border-color 0.2s, background 0.2s;
@@ -1410,6 +1413,42 @@ hr.divider {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
+/* Deal Dive filter box. New selectors rather than changes to .form-input,
+   which 20+ templates share -- the icon inset is the only difference. */
+/* Outlier badge on a rent comp whose rent is far from the median of the
+   comps currently shown. New selector; shares no class with anything. */
+.rc-outlier-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  white-space: nowrap;
+}
+
+.deal-search-wrap {
+  position: relative;
+}
+
+.deal-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  color: var(--fire-muted);
+  pointer-events: none;
+}
+
+.deal-search-input {
+  padding-left: 34px;
+}
+
 .form-input:focus {
   border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59,130,246,0.12);
@@ -1728,6 +1767,25 @@ hr.divider {
   padding: 16px 18px 12px;
 }
 
+.fire-ai-overview-section {
+  padding-bottom: 4px;
+}
+
+.fire-ai-cre-section {
+  border-top: 1px solid #d7e2f4;
+  margin: 0 14px;
+  padding: 10px 0 6px;
+}
+
+.fire-ai-overview-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #1a2744;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 0 18px;
+}
+
 .fire-ai-overview-meta {
   font-size: 11px;
   color: #64748b;
@@ -1735,7 +1793,7 @@ hr.divider {
 }
 
 .fire-ai-overview-sources {
-  margin: 0 16px 16px;
+  margin: 0 16px 12px;
   padding: 12px 14px;
   border-radius: 8px;
   background: #f0f4fb;
@@ -2117,6 +2175,16 @@ hr.divider {
   backdrop-filter: blur(6px);
 }
 
+.fire-city-card.fire-city-card-left {
+  left: 12px;
+  right: auto;
+}
+
+.fire-city-card.fire-city-card-right {
+  right: 12px;
+  left: auto;
+}
+
 .fcc-header {
   display: flex;
   align-items: flex-start;
@@ -2209,6 +2277,12 @@ hr.divider {
     max-height: 46%;
     overflow-y: auto;
   }
+
+  .fire-city-card.fire-city-card-left,
+  .fire-city-card.fire-city-card-right {
+    right: 8px;
+    left: 8px;
+  }
 }
 
 .stat-box-freshness {
@@ -2255,14 +2329,41 @@ hr.divider {
   transition: background 0.6s ease;
 }
 
-/* white center cutout */
+/* White centre cutout.
+   Must be a CIRCLE, so it is sized explicitly rather than inset from all
+   four sides: the gauge box is 100x54 (a half of a 100px circle), so
+   insetting 14px top AND bottom left a 26px-tall hole inside a 100px-wide
+   ring -- visibly an egg. Fixing width/height to 72px keeps it round and
+   concentric with the arc. */
 .occ-gauge::after {
   content: '';
   position: absolute;
-  left: 14px; right: 14px;
-  top: 14px; bottom: 14px;
+  left: 14px;
+  top: 14px;
+  width: 72px;
+  height: 72px;
   background: #fff;
   border-radius: 50%;
+}
+
+/* Weekly Property Summary results only. The occupancy tile carries a gauge
+   and is roughly twice the height of its neighbours, which left the row
+   bottom-aligned and ragged. Scoped under .result-panel deliberately:
+   .stats-grid and .stat-box are shared with Scorecard Pro, Deal Analyzer,
+   Underwriting, Site DD, Deal Dive, Rent Comps and Investor Report, none of
+   which should shift. */
+.result-panel .stats-grid {
+  align-items: stretch;
+}
+
+.result-panel .stat-box {
+  display: flex;
+  flex-direction: column;
+  min-height: 132px;
+}
+
+.result-panel .stat-box .stat-box-sub {
+  margin-top: auto;
 }
 
 .occ-gauge-value {
@@ -2680,3 +2781,204 @@ hr.divider {
 .deal-status-closed { background: #dcfce7; border-color: #86efac; color: #166534; }
 .deal-status-passed { background: #fee2e2; border-color: #fca5a5; color: #991b1b; }
 .deal-status-archived { background: #f3f4f6; border-color: #e5e7eb; color: #374151; }
+
+/* ── Quick Deal Analyzer grading ─────────────────────────────────────────
+   Four bands, deliberately using the same colour vocabulary as the deal
+   status chips above so green/red mean the same thing across the app.
+   The colour is a prompt to look closer, not a verdict -- the thresholds
+   behind it are unconfirmed and the page says so beside every use. */
+.qa-grade { border-left: 4px solid transparent; }
+.qa-grade-green  { border-left-color: #16a34a; background: #f0fdf4; }
+.qa-grade-yellow { border-left-color: #ca8a04; background: #fefce8; }
+.qa-grade-orange { border-left-color: #ea580c; background: #fff7ed; }
+.qa-grade-red    { border-left-color: #dc2626; background: #fef2f2; }
+
+.qa-grade-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.qa-grade-dot.qa-grade-green  { background: #16a34a; }
+.qa-grade-dot.qa-grade-yellow { background: #ca8a04; }
+.qa-grade-dot.qa-grade-orange { background: #ea580c; }
+.qa-grade-dot.qa-grade-red    { background: #dc2626; }
+
+/* ── Site DD unit walkthrough (mobile-first) ─────────────────────────────
+   This is the one screen in the app whose primary device is a phone held
+   in one hand, in a unit, moving room to room. Everything below is sized
+   for a thumb first and merely tolerated by a mouse, which is the reverse
+   of the rest of the app.
+
+   44px is the minimum touch target: the figure Apple's HIG and WCAG 2.5.5
+   both land on, and the size below which a thumb starts missing. Nothing
+   interactive in this section is smaller. */
+.sdd-touch,
+.sdd-cond-btn,
+.sdd-room-btn,
+.sdd-nav-btn {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+/* The room-type pad: tap one, it becomes the next room in the walk order.
+   A grid rather than a select, because picking from a dropdown while
+   holding a phone one-handed is exactly the precision tap this avoids. */
+.sdd-room-pad {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 10px;
+}
+.sdd-room-btn {
+  width: 100%;
+  padding: 14px 10px;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 10px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #1a2744;
+  cursor: pointer;
+}
+.sdd-room-btn:active { background: #eef2ff; }
+
+/* One item, one row of five condition buttons. Tap-first: no dropdown,
+   no precision required. They wrap rather than shrink below 44px. */
+.sdd-item {
+  padding: 14px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+.sdd-item:last-child { border-bottom: 0; }
+.sdd-item-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 8px;
+}
+.sdd-item-hint {
+  font-size: 12.5px;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+.sdd-cond-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sdd-cond-btn {
+  flex: 1 1 auto;
+  padding: 11px 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  border-radius: 9px;
+  border: 1.5px solid #d1d5db;
+  background: #fff;
+  color: #4b5563;
+  cursor: pointer;
+  user-select: none;
+}
+/* Selection is driven by the radio's :checked state, so it works with no
+   JavaScript at all -- an inspector in a basement with no signal still
+   gets a working form. */
+.sdd-cond-input { position: absolute; opacity: 0; pointer-events: none; }
+.sdd-cond-input:checked + .sdd-cond-btn {
+  color: #fff;
+  border-color: transparent;
+}
+.sdd-cond-input:focus-visible + .sdd-cond-btn { outline: 2px solid #2563eb; outline-offset: 2px; }
+.sdd-cond-input[value="excellent"]:checked + .sdd-cond-btn { background: #059669; }
+.sdd-cond-input[value="good"]:checked + .sdd-cond-btn { background: #16a34a; }
+.sdd-cond-input[value="satisfactory"]:checked + .sdd-cond-btn { background: #ca8a04; }
+.sdd-cond-input[value="repair"]:checked + .sdd-cond-btn { background: #ea580c; }
+.sdd-cond-input[value="replace"]:checked + .sdd-cond-btn { background: #b91c1c; }
+.sdd-cond-input[value=""]:checked + .sdd-cond-btn { background: #6b7280; }
+/* Choice items reuse the same control with a neutral selected colour --
+   "Hookup only" is a fact, not a severity, and colouring it like one
+   would imply a judgement the inspector did not make. */
+.sdd-choice-input:checked + .sdd-cond-btn { background: #1a2744; color: #fff; border-color: transparent; }
+
+.sdd-note {
+  width: 100%;
+  margin-top: 8px;
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 15px;          /* 16px or above stops iOS zooming the page on focus */
+  border: 1px solid #d1d5db;
+  border-radius: 9px;
+  box-sizing: border-box;
+}
+
+/* Sticky room navigation. The walkthrough is sequential, so Next Room is
+   always within thumb reach rather than at the bottom of a long scroll. */
+.sdd-navbar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 10px;
+  padding: 10px 0;
+  background: linear-gradient(to top, #f4f6fb 70%, rgba(244,246,251,0));
+}
+.sdd-nav-btn {
+  flex: 1 1 0;
+  padding: 13px 10px;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 10px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #1a2744;
+  text-decoration: none;
+  cursor: pointer;
+}
+.sdd-nav-btn--primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.sdd-nav-btn[aria-disabled="true"] { opacity: 0.4; pointer-events: none; }
+
+.sdd-room-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #e5e7eb;
+  text-decoration: none;
+}
+.sdd-seq {
+  flex: 0 0 auto;
+  width: 30px; height: 30px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #1a2744;
+  font-size: 13px;
+  font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* Below 480px: one column everywhere, and the condition buttons get a
+   full row each rather than being squeezed under 44px. */
+@media (max-width: 480px) {
+  .sdd-room-pad { grid-template-columns: repeat(2, 1fr); }
+  .sdd-cond-btn { flex: 1 1 30%; font-size: 13px; padding: 12px 6px; }
+  .sdd-navbar { padding-bottom: 14px; }
+}
+
+/* Site DD forms that must survive a 375px phone. The tool's entry point
+   used a fixed four-column grid, which at phone width pushed the date
+   input over the submit button so the button could not be tapped at all
+   -- you cannot start a mobile walkthrough if you cannot create the
+   assessment on the phone. One column below 640px, wrapping above it. */
+.sdd-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+@media (max-width: 640px) {
+  .sdd-form-grid { grid-template-columns: 1fr; }
+  .sdd-form-grid > button,
+  .sdd-form-grid > .btn { width: 100%; }
+}

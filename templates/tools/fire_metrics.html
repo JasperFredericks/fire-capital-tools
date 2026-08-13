@@ -171,8 +171,15 @@
 <div class="card" id="fire-ai-overview-card">
   <div id="fire-ai-overview" class="fire-ai-overview" aria-live="polite">
     <div class="fire-ai-overview-title">AI Market Overview</div>
-    <div id="fire-ai-overview-body" class="fire-ai-overview-body">Search a city to generate a screening overview.</div>
-    <div id="fire-ai-overview-sources" class="fire-ai-overview-sources" style="display:none;"></div>
+    <div class="fire-ai-overview-section">
+      <div class="fire-ai-overview-section-title">Market Overview</div>
+      <div id="fire-ai-overview-body" class="fire-ai-overview-body">Search a city to generate a screening overview.</div>
+    </div>
+    <div class="fire-ai-cre-section">
+      <div class="fire-ai-overview-section-title">Institutional CRE Research</div>
+      <div id="fire-ai-cre-body" class="fire-ai-overview-body">Institutional research loads after explicit city selection.</div>
+      <div id="fire-ai-overview-sources" class="fire-ai-overview-sources" style="display:none;"></div>
+    </div>
     <div id="fire-ai-overview-meta" class="fire-ai-overview-meta">AI-generated screening overview based on current FIRE Metrics data.</div>
   </div>
 </div>
@@ -266,6 +273,7 @@
   const searchUrl = "{{ url_for('fire_metrics.search') }}";
   const topCitiesUrl = "{{ url_for('fire_metrics.top_cities') }}";
   const citySummaryUrl = "{{ url_for('fire_metrics.city_summary') }}";
+  const citySummaryCreUrl = "{{ url_for('fire_metrics.city_summary_cre') }}";
   const statusUrl = "{{ url_for('fire_metrics.refresh_status') }}";
   const uploadCrimeUrl = "{{ url_for('fire_metrics.upload_crime_workbook') }}";
   const csrfToken = "{{ csrf_token() }}";
@@ -288,6 +296,7 @@
   const comparisonBody = document.getElementById("comparison-table-body");
   const fireScoreCrimeSourceEl = document.getElementById("fire-score-crime-source");
   const aiOverviewBody = document.getElementById("fire-ai-overview-body");
+  const aiCreBody = document.getElementById("fire-ai-cre-body");
   const aiOverviewSources = document.getElementById("fire-ai-overview-sources");
   const aiOverviewMeta = document.getElementById("fire-ai-overview-meta");
   const mapContainer = document.getElementById("fire-google-map");
@@ -374,6 +383,8 @@
   let lastViewportSignature = "";
   let summaryRequestController = null;
   let summaryRequestSequence = 0;
+  let creRequestController = null;
+  let creRequestSequence = 0;
   let rankingRequestController = null;
   let rankingRequestSequence = 0;
   let activeRankingMetric = "";
@@ -384,6 +395,7 @@
   let pendingCurrentCityPreview = { cityKey: "", panMap: false };
   let lastObservedRefreshAt = initialLastRefreshAt;
   let wasRefreshRunning = Boolean(initiallyRunning);
+  const explicitCreIntent = "explicit_city_selection";
 
   function fmtNum(value) {
     if (value === null || value === undefined || value === "") return "-";
@@ -639,6 +651,10 @@
       summaryRequestController.abort();
       summaryRequestController = null;
     }
+    if (creRequestController) {
+      creRequestController.abort();
+      creRequestController = null;
+    }
     clearOverview();
   }
 
@@ -671,6 +687,7 @@
           panMap: true,
           requestOverview: true,
           scrollAnalyticsRow: true,
+          creSelectionSource: "main_city_search",
         });
       });
       selectButton.addEventListener("keydown", (event) => {
@@ -687,6 +704,7 @@
             panMap: true,
             requestOverview: true,
             scrollAnalyticsRow: true,
+            creSelectionSource: "main_city_search",
           });
           return;
         }
@@ -862,6 +880,7 @@
       panMap: true,
       requestOverview: true,
       scrollAnalyticsRow: true,
+      creSelectionSource: "",
     });
 
     if (focusSource !== "mouse") {
@@ -911,7 +930,9 @@
 
     if (options.requestOverview !== false) {
       clearOverviewImmediate();
-      requestCityOverview(currentCity);
+      requestCityOverview(currentCity, {
+        creSelectionSource: String(options.creSelectionSource || ""),
+      });
     }
 
     renderMapPoints();
@@ -1147,29 +1168,87 @@
     fireCityCard.innerHTML = "";
   }
 
-  function selectedCardPanOffsetX() {
-    if (!mapContainer || !fireCityCard) return 0;
-    if (fireCityCard.style.display === "none") return 0;
+  function setCityCardSide(side) {
+    if (!fireCityCard) return;
+    fireCityCard.classList.remove("fire-city-card-left", "fire-city-card-right");
+    fireCityCard.classList.add(side === "left" ? "fire-city-card-left" : "fire-city-card-right");
+  }
+
+  function markerScreenPositionInMap(marker) {
+    if (!marker || !googleMap || !mapContainer || !window.google || !window.google.maps) return null;
+    const projection = googleMap.getProjection ? googleMap.getProjection() : null;
+    const bounds = googleMap.getBounds ? googleMap.getBounds() : null;
+    if (!projection || !bounds) return null;
 
     const mapRect = mapContainer.getBoundingClientRect();
-    const cardRect = fireCityCard.getBoundingClientRect();
-    if (!mapRect.width || !cardRect.width) return 0;
+    if (!mapRect.width || !mapRect.height) return null;
 
-    // Bottom-sheet style card on mobile should not force horizontal pan.
+    const markerPos = marker.position;
+    if (!markerPos) return null;
+    const latLng = (typeof markerPos.lat === "function" && typeof markerPos.lng === "function")
+      ? markerPos
+      : new google.maps.LatLng(markerPos.lat, markerPos.lng);
+
+    const worldMarker = projection.fromLatLngToPoint(latLng);
+    const worldNE = projection.fromLatLngToPoint(bounds.getNorthEast());
+    const worldSW = projection.fromLatLngToPoint(bounds.getSouthWest());
+    if (!worldMarker || !worldNE || !worldSW) return null;
+
+    let westX = worldSW.x;
+    let eastX = worldNE.x;
+    let markerX = worldMarker.x;
+    if (eastX < westX) eastX += 1;
+    if (markerX < westX) markerX += 1;
+    if (markerX > eastX) markerX -= 1;
+
+    const widthWorld = eastX - westX;
+    const heightWorld = worldSW.y - worldNE.y;
+    if (!widthWorld || !heightWorld) return null;
+
+    return {
+      x: ((markerX - westX) / widthWorld) * mapRect.width,
+      y: ((worldMarker.y - worldNE.y) / heightWorld) * mapRect.height,
+      mapWidth: mapRect.width,
+      mapHeight: mapRect.height,
+    };
+  }
+
+  function chooseDesktopCardSide(marker) {
+    const markerPos = markerScreenPositionInMap(marker);
+    if (!markerPos) return "right";
+    const usableLeft = 12;
+    const usableRight = Math.max(usableLeft + 1, markerPos.mapWidth - 12);
+    const usableMid = (usableLeft + usableRight) / 2;
+    return markerPos.x >= usableMid ? "left" : "right";
+  }
+
+  function minimalOverlapPanOffsetX(marker) {
+    if (!mapContainer || !fireCityCard || fireCityCard.style.display === "none") return 0;
+    const markerPos = markerScreenPositionInMap(marker);
+    if (!markerPos) return 0;
+
+    const cardRect = fireCityCard.getBoundingClientRect();
+    const mapRect = mapContainer.getBoundingClientRect();
+    if (!cardRect.width || !cardRect.height || !mapRect.width || !mapRect.height) return 0;
+
+    // Bottom-sheet card on mobile should not trigger lateral pan.
     if (cardRect.width >= mapRect.width * 0.75) return 0;
 
-    const overlapsMapHorizontally = cardRect.right > mapRect.left && cardRect.left < mapRect.right;
-    if (!overlapsMapHorizontally) return 0;
+    const markerPageX = mapRect.left + markerPos.x;
+    const markerPageY = mapRect.top + markerPos.y;
+    const safeGap = Math.max(16, Math.round(mapRect.width * 0.025));
 
-    const cardOnRight = cardRect.left >= (mapRect.left + mapRect.width * 0.45);
-    if (!cardOnRight) return 0;
+    const overlapsX = markerPageX >= (cardRect.left - safeGap) && markerPageX <= (cardRect.right + safeGap);
+    const overlapsY = markerPageY >= (cardRect.top - safeGap) && markerPageY <= (cardRect.bottom + safeGap);
+    if (!overlapsX || !overlapsY) return 0;
 
-    const safeGap = Math.max(18, Math.round(mapRect.width * 0.03));
-    const maxAllowedMarkerX = (cardRect.left - mapRect.left) - safeGap;
-    const centeredMarkerX = mapRect.width / 2;
-    const requiredOffset = centeredMarkerX - maxAllowedMarkerX;
-    const maxOffset = Math.round(mapRect.width * 0.4);
-    return Math.max(0, Math.min(Math.round(requiredOffset), maxOffset));
+    const cardOnLeft = fireCityCard.classList.contains("fire-city-card-left");
+    if (cardOnLeft) {
+      const targetPageX = cardRect.right + safeGap;
+      return markerPageX - targetPageX;
+    }
+    const targetPageX = cardRect.left - safeGap;
+    return markerPageX - targetPageX;
   }
 
   function openCurrentCityPreview(panMap = false) {
@@ -1184,13 +1263,15 @@
     clearPendingCurrentCityPreview();
     showCityCard(currentCity);
 
+    const side = chooseDesktopCardSide(entry.marker);
+    setCityCardSide(side);
+
     if (panMap && entry.marker.position) {
-      googleMap.panTo(entry.marker.position);
       const zoom = googleMap.getZoom() || 3;
       if (zoom < 4) googleMap.setZoom(4);
       if (zoom > 6) googleMap.setZoom(6);
-      const panOffsetX = selectedCardPanOffsetX();
-      if (panOffsetX > 0) {
+      const panOffsetX = minimalOverlapPanOffsetX(entry.marker);
+      if (Math.abs(panOffsetX) >= 1) {
         googleMap.panBy(panOffsetX, 0);
       }
     }
@@ -1229,6 +1310,7 @@
       panMap: true,
       requestOverview: true,
       scrollAnalyticsRow: true,
+      creSelectionSource: "",
     });
     return true;
   }
@@ -1375,6 +1457,7 @@
         panMap: true,
         requestOverview: true,
         scrollAnalyticsRow: true,
+        creSelectionSource: "",
       });
     });
 
@@ -1389,6 +1472,7 @@
           panMap: true,
           requestOverview: true,
           scrollAnalyticsRow: true,
+          creSelectionSource: "",
         });
       }
       if (event.key === "Escape") {
@@ -1731,6 +1815,7 @@
           panMap: true,
           requestOverview: true,
           scrollAnalyticsRow: false,
+          creSelectionSource: "city_analytics",
         });
       }
       tr.addEventListener("click", (event) => {
@@ -1853,21 +1938,35 @@
     aiOverviewMeta.textContent = text;
   }
 
+  function setCreBody(text) {
+    if (!aiCreBody) return;
+    aiCreBody.textContent = text;
+  }
+
+  function clearCreSources() {
+    if (!aiOverviewSources) return;
+    aiOverviewSources.innerHTML = "";
+    aiOverviewSources.style.display = "none";
+  }
+
+  function setCreIdle() {
+    setCreBody("Institutional research loads after explicit city selection.");
+    clearCreSources();
+  }
+
+  function setCreLoading() {
+    setCreBody("Searching approved institutional research…");
+    clearCreSources();
+  }
+
   function clearOverview() {
     setOverviewBody("Search a city to generate a screening overview.");
-    if (aiOverviewSources) {
-      aiOverviewSources.innerHTML = "";
-      aiOverviewSources.style.display = "none";
-    }
+    setCreIdle();
     setOverviewMeta("AI-generated screening overview based on current FIRE Metrics data.");
   }
 
   function setOverviewLoading() {
     setOverviewBody("Generating market overview...");
-    if (aiOverviewSources) {
-      aiOverviewSources.innerHTML = "";
-      aiOverviewSources.style.display = "none";
-    }
     setOverviewMeta("AI-generated screening overview based on current FIRE Metrics data.");
   }
 
@@ -1881,50 +1980,10 @@
   function renderOverviewPayload(payload) {
     if (!payload || !payload.summary) {
       setOverviewBody("Overview unavailable for this city right now.");
-      if (aiOverviewSources) {
-        aiOverviewSources.innerHTML = "";
-        aiOverviewSources.style.display = "none";
-      }
       setOverviewMeta("AI-generated screening overview based on current FIRE Metrics data.");
       return;
     }
     setOverviewBody(payload.summary);
-
-    // CRE research sources
-    const sources = Array.isArray(payload.research_sources) ? payload.research_sources : [];
-    if (aiOverviewSources) {
-      if (sources.length) {
-        const validSources = sources.filter((s) => s && s.url && s.publisher);
-        if (validSources.length) {
-          const label = document.createElement("div");
-          label.className = "fire-ai-sources-label";
-          label.textContent = "CRE research:";
-          const list = document.createElement("ul");
-          list.className = "fire-ai-sources-list";
-          validSources.forEach((src) => {
-            const li = document.createElement("li");
-            const a = document.createElement("a");
-            a.href = escapeHtml(src.url);
-            a.target = "_blank";
-            a.rel = "noopener noreferrer";
-            const dateText = src.published_date ? ` — ${escapeHtml(src.published_date)}` : "";
-            a.textContent = `${escapeHtml(src.publisher)}${dateText}`;
-            li.appendChild(a);
-            list.appendChild(li);
-          });
-          aiOverviewSources.innerHTML = "";
-          aiOverviewSources.appendChild(label);
-          aiOverviewSources.appendChild(list);
-          aiOverviewSources.style.display = "block";
-        } else {
-          aiOverviewSources.innerHTML = "";
-          aiOverviewSources.style.display = "none";
-        }
-      } else {
-        aiOverviewSources.innerHTML = "";
-        aiOverviewSources.style.display = "none";
-      }
-    }
 
     const cacheLabel = payload.cached ? "Cached" : "Fresh";
     const stamp = timestampLabel(payload.generated_at);
@@ -1935,7 +1994,122 @@
     setOverviewMeta(parts.join(" | "));
   }
 
-  async function requestCityOverview(city) {
+  function renderCreSources(sources) {
+    if (!aiOverviewSources) return;
+    const validSources = (Array.isArray(sources) ? sources : [])
+      .filter((src) => src && src.url && src.publisher)
+      .slice(0, 3);
+    const deduped = [];
+    const seen = new Set();
+    validSources.forEach((src) => {
+      const key = String(src.publisher || "").trim().toLowerCase();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      deduped.push(src);
+    });
+
+    if (!deduped.length) {
+      clearCreSources();
+      return;
+    }
+
+    const label = document.createElement("div");
+    label.className = "fire-ai-sources-label";
+    label.textContent = "Sources";
+    const list = document.createElement("ul");
+    list.className = "fire-ai-sources-list";
+    deduped.forEach((src) => {
+      const li = document.createElement("li");
+      if (src.url) {
+        const a = document.createElement("a");
+        a.href = src.url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.textContent = String(src.publisher || "").trim();
+        li.appendChild(a);
+      } else {
+        li.textContent = String(src.publisher || "").trim();
+      }
+      list.appendChild(li);
+    });
+
+    aiOverviewSources.innerHTML = "";
+    aiOverviewSources.appendChild(label);
+    aiOverviewSources.appendChild(list);
+    aiOverviewSources.style.display = "block";
+  }
+
+  function renderCrePayload(payload) {
+    const status = String(payload?.cre_status || "").trim().toLowerCase();
+    if (status === "success") {
+      setCreBody(String(payload.cre_summary || ""));
+      renderCreSources(payload.research_sources || []);
+      return;
+    }
+    if (status === "no_data") {
+      setCreBody("No relevant research from approved sources.");
+      clearCreSources();
+      return;
+    }
+    if (status === "failure") {
+      setCreBody("Institutional research is temporarily unavailable.");
+      clearCreSources();
+      return;
+    }
+    setCreIdle();
+  }
+
+  async function requestCreResearch(city, options = {}) {
+    if (!city) {
+      setCreIdle();
+      return;
+    }
+
+    if (creRequestController) {
+      creRequestController.abort();
+    }
+
+    creRequestController = new AbortController();
+    creRequestSequence += 1;
+    const mySequence = creRequestSequence;
+    const creSelectionSource = String(options.creSelectionSource || "").trim();
+    const creGenerationIntent = creSelectionSource ? explicitCreIntent : "";
+
+    setCreLoading();
+
+    try {
+      const res = await fetch(citySummaryCreUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body: JSON.stringify({
+          city_key: city.city_key || "",
+          city: getCityField(city),
+          state: normalizeStateToken(getStateField(city)),
+          cre_generation_intent: creGenerationIntent,
+          cre_selection_source: creSelectionSource,
+        }),
+        signal: creRequestController.signal,
+      });
+
+      if (mySequence !== creRequestSequence) return;
+      const payload = await res.json();
+      if (mySequence !== creRequestSequence) return;
+      renderCrePayload(payload);
+    } catch (err) {
+      if (err && err.name === "AbortError") {
+        return;
+      }
+      if (mySequence !== creRequestSequence) return;
+      setCreBody("Institutional research is temporarily unavailable.");
+      clearCreSources();
+    }
+  }
+
+  async function requestCityOverview(city, options = {}) {
     if (!city) {
       clearOverview();
       return;
@@ -1948,6 +2122,12 @@
     summaryRequestController = new AbortController();
     summaryRequestSequence += 1;
     const mySequence = summaryRequestSequence;
+    const creSelectionSource = String(options.creSelectionSource || "").trim();
+    if (creSelectionSource) {
+      setCreLoading();
+    } else {
+      setCreIdle();
+    }
 
     setOverviewLoading();
 
@@ -1972,6 +2152,9 @@
       const payload = await res.json();
       if (mySequence !== summaryRequestSequence) return;
       renderOverviewPayload(payload);
+      if (creSelectionSource) {
+        requestCreResearch(city, { creSelectionSource });
+      }
     } catch (err) {
       if (err && err.name === "AbortError") {
         return;
@@ -1987,7 +2170,7 @@
     renderActiveCityMeta(currentCity);
 
     syncComparisonAddButton();
-    requestCityOverview(currentCity);
+    requestCityOverview(currentCity, { creSelectionSource: "" });
     renderMapPoints();
   }
 
@@ -2020,7 +2203,15 @@
         if (analyticsResult.addedCount) {
           showMessage(`Added ${analyticsResult.addedCount} city to City Analytics: ${summarizeCities(analyticsResult.addedLabels)}.`, "success");
         }
-        selectCurrentSearchCity(key);
+        selectCurrentSearchCity(key, {
+          city: foundCity,
+          ensureAnalyticsRow: false,
+          openMapPreview: true,
+          panMap: true,
+          requestOverview: true,
+          scrollAnalyticsRow: true,
+          creSelectionSource: "main_city_search",
+        });
         input.value = "";
         return;
       }
@@ -2092,7 +2283,15 @@
     if (foundCities.length) {
       const appendResult = appendToCurrentSearchCities(foundCities);
       const firstCity = appendResult.firstAdded || foundCities[0];
-      selectCurrentSearchCity(stableCityKey(firstCity));
+      selectCurrentSearchCity(stableCityKey(firstCity), {
+        city: firstCity,
+        ensureAnalyticsRow: false,
+        openMapPreview: true,
+        panMap: true,
+        requestOverview: true,
+        scrollAnalyticsRow: true,
+        creSelectionSource: "",
+      });
       input.value = "";
       setCityPickerStatus(`Added ${appendResult.added.length || 0} new searched ${appendResult.added.length === 1 ? "city" : "cities"}.`);
     }
@@ -2214,7 +2413,15 @@
       showMessage(payloadFromServer.user_message || "City found.", "success");
       const bootCity = sanitizeCity(payloadFromServer.city || {});
       appendToCurrentSearchCities([bootCity]);
-      selectCurrentSearchCity(stableCityKey(bootCity));
+      selectCurrentSearchCity(stableCityKey(bootCity), {
+        city: bootCity,
+        ensureAnalyticsRow: false,
+        openMapPreview: true,
+        panMap: true,
+        requestOverview: true,
+        scrollAnalyticsRow: true,
+        creSelectionSource: "",
+      });
     } else if (payloadFromServer.status === "suggestions") {
       showMessage(payloadFromServer.user_message || "No exact match found.", "info");
       renderSuggestions(payloadFromServer.suggestions || []);
@@ -2271,7 +2478,7 @@
     const refreshJustCompleted = previousRunning && !nextRunning;
     const refreshBecameNewer = Boolean(nextRefreshAt) && nextRefreshAt !== previousRefreshAt;
     if (refreshJustCompleted && refreshBecameNewer && currentCity) {
-      requestCityOverview(currentCity);
+      requestCityOverview(currentCity, { creSelectionSource: "" });
     }
   }
 
