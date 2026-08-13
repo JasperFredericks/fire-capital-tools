@@ -1,11 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Deal Analyzer - FIRE Capital Tools{% endblock %}
+{% block title %}Quick Deal Analyzer - FIRE Capital Tools{% endblock %}
 
 {# Money to the nearest dollar, percentages to one decimal, an em dash for
    anything undefined -- same formatting discipline as Deal Dive and Rent
    Comps so figures read consistently across tools. #}
 {% macro money(v) %}{{ '${:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
-{% macro pct(v, dp=1) %}{{ ('{:,.%df}%%' % dp).format(v * 100) if v is not none else '—' }}{% endmacro %}
+{% macro money2(v) %}{{ '${:,.2f}'.format(v) if v is not none else '—' }}{% endmacro %}
+{% macro pct(v, dp=1) %}{{ ('{:,.%df}%%' % dp).format(v) if v is not none else '—' }}{% endmacro %}
 
 {% block content %}
 <div class="page-header">
@@ -15,10 +16,11 @@
     </svg>
     Back to Dashboard
   </a>
-  <h1 class="page-title">Deal Analyzer <span class="tool-tag tag-soon" style="vertical-align:middle; font-size:11px;">Beta</span></h1>
+  <h1 class="page-title">Quick Deal Analyzer <span class="tool-tag tag-soon" style="vertical-align:middle; font-size:11px;">Beta</span></h1>
   <p class="page-subtitle">
-    A quick levered-returns read on one set of assumptions &mdash; not a full pro forma.
-    Unit-level rent rolls, itemized expenses and sensitivity tables belong in the Underwriting tool.
+    What is this property worth? Enter the income and expenses &mdash; or a NOI, or a T12 &mdash;
+    and a target cap rate, and this gives you the price that supports it.
+    For returns with leverage and IRR over a hold, use <a href="{{ url_for('underwriting.index') }}">Underwriting</a>.
   </p>
 </div>
 
@@ -39,179 +41,309 @@
       </div>
     </div>
     <p class="page-subtitle" style="margin:12px 0 0;">
-      These are starting values, not fixed &mdash; edit anything below to test a different scenario.
+      These are starting values, not fixed &mdash; edit anything below to test a different assumption.
       Nothing here writes back to the deal record.
     </p>
   </div>
 {% endif %}
 
+{#
+  ONE form spanning both cards, not two.
+
+  The first cut had a separate upload form that carried its own hidden
+  copies of cap rate, asking price and units. Those copies held whatever
+  the server last rendered, so a cap rate typed in and then followed by a
+  T12 upload was silently replaced by the stale value -- the file
+  imported, and the valuation quietly did not appear. Two inputs with the
+  same name on one page is the bug; one form with two submit buttons is
+  the fix, and the buttons say which action was taken.
+#}
+<form method="POST" enctype="multipart/form-data" id="qa-form"
+      action="{{ url_for('deal_analyzer.index') }}{% if deal_id %}?deal_id={{ deal_id }}{% endif %}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+{% if deal_id %}<input type="hidden" name="deal_id" value="{{ deal_id }}">{% endif %}
+<input type="hidden" name="noi_provenance" id="noi_provenance" value="{{ form.noi_provenance }}">
+<input type="hidden" name="range_pct" id="range_pct" value="{{ form.range_pct }}">
+{# What the last T12 import produced. The "Actuals — from T12" label is
+   only honoured while the visible fields still match these, so editing a
+   figure downgrades the claim instead of letting it stand falsely. #}
+{% for f in ('gross_potential_income', 'vacancy_pct', 'other_income', 'operating_expenses', 'noi_direct') %}
+  <input type="hidden" name="imported_{{ f }}" value="{{ form['imported_' + f] }}">
+{% endfor %}
+
+<!-- ── T12 upload ─────────────────────────────────────────────────────── -->
+<div class="card" id="t12">
+  <div class="scorecard-section-title">Start From a T12 <span class="stat-box-sub" style="font-weight:400;">(optional)</span></div>
+  <p class="page-subtitle" style="margin:10px 0 12px;">
+    Upload twelve months of actuals and the income and expense lines below fill themselves in.
+    The file is read and discarded &mdash; nothing is stored.
+  </p>
+
+  {#
+    The degraded path. A T12 this tool cannot read is not a dead end:
+    the message says what happened, and the form below is untouched and
+    ready to fill in by hand. Same discipline as the empty-filter state
+    in Rent Comps and the zero-matches row in Deal Dive.
+  #}
+  {% if t12_error %}
+    <div class="result-note" style="margin-bottom:12px; border-left:3px solid #d97706;">
+      {{ t12_error }}
+    </div>
+  {% endif %}
+
+  <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+    <input class="form-input" type="file" name="t12" accept=".xlsx,.xlsm" style="max-width:360px;">
+    <button type="submit" name="action" value="import" class="btn btn-ghost">Import T12</button>
+  </div>
+
+  {% if t12_totals %}
+    <div class="stat-box" style="margin-top:14px;">
+      <div class="stat-box-label">Imported {{ t12_totals.months }} months</div>
+      <div class="stat-box-sub" style="margin-top:6px;">
+        Gross potential rent {{ money(t12_totals.gross_potential_income) }}
+        &minus; deductions {{ money(t12_totals.deductions) }}
+        + other income {{ money(t12_totals.other_income) }}
+        = EGI {{ money(t12_totals.effective_gross_income) }}
+        &minus; expenses {{ money(t12_totals.operating_expenses) }}
+        = <strong>NOI {{ money(t12_totals.noi) }}</strong>
+      </div>
+    </div>
+  {% endif %}
+</div>
+
 <!-- ── Assumptions ────────────────────────────────────────────────────── -->
 <div class="card" id="assumptions">
-  <div class="scorecard-section-title">Assumptions</div>
+  <div class="scorecard-section-title">Income &amp; Expenses</div>
 
   {% if error %}
     <div class="result-note" style="margin:12px 0; border-left:3px solid #dc2626;">{{ error }}</div>
   {% endif %}
 
-  <form method="POST" action="{{ url_for('deal_analyzer.index') }}{% if deal_id %}?deal_id={{ deal_id }}{% endif %}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    {% if deal_id %}<input type="hidden" name="deal_id" value="{{ deal_id }}">{% endif %}
-
-    <div class="scorecard-mini-title" style="margin:14px 0 8px;">Purchase</div>
+    <div class="scorecard-mini-title" style="margin:14px 0 8px;">Build the NOI</div>
     <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
       <div class="form-group">
-        <label class="form-label" for="purchase_price">Purchase Price ($)</label>
-        <input class="form-input" type="text" id="purchase_price" name="purchase_price" value="{{ form.purchase_price }}" placeholder="1,000,000" required>
+        <label class="form-label" for="gross_potential_income">Gross Potential Income ($/yr)</label>
+        <input class="form-input" type="text" id="gross_potential_income" name="gross_potential_income" value="{{ form.gross_potential_income }}" placeholder="1,315,737">
+        <span class="stat-box-sub">Every unit rented, all year, at market.</span>
       </div>
       <div class="form-group">
-        <label class="form-label" for="closing_costs_pct">Closing Costs (% of price)</label>
-        <input class="form-input" type="text" id="closing_costs_pct" name="closing_costs_pct" value="{{ form.closing_costs_pct }}">
+        <label class="form-label" for="vacancy_pct">Vacancy &amp; Credit Loss (%)</label>
+        <input class="form-input" type="text" id="vacancy_pct" name="vacancy_pct" value="{{ form.vacancy_pct }}">
+        {#
+          Labelled for what it holds. On a real T12 the gap between gross
+          potential rent and net rental income is vacancy plus loss-to-lease,
+          bad debt, concessions and discounts -- on Eagle Rock, vacancy is
+          only two thirds of it. Calling the field "Vacancy" and filling it
+          with the whole deduction would be mislabelling; calling it
+          "Vacancy" and filling it with vacancy alone would leave the
+          build-up $112,546 above the NOI the same file reports.
+        #}
+        <span class="stat-box-sub">Vacancy, loss-to-lease, bad debt and concessions.</span>
       </div>
       <div class="form-group">
-        <label class="form-label" for="noi_year1">Year-1 NOI ($)</label>
-        <input class="form-input" type="text" id="noi_year1" name="noi_year1" value="{{ form.noi_year1 }}" placeholder="70,000" required>
+        <label class="form-label" for="other_income">Other Income ($/yr)</label>
+        <input class="form-input" type="text" id="other_income" name="other_income" value="{{ form.other_income }}" placeholder="76,014">
+        <span class="stat-box-sub">Fees, laundry, parking, pet rent.</span>
       </div>
     </div>
 
-    <div class="scorecard-mini-title" style="margin:8px 0;">Financing</div>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:14px; margin-top:4px;">
+      <div class="form-group">
+        <label class="form-label" for="operating_expenses">Operating Expenses</label>
+        <div style="display:flex; gap:8px;">
+          <input class="form-input" type="text" id="operating_expenses" name="operating_expenses" value="{{ form.operating_expenses }}" style="flex:1;">
+          <select class="form-input" id="expenses_mode" name="expenses_mode" style="max-width:150px;">
+            <option value="pct" {% if form.expenses_mode != 'amount' %}selected{% endif %}>% of EGI</option>
+            <option value="amount" {% if form.expenses_mode == 'amount' %}selected{% endif %}>$ per year</option>
+          </select>
+        </div>
+        <span class="stat-box-sub">Operating only &mdash; no debt service, no capital items.</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="noi_direct">Or enter NOI directly ($/yr)</label>
+        <input class="form-input" type="text" id="noi_direct" name="noi_direct" value="{{ form.noi_direct }}" placeholder="301,304">
+        <span class="stat-box-sub">Overrides the build-up above when filled in.</span>
+      </div>
+    </div>
+
+    <div class="scorecard-mini-title" style="margin:14px 0 8px;">Value It</div>
     <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
       <div class="form-group">
-        <label class="form-label" for="ltv_pct">LTV (%)</label>
-        <input class="form-input" type="text" id="ltv_pct" name="ltv_pct" value="{{ form.ltv_pct }}">
-        <span class="stat-box-sub">0 for an all-cash purchase.</span>
+        <label class="form-label" for="cap_rate_pct">Target Cap Rate (%)</label>
+        <input class="form-input" type="text" id="cap_rate_pct" name="cap_rate_pct" value="{{ form.cap_rate_pct }}" placeholder="6.0" required>
       </div>
       <div class="form-group">
-        <label class="form-label" for="interest_rate_pct">Interest Rate (%)</label>
-        <input class="form-input" type="text" id="interest_rate_pct" name="interest_rate_pct" value="{{ form.interest_rate_pct }}" placeholder="6.5" required>
+        <label class="form-label" for="asking_price">Asking Price ($)</label>
+        <input class="form-input" type="text" id="asking_price" name="asking_price" value="{{ form.asking_price }}" placeholder="4,500,000">
+        <span class="stat-box-sub">Optional &mdash; used only to compare, never to value.</span>
       </div>
       <div class="form-group">
-        <label class="form-label" for="amort_years">Amortization (years)</label>
-        <input class="form-input" type="text" id="amort_years" name="amort_years" value="{{ form.amort_years }}">
+        <label class="form-label" for="unit_count">Units</label>
+        <input class="form-input" type="text" id="unit_count" name="unit_count" value="{{ form.unit_count }}" placeholder="92">
+        <span class="stat-box-sub">Optional &mdash; shows price per unit.</span>
       </div>
     </div>
 
-    <div class="scorecard-mini-title" style="margin:8px 0;">Growth &amp; Exit</div>
-    <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:14px;">
-      <div class="form-group">
-        <label class="form-label" for="noi_growth_pct">NOI Growth (%/yr)</label>
-        <input class="form-input" type="text" id="noi_growth_pct" name="noi_growth_pct" value="{{ form.noi_growth_pct }}">
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="hold_years">Hold Period (years)</label>
-        <input class="form-input" type="text" id="hold_years" name="hold_years" value="{{ form.hold_years }}">
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="exit_cap_pct">Exit Cap Rate (%)</label>
-        <input class="form-input" type="text" id="exit_cap_pct" name="exit_cap_pct" value="{{ form.exit_cap_pct }}" placeholder="6.0" required>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="selling_costs_pct">Selling Costs (%)</label>
-        <input class="form-input" type="text" id="selling_costs_pct" name="selling_costs_pct" value="{{ form.selling_costs_pct }}">
-      </div>
-    </div>
-
-    <button type="submit" class="btn btn-primary">Analyze</button>
-  </form>
+    <button type="submit" name="action" value="value" class="btn btn-primary">Calculate Value</button>
 </div>
+</form>
 
 {% if result %}
-<!-- ── Results ────────────────────────────────────────────────────────── -->
-<div class="card" id="results">
-  <div class="scorecard-section-title">Returns</div>
+<!-- ── Valuation ──────────────────────────────────────────────────────── -->
+<div class="card" id="valuation">
+  <div class="scorecard-section-title">Implied Value</div>
 
-  <div class="stats-grid" style="margin:14px 0 20px;">
-    <div class="stat-box">
-      <div class="stat-box-label">Going-In Cap Rate</div>
-      <div class="stat-box-value">{{ pct(result.going_in_cap_rate, 2) }}</div>
-      <div class="stat-box-sub">Year-1 NOI &divide; purchase price</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-label">Cash-on-Cash (Yr 1)</div>
-      <div class="stat-box-value">{{ pct(result.cash_on_cash, 2) }}</div>
-      <div class="stat-box-sub">Year-1 cash flow &divide; cash invested</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-label">DSCR (Yr 1)</div>
-      <div class="stat-box-value">{{ '{:,.2f}x'.format(result.dscr) if result.dscr is not none else '—' }}</div>
-      <div class="stat-box-sub">
-        {%- if result.dscr_reason %}{{ result.dscr_reason }}{% else %}Year-1 NOI &divide; annual debt service{% endif -%}
-      </div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-label">Levered IRR</div>
-      <div class="stat-box-value">{{ pct(result.levered_irr, 2) }}</div>
-      <div class="stat-box-sub">
-        {%- if result.levered_irr_reason %}Not computable — {{ result.levered_irr_reason }}
-        {%- else %}Over a {{ result.inputs.hold_years }}-year hold{% endif -%}
-      </div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-label">Equity Multiple</div>
-      <div class="stat-box-value">{{ '{:,.2f}x'.format(result.equity_multiple) }}</div>
-      <div class="stat-box-sub">Total distributions &divide; cash invested</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-box-label">Unlevered IRR</div>
-      <div class="stat-box-value">{{ pct(result.unlevered_irr, 2) }}</div>
-      <div class="stat-box-sub">
-        {%- if result.unlevered_irr_reason %}Not computable — {{ result.unlevered_irr_reason }}
-        {%- else %}The asset without financing{% endif -%}
-      </div>
+  <div style="margin:18px 0 6px;">
+    <div class="stat-box-label">Implied Purchase Price</div>
+    <div style="font-size:38px; font-weight:600; line-height:1.15;">{{ money(result.implied_price) }}</div>
+    <div class="stat-box-sub" style="margin-top:4px;">
+      {{ money(result.noi) }} NOI &divide; {{ pct(result.cap_rate_pct, 2) }} cap rate
+      {%- if result.price_per_unit %} &middot; {{ money(result.price_per_unit) }} per unit{% endif %}
     </div>
   </div>
+
+  {# NOI provenance. A price built on a broker's pro forma and a price
+     built on twelve months of actuals are different claims, and the tool
+     must not render them identically. #}
+  <div style="margin:14px 0 18px;">
+    <span class="source-badge">NOI: {{ result.noi_provenance_label }}</span>
+    <span class="stat-box-sub" style="margin-left:8px;">{{ result.noi_provenance_note }}</span>
+  </div>
+
+  <!-- Range toggle -->
+  <div class="scorecard-mini-title" style="margin-bottom:8px;">Worth a closer look between</div>
+  <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+    <div id="qa-range-band" style="font-size:20px; font-weight:600;"
+         data-price="{{ result.implied_price }}">
+      {{ money(result.range.low) }} &mdash; {{ money(result.range.high) }}
+    </div>
+    <div class="status-chip-row" id="qa-range-toggle">
+      {% for choice in range_choices %}
+        <button type="button" class="btn {{ 'btn-primary' if choice == result.range.range_pct else 'btn-ghost' }}"
+                data-range="{{ choice }}">&plusmn;{{ choice }}%</button>
+      {% endfor %}
+    </div>
+  </div>
+  <p class="page-subtitle" style="margin-bottom:20px;">
+    How far either side of the implied price would still be worth more underwriting.
+    Not a confidence interval &mdash; just a band you choose.
+  </p>
 
   <hr class="divider" style="margin:20px 0;">
 
-  <div class="scorecard-mini-title" style="margin-bottom:10px;">Capital Stack &amp; Exit</div>
-  <div class="table-wrap" style="margin-bottom:20px;">
-    <table class="rent-comps-table">
-      <tbody>
-        <tr><th style="width:38%;">Loan amount</th><td>{{ money(result.loan_amount) }}</td>
-            <th style="width:38%;">Gross sale price</th><td>{{ money(result.gross_sale_price) }}</td></tr>
-        <tr><th>Closing costs</th><td>{{ money(result.closing_costs) }}</td>
-            <th>Selling costs</th><td>{{ money(result.selling_costs) }}</td></tr>
-        <tr><th>Total cash invested</th><td><strong>{{ money(result.equity_invested) }}</strong></td>
-            <th>Loan balance at exit</th><td>{{ money(result.loan_balance_at_exit) }}</td></tr>
-        <tr><th>Annual debt service</th><td>{{ money(result.annual_debt_service) }}</td>
-            <th>Net sale proceeds</th><td><strong>{{ money(result.net_sale_proceeds) }}</strong></td></tr>
-        <tr><th>Monthly debt service</th><td>{{ money(result.monthly_debt_service) }}</td>
-            <th>Exit-year NOI (Yr {{ result.inputs.hold_years + 1 }})</th><td>{{ money(result.noi_exit_year) }}</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p class="page-subtitle" style="margin-bottom:20px;">
-    Exit value capitalizes the <em>forward</em> NOI (year {{ result.inputs.hold_years + 1 }}) at the exit cap rate &mdash;
-    what a buyer at the end of the hold would be underwriting.
-  </p>
+  <!-- Grading -->
+  <div class="scorecard-mini-title" style="margin-bottom:10px;">Against the Asking Price</div>
+  {% if result.grade.graded %}
+    <div class="stat-box qa-grade qa-grade-{{ result.grade.key }}" style="margin-bottom:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div>
+          <div class="stat-box-value" style="font-size:17px;">{{ result.grade.label }}</div>
+          <div class="stat-box-sub" style="margin-top:4px;">{{ result.grade.meaning }}</div>
+        </div>
+        <div style="text-align:right;">
+          <div class="stat-box-value" style="font-size:17px;">
+            {{ '+' if result.grade.over_pct > 0 else '' }}{{ pct(result.grade.over_pct, 1) }}
+          </div>
+          <div class="stat-box-sub">
+            asking {{ money(result.grade.asking_price) }} vs implied {{ money(result.grade.implied_price) }}
+          </div>
+        </div>
+      </div>
+    </div>
+  {% else %}
+    <p class="page-subtitle" style="margin-bottom:10px;">{{ result.grade.reason }}</p>
+  {% endif %}
 
-  <div class="scorecard-mini-title" style="margin-bottom:10px;">Annual Cash Flow</div>
+  {#
+    The disclaimer is not decoration. These bands were invented by the
+    assistant that built this tool because a grade was asked for and no
+    source for one existed; Michelle had not supplied her real thresholds
+    when this shipped. tools/deal_readiness_defaults.py set the precedent
+    for saying so on screen rather than rendering an invented threshold
+    confidently. It renders whether or not a grade was produced, so the
+    bands can never be read without their provenance.
+  #}
+  <div class="result-note" style="margin-bottom:14px;">
+    <strong>Where these bands come from:</strong> {{ result.grade.disclaimer }}
+  </div>
+
   <div class="table-wrap">
     <table class="rent-comps-table">
-      <thead>
-        <tr><th>Year</th><th>NOI</th><th>Debt Service</th><th>Cash Flow</th><th>Cumulative</th></tr>
-      </thead>
+      <thead><tr><th>Band</th><th>Asking vs implied</th><th>Reading</th></tr></thead>
       <tbody>
-        {% for y in result.years %}
-          <tr>
-            <td>{{ y.year }}</td>
-            <td>{{ money(y.noi) }}</td>
-            <td>{{ money(y.debt_service) }}</td>
-            <td{% if y.cash_flow < 0 %} style="color:#b91c1c;"{% endif %}>{{ money(y.cash_flow) }}</td>
-            <td{% if y.cumulative_cash_flow < 0 %} style="color:#b91c1c;"{% endif %}>{{ money(y.cumulative_cash_flow) }}</td>
+        {% for band in grade_bands %}
+          <tr{% if result.grade.graded and band.key == result.grade.key %} style="font-weight:600;"{% endif %}>
+            <td><span class="qa-grade-dot qa-grade-{{ band.key }}"></span> {{ band.label }}</td>
+            <td>
+              {%- if band.max_over_pct == 0.0 %}at or below the implied price
+              {%- elif band.max_over_pct %}up to {{ band.max_over_pct|round|int }}% above
+              {%- else %}more than {{ grade_bands[-2].max_over_pct|round|int }}% above{% endif -%}
+            </td>
+            <td>{{ band.meaning }}</td>
           </tr>
         {% endfor %}
-        <tr>
-          <td colspan="3"><strong>Sale at end of year {{ result.inputs.hold_years }}</strong></td>
-          <td colspan="2"><strong>{{ money(result.net_sale_proceeds) }}</strong> net proceeds</td>
-        </tr>
       </tbody>
     </table>
   </div>
-  <p class="page-subtitle" style="margin-top:12px;">
-    Cash flows are annual and end-of-year. Debt service is derived from a monthly amortization schedule
-    and annualized. Total distributions over the hold: <strong>{{ money(result.total_distributions) }}</strong>.
-  </p>
 </div>
+
+{% if result.buildup %}
+<!-- ── The build-up ───────────────────────────────────────────────────── -->
+<div class="card" id="buildup">
+  <div class="scorecard-section-title">How the NOI Was Built</div>
+  <div class="table-wrap" style="margin-top:14px;">
+    <table class="rent-comps-table">
+      <tbody>
+        <tr><th style="width:60%;">Gross Potential Income</th><td>{{ money2(result.buildup.gross_potential_income) }}</td></tr>
+        <tr><th>&minus; Vacancy &amp; Credit Loss ({{ pct(result.buildup.vacancy_pct, 2) }})</th><td>{{ money2(result.buildup.vacancy_loss) }}</td></tr>
+        <tr><th>= Net Rental Income</th><td>{{ money2(result.buildup.net_rental_income) }}</td></tr>
+        <tr><th>+ Other Income</th><td>{{ money2(result.buildup.other_income) }}</td></tr>
+        <tr><th><strong>= Effective Gross Income</strong></th><td><strong>{{ money2(result.buildup.effective_gross_income) }}</strong></td></tr>
+        <tr><th>&minus; Operating Expenses{% if result.buildup.expense_ratio is not none %} ({{ pct(result.buildup.expense_ratio * 100, 1) }} of EGI){% endif %}</th>
+            <td>{{ money2(result.buildup.operating_expenses) }}</td></tr>
+        <tr><th><strong>= Net Operating Income</strong></th><td><strong>{{ money2(result.buildup.noi) }}</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<script>
+/*
+  Range toggle. Pure client-side arithmetic on a price the server already
+  computed -- no request, nothing recalculated, so the band can never
+  disagree with the headline figure it brackets. The server computes the
+  same band for the initial render, so a page without JavaScript still
+  shows one.
+*/
+(function () {
+  var band = document.getElementById("qa-range-band");
+  var toggle = document.getElementById("qa-range-toggle");
+  var hidden = document.getElementById("range_pct");
+  if (!band || !toggle) return;
+
+  var price = parseFloat(band.getAttribute("data-price"));
+
+  function money(v) {
+    return "$" + Math.round(v).toLocaleString("en-US");
+  }
+
+  toggle.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-range]");
+    if (!btn) return;
+    var pct = parseFloat(btn.getAttribute("data-range"));
+    if (isNaN(pct) || isNaN(price)) return;
+    var delta = price * (pct / 100);
+    band.innerHTML = money(price - delta) + " — " + money(price + delta);
+    toggle.querySelectorAll("[data-range]").forEach(function (b) {
+      b.classList.toggle("btn-primary", b === btn);
+      b.classList.toggle("btn-ghost", b !== btn);
+    });
+    // Carried so a resubmit keeps the range the reader last chose.
+    if (hidden) hidden.value = pct;
+  });
+})();
+</script>
 {% endif %}
 
 {% include "_feedback.html" %}

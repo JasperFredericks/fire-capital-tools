@@ -73,7 +73,7 @@
     {% endif %}
   </div>
 
-  <p class="page-subtitle" style="margin-bottom:10px;">Summary-level figures for reference &mdash; for a returns analysis with leverage and IRR, see <a href="{{ url_for('deal_analyzer.index', deal_id=deal.id) }}">Deal Analyzer</a>; to build the NOI from a rent roll and itemized expenses, see <a href="{{ url_for('underwriting.index', deal_id=deal.id) }}">Underwriting</a>.</p>
+  <p class="page-subtitle" style="margin-bottom:10px;">Summary-level figures for reference &mdash; to turn a NOI and a target cap rate into what this property is worth, see <a href="{{ url_for('deal_analyzer.index', deal_id=deal.id) }}">Quick Deal Analyzer</a>; for a full model with leverage, IRR and a rent roll, see <a href="{{ url_for('underwriting.index', deal_id=deal.id) }}">Underwriting</a>.</p>
   {% set uw = underwriting_summary %}
   <p class="page-subtitle" style="margin-bottom:10px;">
     {% if uw %}
