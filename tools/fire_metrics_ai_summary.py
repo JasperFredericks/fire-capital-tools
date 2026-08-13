@@ -16,7 +16,7 @@ CRE_RESEARCH_TTL_DAYS = 30
 CRE_NEGATIVE_CACHE_TTL_HOURS = 24   # no-useful-result cache: try again after 24 h
 CRE_FAILURE_BACKOFF_MINUTES = 30    # API error backoff: retry after 30 min
 
-# Approved CRE publisher domains — server-side validation; also sent as allowed_domains hint
+# Approved CRE publisher domains — server-side validation of returned sources
 CRE_ALLOWED_DOMAINS: tuple[str, ...] = (
     "costar.com",
     "yardimatrix.com",
@@ -1633,8 +1633,11 @@ def openai_cre_research(
             f"Colliers, CBRE, JLL, Cushman & Wakefield, Newmark, Berkadia, Freddie Mac Multifamily, "
             f"CommercialEdge. "
             f"Prefer research from the past 12 months; if unavailable, use up to 18-24 months old. "
-            f"Return 1-2 concise factual sentences on: vacancy/occupancy, rent growth, "
-            f"new supply/deliveries, absorption, investment/transaction activity, or cap rates. "
+            f"Write a synthesized institutional CRE summary in 3-5 sentences and about 100-150 words maximum. "
+            f"Paraphrase findings across reports instead of listing each report separately. "
+            f"Prioritize only decision-useful points on multifamily vacancy/occupancy, rent growth, "
+            f"new supply/deliveries/construction, absorption, and major market direction. "
+            f"Avoid quarter-by-quarter repetition, long excerpts, and raw URLs in prose. "
             f"Output only the word NONE if no useful approved-source research is found."
         )
 
@@ -1756,8 +1759,23 @@ def openai_cre_research(
             if len(validated_sources) >= 3:
                 break
 
-        # Strip citation markers; check for no-data sentinel
+        # Strip citation markers/raw URLs and keep response concise for UI readability.
         cre_sentences = re.sub(r"\[\d+\]", "", raw_text).strip()
+        cre_sentences = re.sub(r"https?://\S+", "", cre_sentences).strip()
+        cre_sentences = re.sub(r"\s+", " ", cre_sentences).strip()
+        if cre_sentences:
+            sentence_parts = [
+                part.strip()
+                for part in re.split(r"(?<=[.!?])\s+", cre_sentences)
+                if part.strip()
+            ]
+            if len(sentence_parts) > 5:
+                cre_sentences = " ".join(sentence_parts[:5]).strip()
+            words = cre_sentences.split()
+            if len(words) > 150:
+                cre_sentences = " ".join(words[:150]).rstrip(" ,;:")
+                if cre_sentences and cre_sentences[-1] not in ".!?":
+                    cre_sentences += "."
         if cre_sentences.upper() == "NONE" or not cre_sentences:
             cre_sentences = ""
 

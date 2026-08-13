@@ -21,7 +21,7 @@ from flask import Flask
 
 from fire_metrics.fire_metrics_updater import db as db_module
 from tools import fire_metrics_ai_summary as summary
-from tools.fire_metrics import city_summary
+from tools.fire_metrics import city_summary, city_summary_cre
 from tools.fire_metrics.services import _cre_research_model_name
 
 
@@ -333,6 +333,10 @@ class TestCREAPIShape(unittest.TestCase):
         self.assertEqual(captured.get("include"), ["web_search_call.action.sources"])
         self.assertIsInstance(captured.get("input"), str)
         self.assertTrue(captured.get("input"))
+        self.assertIn("3-5 sentences", captured.get("input"))
+        self.assertIn("100-150 words maximum", captured.get("input"))
+        self.assertIn("Avoid quarter-by-quarter repetition", captured.get("input"))
+        self.assertIn("Output only the word NONE", captured.get("input"))
 
         tools = captured.get("tools")
         self.assertIsInstance(tools, list)
@@ -368,6 +372,32 @@ class TestCREAPIShape(unittest.TestCase):
         self.assertEqual(result["result_type"], "success")
         self.assertGreater(len(result["research_sources"]), 0)
         self.assertEqual(result["research_sources"][0]["url"], "https://cbre.com/report-2026")
+
+    def test_success_summary_is_bounded_and_removes_raw_urls(self):
+        """Returned CRE prose is capped and strips raw URLs from visible summary text."""
+        mock_action_src = MagicMock()
+        mock_action_src.url = "https://cbre.com/report-2026"
+        mock_action = MagicMock()
+        mock_action.sources = [mock_action_src]
+        mock_ws_call = MagicMock()
+        mock_ws_call.type = "web_search_call"
+        mock_ws_call.action = mock_action
+        long_text = " ".join(["Vacancy softened while deliveries remained elevated."] * 80)
+        long_text += " https://example.com/raw-url"
+        mock_response = MagicMock()
+        mock_response.output = [mock_ws_call]
+        mock_response.output_text = long_text
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = mock_response
+            result = summary.openai_cre_research(
+                api_key="test-key", model_name="gpt-4.1-mini",
+                city="Austin", state="TX", display_name="Austin, TX",
+            )
+
+        self.assertEqual(result["result_type"], "success")
+        self.assertNotIn("http://", result["cre_sentences"])
+        self.assertNotIn("https://", result["cre_sentences"])
+        self.assertLessEqual(len(result["cre_sentences"].split()), 150)
 
     def test_sources_extracted_from_url_citation_annotations(self):
         """Sources are also extracted from url_citation annotations in text output."""
@@ -524,7 +554,7 @@ class TestCREAPIShape(unittest.TestCase):
             db_path.unlink(missing_ok=True)
 
     def test_mocked_success_returns_research_sources(self):
-        """city-summary endpoint returns non-empty research_sources on mocked success."""
+        """city-summary-cre endpoint returns non-empty research_sources on mocked success."""
         import os
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         tmp.close()
@@ -555,6 +585,21 @@ class TestCREAPIShape(unittest.TestCase):
                 json={
                     "city": "Alpha",
                     "state": "AA",
+                },
+            ):
+                with patch.object(summary, "openai_summary", return_value={
+                    "strength_sentence": "Alpha has solid employment growth.",
+                    "weakness_sentence": "Climate risk is moderate.",
+                    "comparison_sentence": "Overall Alpha is a mixed opportunity.",
+                }), patch("tools.fire_metrics.routes._summary_api_key", return_value="test-key"), \
+                     patch("tools.fire_metrics.routes._summary_model_name", return_value="gpt-4.1-mini"):
+                    city_summary.__wrapped__()
+
+            with app.test_request_context(
+                "/tools/fire-metrics/api/city-summary-cre", method="POST",
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
                     "cre_generation_intent": "explicit_city_selection",
                     "cre_selection_source": "main_city_search",
                 },
@@ -566,7 +611,7 @@ class TestCREAPIShape(unittest.TestCase):
                 }), patch.object(summary, "openai_cre_research", return_value=mock_cre_result), \
                      patch("tools.fire_metrics.routes._summary_api_key", return_value="test-key"), \
                      patch("tools.fire_metrics.routes._summary_model_name", return_value="gpt-4.1-mini"):
-                    result = city_summary.__wrapped__()
+                        result = city_summary_cre.__wrapped__()
             response = result[0] if isinstance(result, tuple) else result
             data = response.get_json()
             self.assertIsInstance(data.get("research_sources"), list)
@@ -592,7 +637,7 @@ class TestCREAPIShape(unittest.TestCase):
         Path(self.tmp.name).unlink(missing_ok=True)
 
     def test_cre_failure_does_not_break_summary(self):
-        """When openai_cre_research returns failure, the route still returns a valid summary."""
+        """When openai_cre_research returns failure, overview still renders and CRE endpoint reports failure."""
         import os
 
         original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
@@ -611,6 +656,31 @@ class TestCREAPIShape(unittest.TestCase):
             route_app = create_app(RouteTestConfig)
             with route_app.test_request_context(
                 "/tools/fire-metrics/api/city-summary",
+                method="POST",
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
+                },
+            ):
+                with patch.object(
+                    summary, "openai_summary",
+                    return_value={
+                        "strength_sentence": "Alpha, AA has solid employment growth.",
+                        "weakness_sentence": "Climate risk is moderate.",
+                        "comparison_sentence": "Overall Alpha is a mixed opportunity.",
+                    },
+                ), patch(
+                    "tools.fire_metrics.routes._summary_api_key", return_value="test-key"
+                ):
+                    overview_result = city_summary.__wrapped__()
+
+            overview_response = overview_result[0] if isinstance(overview_result, tuple) else overview_result
+            overview_data = overview_response.get_json()
+            self.assertEqual(overview_data["status"], "ready")
+            self.assertIn("summary", overview_data)
+
+            with route_app.test_request_context(
+                "/tools/fire-metrics/api/city-summary-cre",
                 method="POST",
                 json={
                     "city": "Alpha",
@@ -640,12 +710,11 @@ class TestCREAPIShape(unittest.TestCase):
                 ), patch(
                     "tools.fire_metrics.routes._summary_api_key", return_value="test-key"
                 ):
-                    result = city_summary.__wrapped__()
+                    result = city_summary_cre.__wrapped__()
 
             response = result[0] if isinstance(result, tuple) else result
             data = response.get_json()
             self.assertEqual(data["status"], "ready")
-            self.assertIn("summary", data)
             self.assertIsInstance(data.get("research_sources"), list)
             self.assertEqual(data["research_sources"], [])
             self.assertEqual(data.get("cre_status"), "failure")
@@ -659,7 +728,7 @@ class TestCREAPIShape(unittest.TestCase):
                 os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
 
     def test_full_ai_failure_reaches_deterministic_fallback(self):
-        """When openai_summary raises, fallback summary is served and CRE failure is non-fatal."""
+        """When openai_summary raises, fallback summary serves and CRE failure remains isolated."""
         import os
 
         original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
@@ -678,6 +747,29 @@ class TestCREAPIShape(unittest.TestCase):
             route_app = create_app(RouteTestConfig)
             with route_app.test_request_context(
                 "/tools/fire-metrics/api/city-summary",
+                method="POST",
+                json={
+                    "city": "Alpha",
+                    "state": "AA",
+                },
+            ):
+                with patch.object(
+                    summary, "openai_summary",
+                    side_effect=RuntimeError("openai down"),
+                ), patch(
+                    "tools.fire_metrics.routes._summary_api_key", return_value="test-key"
+                ), patch(
+                    "tools.fire_metrics.routes._summary_model_name", return_value="gpt-4.1-mini"
+                ):
+                    overview_result = city_summary.__wrapped__()
+
+            overview_response = overview_result[0] if isinstance(overview_result, tuple) else overview_result
+            overview_data = overview_response.get_json()
+            self.assertEqual(overview_data["status"], "ready")
+            self.assertIn("summary", overview_data)
+
+            with route_app.test_request_context(
+                "/tools/fire-metrics/api/city-summary-cre",
                 method="POST",
                 json={
                     "city": "Alpha",
@@ -704,13 +796,11 @@ class TestCREAPIShape(unittest.TestCase):
                 ), patch(
                     "tools.fire_metrics.routes._summary_model_name", return_value="gpt-4.1-mini"
                 ):
-                    result = city_summary.__wrapped__()
+                    result = city_summary_cre.__wrapped__()
 
             response = result[0] if isinstance(result, tuple) else result
             data = response.get_json()
             self.assertEqual(data["status"], "ready")
-            self.assertIn("summary", data)
-            # Fallback path produces no CRE sources
             self.assertIsInstance(data.get("research_sources", []), list)
             self.assertEqual(data.get("cre_status"), "failure")
             self.assertEqual(data.get("cre_failure_category"), "network_error")

@@ -10,7 +10,7 @@ from flask import Flask
 from fire_metrics.fire_metrics_updater import db as db_module
 from tools import fire_metrics as fire_metrics_routes
 from tools import fire_metrics_ai_summary as summary
-from tools.fire_metrics import _summary_unavailable_response, city_summary, top_cities
+from tools.fire_metrics import _summary_unavailable_response, city_summary, city_summary_cre, top_cities
 
 
 def make_city(
@@ -181,6 +181,33 @@ class FireMetricsAISummaryTests(unittest.TestCase):
             json=payload,
         ):
             result = city_summary.__wrapped__()
+        if isinstance(result, tuple):
+            response, status_code = result
+        else:
+            response = result
+            status_code = response.status_code
+        return status_code, response.get_json()
+
+    def _call_city_summary_cre(
+        self,
+        app: Flask,
+        city: str = "Alpha",
+        state: str = "AA",
+        city_key: str = "",
+        cre_generation_intent: str = "",
+        cre_selection_source: str = "",
+    ):
+        payload = {"city": city, "state": state, "city_key": city_key}
+        if cre_generation_intent:
+            payload["cre_generation_intent"] = cre_generation_intent
+        if cre_selection_source:
+            payload["cre_selection_source"] = cre_selection_source
+        with app.test_request_context(
+            "/tools/fire-metrics/api/city-summary-cre",
+            method="POST",
+            json=payload,
+        ):
+            result = city_summary_cre.__wrapped__()
         if isinstance(result, tuple):
             response, status_code = result
         else:
@@ -1056,6 +1083,49 @@ class FireMetricsAISummaryTests(unittest.TestCase):
             else:
                 os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
 
+    def test_city_summary_explicit_selection_still_returns_overview_without_waiting_for_cre(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=True,
+            FIRE_METRICS_SUMMARY_MODEL="model-a",
+            OPENAI_API_KEY="test-key",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-overview-nonblocking-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+
+                with patch.object(fire_metrics_routes.ai_summary, "openai_summary", return_value={
+                    "strength_sentence": "Alpha has solid employment growth.",
+                    "weakness_sentence": "Climate risk is moderate.",
+                    "comparison_sentence": "Overall Alpha is a mixed opportunity.",
+                }), patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    side_effect=AssertionError("city-summary must not call CRE directly"),
+                ):
+                    status_code, payload = self._call_city_summary(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload["status"], "ready")
+                self.assertEqual(payload.get("cre_status"), "skipped")
+                self.assertEqual(payload.get("research_sources"), [])
+                self.assertNotIn("Vacancy in the Alpha metro", payload.get("summary", ""))
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
     def test_city_summary_explicit_selection_allows_single_cre_generation_attempt(self):
         app = Flask(__name__)
         app.config.update(
@@ -1092,7 +1162,12 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                     "openai_cre_research",
                     return_value=mock_cre,
                 ) as cre_mock:
-                    status_code, payload = self._call_city_summary(
+                    status_code_overview, payload_overview = self._call_city_summary(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                    )
+                    status_code, payload = self._call_city_summary_cre(
                         app,
                         city="Alpha",
                         state="AA",
@@ -1100,6 +1175,8 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                         cre_selection_source="main_city_search",
                     )
 
+                self.assertEqual(status_code_overview, 200)
+                self.assertEqual(payload_overview["status"], "ready")
                 self.assertEqual(status_code, 200)
                 self.assertEqual(payload["status"], "ready")
                 self.assertTrue(payload.get("research_sources"))
@@ -1145,7 +1222,12 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                     "openai_cre_research",
                     return_value=mock_cre,
                 ):
-                    status_code, payload = self._call_city_summary(
+                    status_code_overview, payload_overview = self._call_city_summary(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                    )
+                    status_code, payload = self._call_city_summary_cre(
                         app,
                         city="Alpha",
                         state="AA",
@@ -1153,13 +1235,15 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                         cre_selection_source="main_city_search",
                     )
 
+                self.assertEqual(status_code_overview, 200)
+                self.assertEqual(payload_overview["status"], "ready")
                 self.assertEqual(status_code, 200)
                 self.assertEqual(payload["status"], "ready")
                 self.assertEqual(payload.get("cre_status"), "no_data")
                 self.assertIsNone(payload.get("cre_failure_category"))
                 self.assertIsNone(payload.get("cre_failure_code"))
                 self.assertIsNone(payload.get("cre_failure_param"))
-                self.assertIn("No relevant research from approved sources.", payload.get("summary", ""))
+                self.assertEqual(payload.get("cre_summary"), "No relevant research from approved sources.")
         finally:
             if original_db_path is None:
                 os.environ.pop("FIRE_METRICS_DB_PATH", None)
@@ -1202,14 +1286,28 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                     "openai_cre_research",
                     return_value=mock_cre,
                 ) as cre_mock:
-                    status_code_1, payload_1 = self._call_city_summary(
+                    status_code_overview_1, payload_overview_1 = self._call_city_summary(
                         app,
                         city="Alpha",
                         state="AA",
                         cre_generation_intent="explicit_city_selection",
                         cre_selection_source="main_city_search",
                     )
-                    status_code_2, payload_2 = self._call_city_summary(
+                    status_code_1, payload_1 = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+                    status_code_overview_2, payload_overview_2 = self._call_city_summary(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+                    status_code_2, payload_2 = self._call_city_summary_cre(
                         app,
                         city="Alpha",
                         state="AA",
@@ -1217,6 +1315,9 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                         cre_selection_source="main_city_search",
                     )
 
+                self.assertEqual(status_code_overview_1, 200)
+                self.assertEqual(payload_overview_1["status"], "ready")
+                self.assertEqual(summary.count_sentences(summary.combined_summary(payload_overview_1.get("summary_structured", {}))), 3)
                 self.assertEqual(status_code_1, 200)
                 self.assertEqual(payload_1["status"], "ready")
                 self.assertTrue(payload_1.get("research_sources"))
@@ -1224,14 +1325,12 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertIsNone(payload_1.get("cre_failure_category"))
                 self.assertIsNone(payload_1.get("cre_failure_code"))
                 self.assertIsNone(payload_1.get("cre_failure_param"))
-                self.assertIn("Vacancy in the Alpha metro declined to 4.2%.", payload_1.get("summary", ""))
-                self.assertEqual(
-                    summary.count_sentences(summary.combined_summary(payload_1.get("summary_structured", {}))),
-                    3,
-                )
+                self.assertIn("Vacancy in the Alpha metro declined to 4.2%.", payload_1.get("cre_summary", ""))
 
+                self.assertEqual(status_code_overview_2, 200)
+                self.assertTrue(payload_overview_2.get("cached"))
                 self.assertEqual(status_code_2, 200)
-                self.assertTrue(payload_2.get("cached"))
+                self.assertEqual(payload_2.get("cre_status"), "success")
                 cre_mock.assert_called_once()
         finally:
             if original_db_path is None:
@@ -1309,14 +1408,28 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                     "openai_cre_research",
                     return_value=mock_cre,
                 ) as cre_mock:
-                    status_code_1, payload_1 = self._call_city_summary(
+                    status_code_overview_1, payload_overview_1 = self._call_city_summary(
                         app,
                         city="Alpha",
                         state="AA",
                         cre_generation_intent="explicit_city_selection",
                         cre_selection_source="main_city_search",
                     )
-                    status_code_2, payload_2 = self._call_city_summary(
+                    status_code_1, payload_1 = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+                    status_code_overview_2, payload_overview_2 = self._call_city_summary(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+                    status_code_2, payload_2 = self._call_city_summary_cre(
                         app,
                         city="Alpha",
                         state="AA",
@@ -1324,17 +1437,19 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                         cre_selection_source="main_city_search",
                     )
 
+                self.assertEqual(status_code_overview_1, 200)
+                self.assertTrue(payload_overview_1.get("cached"))
                 self.assertEqual(status_code_1, 200)
-                self.assertTrue(payload_1.get("cached"))
                 self.assertTrue(payload_1.get("research_sources"))
                 self.assertEqual(payload_1.get("cre_status"), "success")
                 self.assertIsNone(payload_1.get("cre_failure_category"))
                 self.assertIsNone(payload_1.get("cre_failure_code"))
                 self.assertIsNone(payload_1.get("cre_failure_param"))
-                self.assertIn("Vacancy in the Alpha metro declined to 4.2%.", payload_1.get("summary", ""))
+                self.assertIn("Vacancy in the Alpha metro declined to 4.2%.", payload_1.get("cre_summary", ""))
 
+                self.assertEqual(status_code_overview_2, 200)
+                self.assertTrue(payload_overview_2.get("cached"))
                 self.assertEqual(status_code_2, 200)
-                self.assertTrue(payload_2.get("cached"))
                 self.assertTrue(payload_2.get("research_sources"))
                 self.assertEqual(payload_2.get("cre_status"), "success")
                 self.assertIsNone(payload_2.get("cre_failure_category"))
@@ -1419,7 +1534,7 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                     "is_cre_cache_current",
                     return_value=True,
                 ):
-                    status_code, payload = self._call_city_summary(
+                    status_code, payload = self._call_city_summary_cre(
                         app,
                         city="Alpha",
                         state="AA",
@@ -1428,7 +1543,7 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                     )
 
                 self.assertEqual(status_code, 200)
-                self.assertTrue(payload.get("cached"))
+                self.assertEqual(payload.get("cre_status"), "success")
         finally:
             if original_db_path is None:
                 os.environ.pop("FIRE_METRICS_DB_PATH", None)
@@ -1468,7 +1583,12 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                         "failure_param": "tools[0].filters.allowed_domains[0]",
                     },
                 ):
-                    status_code, payload = self._call_city_summary(
+                    status_code_overview, payload_overview = self._call_city_summary(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                    )
+                    status_code, payload = self._call_city_summary_cre(
                         app,
                         city="Alpha",
                         state="AA",
@@ -1476,13 +1596,15 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                         cre_selection_source="main_city_search",
                     )
 
+                self.assertEqual(status_code_overview, 200)
+                self.assertEqual(payload_overview["status"], "ready")
                 self.assertEqual(status_code, 200)
                 self.assertEqual(payload["status"], "ready")
                 self.assertEqual(payload.get("cre_status"), "failure")
                 self.assertEqual(payload.get("cre_failure_category"), "network_error")
                 self.assertEqual(payload.get("cre_failure_code"), "invalid_request_error")
                 self.assertEqual(payload.get("cre_failure_param"), "tools[0].filters.allowed_domains[0]")
-                self.assertNotIn("No relevant research from approved sources.", payload.get("summary", ""))
+                self.assertNotEqual(payload.get("cre_summary"), "No relevant research from approved sources.")
         finally:
             if original_db_path is None:
                 os.environ.pop("FIRE_METRICS_DB_PATH", None)
@@ -1784,11 +1906,24 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
         self.assertIn("aiOverviewBody.textContent = text;", template)
         self.assertIn("aiOverviewMeta.textContent = text;", template)
+        self.assertIn("citySummaryCreUrl", template)
+        self.assertIn("Institutional CRE Research", template)
+        self.assertIn("Searching approved institutional research", template)
+        self.assertIn("requestCreResearch", template)
         self.assertIn("city_key: city.city_key || \"\"", template)
         self.assertIn("selectCurrentSearchCity", template)
         self.assertIn("fire-city-chip-list", template)
         self.assertIn("fire-city-chip-select", template)
         self.assertIn("fire-city-chip-remove", template)
+
+    def test_frontend_cre_sources_render_in_dedicated_section(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn('id="fire-ai-cre-body"', template)
+        self.assertIn('id="fire-ai-overview-sources"', template)
+        self.assertIn('label.textContent = "Sources";', template)
+        self.assertIn("renderCreSources", template)
+        self.assertIn("setOverviewBody(payload.summary);", template)
+        self.assertNotIn("setOverviewBody(payload.summary +", template)
 
     def test_frontend_quick_ranking_and_city_analytics_hooks_present(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")

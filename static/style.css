@@ -1610,6 +1610,25 @@ hr.divider {
   padding: 16px 18px 12px;
 }
 
+.fire-ai-overview-section {
+  padding-bottom: 4px;
+}
+
+.fire-ai-cre-section {
+  border-top: 1px solid #d7e2f4;
+  margin: 0 14px;
+  padding: 10px 0 6px;
+}
+
+.fire-ai-overview-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #1a2744;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 0 18px;
+}
+
 .fire-ai-overview-meta {
   font-size: 11px;
   color: #64748b;
@@ -1617,7 +1636,7 @@ hr.divider {
 }
 
 .fire-ai-overview-sources {
-  margin: 0 16px 16px;
+  margin: 0 16px 12px;
   padding: 12px 14px;
   border-radius: 8px;
   background: #f0f4fb;
