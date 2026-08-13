@@ -50,11 +50,6 @@
     </div>
   </div>
 
-  <div class="card" id="scorecard-warnings-card" style="display:none;">
-    <div class="scorecard-section-title">Parsing Notes</div>
-    <ul class="scorecard-note-list" id="scorecard-warnings"></ul>
-  </div>
-
   <div class="card">
     <div class="scorecard-section-title">Month Filter</div>
     <div class="month-filter-grid" id="month-filter-grid"></div>
@@ -214,6 +209,27 @@
       <textarea class="scorecard-report-preview" id="report-preview" readonly></textarea>
     </div>
   </section>
+
+  {#
+    Parsing Notes sits at the very bottom of the results, after the tabs and
+    the export panel, and OUTSIDE every .scorecard-tab-panel so it stays
+    visible whichever tab is open.
+
+    It used to sit directly under the property header, above the month
+    filter and the KPIs -- the first thing on the page. That gave a set of
+    file-reading footnotes more prominence than the numbers they annotate.
+    Nothing links to it and no layout depends on its position; it is found
+    only by getElementById, so this move is purely a DOM reorder.
+  #}
+  <div class="card" id="scorecard-warnings-card" style="display:none;">
+    <div class="scorecard-section-title">Parsing Notes</div>
+    <p class="page-subtitle" style="margin:8px 0 12px;">
+      How this file was read. These notes explain where a figure came from or
+      why one could not be worked out &mdash; they are not errors, and none of
+      them changes a number shown above.
+    </p>
+    <ul class="scorecard-note-list" id="scorecard-warnings"></ul>
+  </div>
 </div>
 
 <script>
@@ -406,13 +422,45 @@
     const fallbackCodes = (analysis.summary && analysis.summary.expense_fallback_codes) || [];
     list.innerHTML = "";
     warnings.forEach(note => addListItem(list, note));
-    if (missing.length) addListItem(list, "No GPR data for: " + missing.join(", "));
-    if (zero.length) addListItem(list, "True 0% occupancy for: " + zero.join(", "));
-    if (fallbackCodes.length) {
+
+    // Long month lists go behind the same <details> disclosure the other
+    // notes use: twelve dates inline buried the sentence that explained
+    // what they meant.
+    if (missing.length) {
+      const n = missing.length;
       addExpandableNote(
         list,
-        `Expenses estimated by summing ${fallbackCodes.length} individual line items (no Total Expenses summary found in this file).`,
-        "Show account codes",
+        `Occupancy could not be worked out for ${n} month${n === 1 ? "" : "s"}. ` +
+        "This file does not state Gross Potential Rent (what the rent would be " +
+        `if every unit were occupied), and occupancy is measured against it. ` +
+        `${n === 1 ? "That month is" : "Those months are"} left out of the average ` +
+        "occupancy figure; every other number is unaffected.",
+        `Show the ${n} month${n === 1 ? "" : "s"}`,
+        missing.join(", "),
+      );
+    }
+
+    if (zero.length) {
+      const n = zero.length;
+      addExpandableNote(
+        list,
+        `Occupancy really is 0% for ${n} month${n === 1 ? "" : "s"}. ` +
+        "This is a genuine reading from the file, not missing data.",
+        `Show the ${n} month${n === 1 ? "" : "s"}`,
+        zero.join(", "),
+      );
+    }
+
+    if (fallbackCodes.length) {
+      // "Estimated" was the wrong word and the most misleading string on the
+      // page: the figure is an exact sum of every expense account, not an
+      // approximation. Saying so was making people distrust a correct total.
+      addExpandableNote(
+        list,
+        `This file has no "Total Expenses" row, so total expenses were added up ` +
+        `from the ${fallbackCodes.length} individual expense accounts instead. ` +
+        "The total is exact — this note is only here so you know where it came from.",
+        `Show the ${fallbackCodes.length} accounts used`,
         fallbackCodes.join(", "),
       );
     }
@@ -422,16 +470,26 @@
       if (overrideMismatches.some(m => m.kind === "income")) kinds.push("Income");
       if (overrideMismatches.some(m => m.kind === "expense")) kinds.push("Expense");
       const monthCount = new Set(overrideMismatches.map(m => m.month)).size;
+      // Leads with the consequence -- which figure this report used -- rather
+      // than with the mechanics. The old wording opened on "Total Operating
+      // Income/Expense row(s)" and left the reader to work out whether their
+      // numbers were affected, which is the one thing they need to know.
       const summaryText =
-        `Using this file's Total Operating ${kinds.join(" / ")} row(s) for ${monthCount} month` +
-        `${monthCount === 1 ? "" : "s"}; ${overrideMismatches.length === 1 ? "it does" : "they do"} not match the sum of the detail rows shown here. ` +
-        "If you edited detail rows, make sure the Total Operating Income/Expense rows are updated too " +
-        "(or are formulas that sum them) — otherwise this report will use the file's stated total, not your edited details.";
+        `For ${monthCount} month${monthCount === 1 ? "" : "s"}, this file's own ` +
+        `"Total Operating ${kinds.join(" and ")}" row${kinds.length > 1 ? "s do" : " does"} ` +
+        "not equal the individual rows listed underneath. " +
+        "This report uses the total stated in the file, so those months will not match " +
+        "what you get by adding the individual rows up yourself. " +
+        "That usually means the individual rows were edited without updating the total above them.";
       const detailText = overrideMismatches.map(m =>
-        `${m.month}: Total Operating ${m.kind === "income" ? "Income" : "Expense"} row ` +
-        `${fmtCurrency(m.total)} vs sum of detail ${m.kind} rows ${fmtCurrency(m.detail)}`
+        `${m.month} — ${m.kind === "income" ? "Income" : "Expenses"}: ` +
+        `file's total ${fmtCurrency(m.total)}, ` +
+        `sum of the individual rows ${fmtCurrency(m.detail)} ` +
+        `(difference ${fmtCurrency(Math.abs(m.total - m.detail))})`
       ).join("\n");
-      addExpandableNote(list, summaryText, "Show month-by-month figures", detailText);
+      addExpandableNote(list, summaryText,
+        `Show the difference for each of the ${monthCount} month${monthCount === 1 ? "" : "s"}`,
+        detailText);
     }
     const hasNotes = warnings.length || missing.length || zero.length || fallbackCodes.length || overrideMismatches.length;
     card.style.display = hasNotes ? "block" : "none";
