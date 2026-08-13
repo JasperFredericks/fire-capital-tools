@@ -45,12 +45,18 @@ from werkzeug.utils import secure_filename
 
 from tools import branding
 from tools import deal_dive_db
+from tools import underwriting_capex as ucx
+from tools import underwriting_crosscheck as uxc
 from tools import underwriting_db as db
+from tools import underwriting_market as umkt
+from tools import quick_analyzer_t12 as qa_t12
+from tools import underwriting_property as uprop
 from tools import deal_readiness_defaults as readiness
 from tools import underwriting_loans_math as ulm
 from tools import underwriting_math as um
 from tools import underwriting_pnl as pnl_view
 from tools import underwriting_pnl_export as pnl_export
+from tools import underwriting_scenario_export as sc_export
 from tools import underwriting_schedule as us
 from tools.form_utils import to_float, to_int
 from tools.scorecard_pro.kpis import KPICalculator
@@ -236,6 +242,54 @@ def new_scenario():
     return redirect(url_for("underwriting.detail", scenario_id=sid))
 
 
+def _crosscheck(scenario, egi, unit_count):
+    """Compare the model against the T12 that was imported for it.
+
+    The T12 is re-parsed from the stored upload rather than cached: this
+    tool stores no derived figures anywhere (see underwriting_db's header),
+    and a cached T12 total is a derived figure that could drift from the
+    file it claims to describe. Parsing costs well under a second.
+
+    Every failure degrades to "unavailable" with a reason. A cross-check
+    is a reference panel -- no underwriting number depends on it, so a
+    missing or unreadable T12 must never take the page down with it.
+    """
+    has_rentroll = bool(scenario.get("rentroll_source"))
+    source = scenario.get("t12_source")
+    if not (has_rentroll and source and egi):
+        return uxc.build(egi, None, has_rentroll=has_rentroll,
+                         has_t12=bool(source), unit_count=unit_count)
+
+    path = _find_upload(scenario["id"], source)
+    if path is None:
+        return {"available": False, "checks": [], "firing": [],
+                "reason": "The imported T12 file is no longer on disk, so it "
+                          "cannot be compared against the rent roll."}
+    try:
+        totals = qa_t12.extract_totals(str(path))
+    except Exception as exc:                      # noqa: BLE001 - reference panel
+        current_app.logger.info("Cross-check could not read the T12: %s", exc)
+        return {"available": False, "checks": [], "firing": [],
+                "reason": "The imported T12 could not be re-read for comparison."}
+    return uxc.build(egi, totals, has_rentroll=True, has_t12=True,
+                     unit_count=unit_count)
+
+
+def _find_upload(scenario_id, original_name):
+    """Locate a stored upload from the original filename it was saved under.
+
+    Uploads are stored as "<token>_<original name>", so the original name
+    is a suffix match rather than the filename itself.
+    """
+    directory = _upload_dir(scenario_id)
+    if not directory.exists():
+        return None
+    for candidate in sorted(directory.iterdir()):
+        if candidate.is_file() and candidate.name.endswith(original_name):
+            return candidate
+    return None
+
+
 # ── Detail ───────────────────────────────────────────────────────────────
 
 @underwriting_bp.route("/compare")
@@ -304,20 +358,27 @@ def detail(scenario_id):
         expense_lines = db.list_expense_lines(conn, scenario_id)
         loans = db.list_loans(conn, scenario_id)
         assumption_years = db.list_assumption_years(conn, scenario_id)
+        capex_lines = db.list_capex_lines(conn, scenario_id)
 
     result = error = grid = None
     try:
         result = um.analyze_scenario(scenario, units, expense_lines,
                                      loans=loans,
-                                     assumption_years=assumption_years)
+                                     assumption_years=assumption_years,
+                                     capex_lines=capex_lines)
         grid = um.sensitivity_grid(scenario, units, expense_lines,
                                    metric=grid_metric, variable=grid_variable,
                                    loans=loans,
-                                   assumption_years=assumption_years)
+                                   assumption_years=assumption_years,
+                                   capex_lines=capex_lines)
     except um.ValidationError as exc:
         error = str(exc)
 
     readiness_rows = readiness.evaluate(result)
+    property_info = uprop.resolve(scenario, (result or {}).get("egi"))
+    market = umkt.lookup(property_info["city"], property_info["state"])
+    crosscheck = _crosscheck(scenario, (result or {}).get("egi"),
+                             property_info["unit_count"]["value"])
 
     return render_template(
         "tools/underwriting_detail.html",
@@ -342,6 +403,13 @@ def detail(scenario_id):
         readiness_counts=readiness.counts(readiness_rows),
         acquisition_saved={l["category_key"]: l["annual_amount"]
                            for l in expense_lines if um.is_acquisition_line(l)},
+        capex_lines=capex_lines,
+        capex_scopes=ucx.SCOPES,
+        capex_scope_labels=ucx.SCOPE_LABELS,
+        default_contingency_pct=ucx.DEFAULT_CONTINGENCY_PCT,
+        property_info=property_info,
+        market=market,
+        crosscheck=crosscheck,
         feedback_tool=FEEDBACK_TOOL_NAME,
     )
 
@@ -440,6 +508,66 @@ def pnl_xlsx(scenario_id):
     name = pnl_export.export_filename(statement, "xlsx")
     out_path = _upload_dir(scenario_id) / name
     pnl_export.build_xlsx(out_path, statement)
+    return send_file(
+        str(out_path), as_attachment=True, download_name=name,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+def _summary_payload(scenario_id):
+    """Everything the scenario export writes, gathered exactly the way the
+    detail page gathers it -- so the document and the screen cannot show
+    different numbers for the same scenario."""
+    with db.get_connection() as conn:
+        scenario = db.get_scenario(conn, scenario_id)
+        if not scenario:
+            return None
+        units = db.list_unit_lines(conn, scenario_id)
+        expense_lines = db.list_expense_lines(conn, scenario_id)
+        loans = db.list_loans(conn, scenario_id)
+        assumption_years = db.list_assumption_years(conn, scenario_id)
+        capex_lines = db.list_capex_lines(conn, scenario_id)
+
+    try:
+        result = um.analyze_scenario(scenario, units, expense_lines, loans=loans,
+                                     assumption_years=assumption_years,
+                                     capex_lines=capex_lines)
+    except um.ValidationError:
+        result = None
+
+    property_info = uprop.resolve(scenario, (result or {}).get("egi"))
+    return {
+        "scenario": scenario,
+        "result": result,
+        "loans": loans,
+        "property_info": property_info,
+        "market": umkt.lookup(property_info["city"], property_info["state"]),
+        "crosscheck": _crosscheck(scenario, (result or {}).get("egi"),
+                                  property_info["unit_count"]["value"]),
+    }
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/summary.pdf")
+@login_required
+def summary_pdf(scenario_id):
+    data = _summary_payload(scenario_id)
+    if data is None:
+        return _not_found()
+    name = sc_export.export_filename(data["scenario"], "pdf")
+    out_path = _upload_dir(scenario_id) / name
+    sc_export.build_pdf(out_path, data, logo_path=branding.logo_png_path(Path(current_app.root_path) / "static"))
+    return send_file(str(out_path), as_attachment=True,
+                     download_name=name, mimetype="application/pdf")
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/summary.xlsx")
+@login_required
+def summary_xlsx(scenario_id):
+    data = _summary_payload(scenario_id)
+    if data is None:
+        return _not_found()
+    name = sc_export.export_filename(data["scenario"], "xlsx")
+    out_path = _upload_dir(scenario_id) / name
+    sc_export.build_xlsx(out_path, data)
     return send_file(
         str(out_path), as_attachment=True, download_name=name,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -641,6 +769,101 @@ def save_acquisition_costs(scenario_id):
         db.replace_expense_lines(conn, scenario_id, lines)
     flash("Acquisition costs saved.", "success")
     return redirect(url_for("underwriting.detail", scenario_id=scenario_id) + "#acquisition")
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/property", methods=["POST"])
+@login_required
+def save_property(scenario_id):
+    """Property info: unit count, occupancy, parking, city and state.
+
+    Its own form and its own partial update. Routing it through the
+    assumptions save would blank every field this form does not post --
+    the purchase price included -- because that path rewrites the whole
+    numeric payload and defaults what is missing.
+
+    Blank means blank. An empty unit-count box clears the override and
+    returns the page to the rent roll's own figure; it does not mean zero
+    and it does not silently keep the previous override.
+    """
+    with db.get_connection() as conn:
+        if not db.get_scenario(conn, scenario_id):
+            return _not_found()
+        db.update_scenario_partial(conn, scenario_id, {
+            "unit_count_override": to_int(request.form.get("unit_count_override")),
+            "occupancy_pct_override": to_float(request.form.get("occupancy_pct_override")),
+            "parking_spaces": to_int(request.form.get("parking_spaces")),
+            "parking_notes": (request.form.get("parking_notes") or "").strip() or None,
+            "city": (request.form.get("city") or "").strip() or None,
+            "state": (request.form.get("state") or "").strip().upper()[:2] or None,
+        }, db.PROPERTY_FIELDS)
+    flash("Property info saved.", "success")
+    return redirect(url_for("underwriting.detail", scenario_id=scenario_id) + "#property")
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/capex", methods=["POST"])
+@login_required
+def save_capex(scenario_id):
+    """Rewrite the capex budget from the form.
+
+    Whole-list replacement, like the loans form: the page posts the entire
+    budget, so a row the user cleared has to disappear rather than linger.
+    A row with no label and no cost is treated as an empty slot and
+    dropped rather than saved as a zero-dollar line.
+
+    `source` is carried through from a hidden field rather than forced to
+    'manual', so that when Site DD one day writes rows here, editing the
+    budget around them does not relabel them as hand-entered.
+    """
+    with db.get_connection() as conn:
+        if not db.get_scenario(conn, scenario_id):
+            return _not_found()
+
+        lines = []
+        for idx in _posted_indexes(request.form, "capex_label_"):
+            label = (request.form.get(f"capex_label_{idx}") or "").strip()
+            total = to_float(request.form.get(f"capex_total_{idx}"))
+            qty = to_float(request.form.get(f"capex_qty_{idx}"))
+            unit = to_float(request.form.get(f"capex_unit_{idx}"))
+            if not label and total is None and qty is None and unit is None:
+                continue
+            lines.append({
+                "sort_order": len(lines),
+                "scope": request.form.get(f"capex_scope_{idx}"),
+                "category": request.form.get(f"capex_category_{idx}"),
+                "label": label or "Untitled item",
+                "quantity": qty, "unit_cost": unit, "total_cost": total,
+                "is_contingency": request.form.get(f"capex_contingency_{idx}") == "1",
+                "source": request.form.get(f"capex_source_{idx}") or ucx.SOURCE_MANUAL,
+                "source_ref": request.form.get(f"capex_source_ref_{idx}") or None,
+            })
+        db.replace_capex_lines(conn, scenario_id, lines)
+
+        # The contingency percentage lives on the scenario, not on a line.
+        # Blank falls back to the default; an explicit 0 is honoured, which
+        # is why this is not `or DEFAULT`.
+        db.update_scenario_partial(
+            conn, scenario_id,
+            {"capex_contingency_pct": to_float(request.form.get("capex_contingency_pct"))},
+            ("capex_contingency_pct",))
+
+    flash(f"Capex budget saved — {len(lines)} line{'' if len(lines) == 1 else 's'}.", "success")
+    return redirect(url_for("underwriting.detail", scenario_id=scenario_id) + "#capex")
+
+
+def _posted_indexes(form, prefix):
+    """Row indexes present in a posted repeating form, in order.
+
+    Read from the keys rather than assuming a contiguous range, so a form
+    that skips an index (a row removed in the browser) still saves the
+    rows around it.
+    """
+    out = []
+    for key in form:
+        if key.startswith(prefix):
+            suffix = key[len(prefix):]
+            if suffix.isdigit():
+                out.append(int(suffix))
+    return sorted(set(out))
 
 
 @underwriting_bp.route("/scenario/<int:scenario_id>/delete", methods=["POST"])
