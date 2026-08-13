@@ -141,6 +141,14 @@ CREATE TABLE IF NOT EXISTS site_dd_findings (
     category_key TEXT,
     item_key TEXT NOT NULL,
     condition TEXT,
+    -- A categorical fact about the item that is NOT a condition: the
+    -- flooring is vinyl, the dishwasher is a hookup with no machine in
+    -- it, the smoke alarm is missing. Branch 1 assumed the condition
+    -- column would carry the room checklists unchanged, and for genuine
+    -- conditions it does -- but "hookup only" and "missing" are presence
+    -- facts, and forcing them onto a wear scale would mean recording
+    -- "Replace" for an appliance that was never there.
+    detail TEXT,
     note TEXT,
     quantity REAL,
     measure TEXT,                              -- 'ea' | 'sqft' | 'lf' ...
@@ -180,8 +188,21 @@ def get_db_path() -> Path:
     return BASE_DIR / "site_dd.db"
 
 
+# Columns added after a table first shipped. CREATE TABLE IF NOT EXISTS
+# does nothing to a table that already exists, so a new column needs an
+# explicit ALTER on every existing database -- without this, an assessment
+# saved before the upgrade raises "no such column" on read.
+_FINDING_ADDED_COLUMNS = (
+    ("detail", "TEXT"),
+)
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(site_dd_findings)")}
+    for name, coltype in _FINDING_ADDED_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE site_dd_findings ADD COLUMN {name} {coltype}")
     conn.commit()
 
 
@@ -361,11 +382,12 @@ def upsert_findings(conn: sqlite3.Connection, assessment_id: int,
         """
         INSERT INTO site_dd_findings
             (assessment_id, area_id, room_id, scope, category_key, item_key,
-             condition, note, quantity, measure, created_at)
+             condition, detail, note, quantity, measure, created_at)
         VALUES (:assessment_id, :area_id, :room_id, :scope, :category_key,
-                :item_key, :condition, :note, :quantity, :measure, :created_at)
+                :item_key, :condition, :detail, :note, :quantity, :measure, :created_at)
         ON CONFLICT(assessment_id, area_id, room_id, item_key) DO UPDATE SET
             condition = excluded.condition,
+            detail = excluded.detail,
             note = excluded.note,
             quantity = excluded.quantity,
             measure = excluded.measure
@@ -379,6 +401,7 @@ def upsert_findings(conn: sqlite3.Connection, assessment_id: int,
                 "category_key": r.get("category_key"),
                 "item_key": r["item_key"],
                 "condition": r.get("condition"),
+                "detail": r.get("detail"),
                 "note": (r.get("note") or None) and r["note"][:MAX_NOTE_LEN],
                 "quantity": r.get("quantity"),
                 "measure": r.get("measure"),
@@ -439,6 +462,151 @@ def list_rooms(conn: sqlite3.Connection, area_id: int) -> list[dict[str, Any]]:
         "SELECT * FROM site_dd_rooms WHERE area_id = ? ORDER BY sort_order, id",
         (area_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+AREA_UNIT = "unit"
+AREA_COMMON = "common"
+AREA_KINDS = (AREA_UNIT, AREA_COMMON)
+
+# Occupancy status. Drives Site DD Lite in a later branch, which inspects
+# vacant units and common areas only, so the vocabulary is fixed here
+# rather than being invented then.
+AREA_OCCUPIED = "occupied"
+AREA_VACANT = "vacant"
+AREA_DOWN = "down"
+AREA_STATUSES = (AREA_OCCUPIED, AREA_VACANT, AREA_DOWN)
+
+
+def create_area(conn: sqlite3.Connection, assessment_id: int,
+                fields: dict[str, Any]) -> int:
+    """Add a unit or common area.
+
+    sort_order defaults to the end of the list, so areas appear in the
+    order they were added unless something reorders them explicitly.
+    """
+    kind = fields.get("kind")
+    if kind not in AREA_KINDS:
+        kind = AREA_UNIT
+    status = fields.get("status")
+    if status not in AREA_STATUSES:
+        status = None
+    row = conn.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM site_dd_areas "
+        "WHERE assessment_id = ?", (assessment_id,)).fetchone()
+    cur = conn.execute(
+        """INSERT INTO site_dd_areas
+           (assessment_id, kind, label, status, sort_order, notes, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (assessment_id, kind,
+         (str(fields.get("label") or "Untitled")[:MAX_LABEL_LEN]).strip() or "Untitled",
+         status, row["n"], (fields.get("notes") or None), _now()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_area(conn: sqlite3.Connection, area_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM site_dd_areas WHERE id = ?", (area_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def update_area(conn: sqlite3.Connection, area_id: int, fields: dict[str, Any]) -> None:
+    status = fields.get("status")
+    conn.execute(
+        "UPDATE site_dd_areas SET label = ?, status = ?, notes = ? WHERE id = ?",
+        ((str(fields.get("label") or "Untitled")[:MAX_LABEL_LEN]).strip() or "Untitled",
+         status if status in AREA_STATUSES else None,
+         (fields.get("notes") or None), area_id))
+    conn.commit()
+
+
+def delete_area(conn: sqlite3.Connection, area_id: int) -> None:
+    """Remove an area, its rooms, and every finding recorded in them.
+
+    Findings are cleared by area_id rather than by room, so a finding
+    recorded at unit scope (room_id NULL) goes too -- otherwise deleting a
+    unit would leave its smoke-alarm answers behind with nothing to
+    attach them to.
+    """
+    conn.execute("DELETE FROM site_dd_rooms WHERE area_id = ?", (area_id,))
+    conn.execute("DELETE FROM site_dd_findings WHERE area_id = ?", (area_id,))
+    conn.execute("DELETE FROM site_dd_areas WHERE id = ?", (area_id,))
+    conn.commit()
+
+
+def create_room(conn: sqlite3.Connection, area_id: int, room_type: str,
+                label: str | None = None) -> int:
+    """Append a room to an area.
+
+    THE ORDER ROOMS ARE ADDED IS THE ORDER THEY ARE WALKED. sort_order is
+    assigned from the current maximum, so tapping Kitchen first puts the
+    kitchen first -- which is the entire feature. Nothing sorts rooms
+    alphabetically or by type anywhere, deliberately.
+    """
+    row = conn.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM site_dd_rooms "
+        "WHERE area_id = ?", (area_id,)).fetchone()
+    cur = conn.execute(
+        """INSERT INTO site_dd_rooms (area_id, room_type, label, sort_order, created_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (area_id, room_type,
+         (str(label)[:MAX_LABEL_LEN].strip() if label else None),
+         row["n"], _now()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_room(conn: sqlite3.Connection, room_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM site_dd_rooms WHERE id = ?", (room_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def delete_room(conn: sqlite3.Connection, room_id: int) -> None:
+    conn.execute("DELETE FROM site_dd_findings WHERE room_id = ?", (room_id,))
+    conn.execute("DELETE FROM site_dd_rooms WHERE id = ?", (room_id,))
+    conn.commit()
+
+
+def copy_layout(conn: sqlite3.Connection, from_area_id: int, to_area_id: int) -> int:
+    """Copy one unit's room sequence onto another. Returns rooms copied.
+
+    THE LAYOUT COPIES; THE FINDINGS DO NOT.
+
+    That distinction is the whole point. Two units may have the same three
+    rooms in the same order and be in completely different condition, and
+    copying an inspection from one to the other would be fabricating an
+    observation nobody made. Only room_type, label and sort_order move.
+
+    The target's existing rooms are replaced rather than appended to, so
+    copying twice does not produce six rooms. Any findings already recorded
+    against the replaced rooms go with them -- which is why the UI only
+    offers this on a unit with no findings yet.
+    """
+    existing = conn.execute(
+        "SELECT id FROM site_dd_rooms WHERE area_id = ?", (to_area_id,)).fetchall()
+    for r in existing:
+        conn.execute("DELETE FROM site_dd_findings WHERE room_id = ?", (r["id"],))
+    conn.execute("DELETE FROM site_dd_rooms WHERE area_id = ?", (to_area_id,))
+
+    source = conn.execute(
+        "SELECT room_type, label, sort_order FROM site_dd_rooms "
+        "WHERE area_id = ? ORDER BY sort_order, id", (from_area_id,)).fetchall()
+    now = _now()
+    conn.executemany(
+        """INSERT INTO site_dd_rooms (area_id, room_type, label, sort_order, created_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        [(to_area_id, r["room_type"], r["label"], i, now)
+         for i, r in enumerate(source)])
+    conn.commit()
+    return len(source)
+
+
+def area_finding_count(conn: sqlite3.Connection, area_id: int) -> int:
+    """How many findings have been recorded anywhere in this area, at any
+    scope. Used to decide whether copy-layout is still safe to offer."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM site_dd_findings WHERE area_id = ? "
+        "AND condition IS NOT NULL", (area_id,)).fetchone()
+    return int(row["n"] or 0)
 
 
 # ── Media ────────────────────────────────────────────────────────────────

@@ -46,7 +46,7 @@
   <form method="POST" action="{{ url_for('site_dd.new_assessment') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% if deal %}<input type="hidden" name="deal_id" value="{{ deal.id }}">{% endif %}
-    <div style="display:grid; grid-template-columns: {% if deal %}1fr 1fr auto{% else %}2fr 1fr 1fr auto{% endif %}; gap:12px; align-items:end;">
+    <div class="sdd-form-grid">
       {% if not deal %}
         <div class="form-group" style="margin-bottom:0;">
           <label class="form-label" for="property_label">Property name or address</label>

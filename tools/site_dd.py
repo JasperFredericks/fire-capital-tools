@@ -53,9 +53,10 @@ from tools import branding
 from tools import deal_dive_db
 from tools import site_dd_checklist as cl
 from tools import site_dd_conditions as cond
+from tools import site_dd_unit_checklist as uc
 from tools import site_dd_db as db
 from tools import site_dd_report as report
-from tools.form_utils import to_int
+from tools.form_utils import to_float, to_int
 
 site_dd_bp = Blueprint("site_dd", __name__)
 
@@ -161,10 +162,24 @@ def detail(assessment_id):
         assessment = db.get_assessment(conn, assessment_id)
         if not assessment:
             abort(404)
-        items = db.get_findings(conn, assessment_id)
+        # Property scope only: area_id and room_id both NULL. Unit and
+        # room findings live under their own pages and must not leak into
+        # the property checklist's completion figure.
+        items = db.get_findings(conn, assessment_id, None, None)
         photos = db.list_media(conn, assessment_id, kind=db.MEDIA_PHOTO)
         summary = cond.summarize({k: v["condition"] for k, v in items.items()},
                                  cl.CATEGORIES)
+        areas = db.list_areas(conn, assessment_id)
+        area_rollups = []
+        for a in areas:
+            rooms = db.list_rooms(conn, a["id"])
+            by_room = {r["id"]: db.get_conditions_map(conn, assessment_id, a["id"], r["id"])
+                       for r in rooms}
+            unit_rows = db.get_conditions_map(conn, assessment_id, a["id"], None)
+            area_rollups.append({
+                "area": a, "room_count": len(rooms),
+                "summary": uc.summarize_unit(by_room, rooms, unit_rows),
+            })
 
     # Media is keyed to a finding from Branch 3 onward; until then it is
     # attached by item key, which is what the caption carries.
@@ -182,6 +197,8 @@ def detail(assessment_id):
         photos=photos,
         photos_by_item=photos_by_item,
         summary=summary,
+        areas=areas, area_rollups=area_rollups,
+        area_kinds=db.AREA_KINDS, area_statuses=db.AREA_STATUSES,
         conditions=cond.CONDITIONS,
         condition_labels=cond.CONDITION_LABELS,
         condition_hints=cond.CONDITION_HINTS,
@@ -304,6 +321,278 @@ def delete_photo(assessment_id, photo_id):
     return redirect(url_for("site_dd.detail", assessment_id=assessment_id))
 
 
+# ── Units and rooms ──────────────────────────────────────────────────────
+#
+# The unit-by-unit walkthrough. Everything here is built for a phone held
+# in one hand while standing in a room: tap-first, single column, and
+# sequential -- the inspector moves room to room without going back to a
+# menu between each one.
+
+def _area_or_404(conn, assessment_id, area_id):
+    area = db.get_area(conn, area_id)
+    if not area or area["assessment_id"] != assessment_id:
+        return None
+    return area
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/areas", methods=["POST"])
+@login_required
+def create_area(assessment_id):
+    if not _load(assessment_id):
+        return _not_found()
+    label = (request.form.get("label") or "").strip()
+    if not label:
+        flash("Give the unit a number or name.", "warning")
+        return redirect(url_for("site_dd.detail", assessment_id=assessment_id) + "#units")
+    with db.get_connection() as conn:
+        area_id = db.create_area(conn, assessment_id, {
+            "kind": request.form.get("kind") or db.AREA_UNIT,
+            "label": label,
+            "status": request.form.get("status"),
+        })
+    return redirect(url_for("site_dd.area_detail",
+                            assessment_id=assessment_id, area_id=area_id))
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/areas/<int:area_id>")
+@login_required
+def area_detail(assessment_id, area_id):
+    """One unit: its rooms in walk order, the room-type pad, and the
+    unit-wide items."""
+    if not _load(assessment_id):
+        return _not_found()
+    with db.get_connection() as conn:
+        area = _area_or_404(conn, assessment_id, area_id)
+        if not area:
+            return _not_found()
+        rooms = db.list_rooms(conn, area_id)
+        by_room = {r["id"]: db.get_conditions_map(conn, assessment_id, area_id, r["id"])
+                   for r in rooms}
+        unit_rows = db.get_findings(conn, assessment_id, area_id, None)
+        # Only units with no findings yet can be overwritten by a copy, so
+        # the list offered is restricted to sources that actually have a
+        # layout to give.
+        others = [a for a in db.list_areas(conn, assessment_id)
+                  if a["id"] != area_id and db.list_rooms(conn, a["id"])]
+        finding_count = db.area_finding_count(conn, area_id)
+
+    summary = uc.summarize_unit(by_room, rooms,
+                                {k: v["condition"] for k, v in unit_rows.items()})
+    return render_template(
+        "tools/site_dd_area.html",
+        assessment=_load(assessment_id), area=area, rooms=rooms,
+        room_types=uc.ROOM_TYPES, room_type_labels=uc.ROOM_TYPE_LABELS,
+        unit_items=uc.items_for_unit(), unit_rows=unit_rows,
+        summary=summary, room_summaries={r["room"]["id"]: r for r in summary["rooms"]},
+        conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
+        condition_colours=cond.CONDITION_COLOURS,
+        statuses=db.AREA_STATUSES, copy_sources=others,
+        finding_count=finding_count,
+        feedback_tool=FEEDBACK_TOOL_NAME,
+    )
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/areas/<int:area_id>/save", methods=["POST"])
+@login_required
+def save_area(assessment_id, area_id):
+    """Unit header plus the unit-wide items, in one post."""
+    if not _load(assessment_id):
+        return _not_found()
+    with db.get_connection() as conn:
+        if not _area_or_404(conn, assessment_id, area_id):
+            return _not_found()
+        db.update_area(conn, area_id, {
+            "label": request.form.get("label"),
+            "status": request.form.get("status"),
+            "notes": (request.form.get("notes") or "").strip() or None,
+        })
+        db.upsert_findings(conn, assessment_id,
+                           _collect(request.form, uc.items_for_unit(),
+                                    scope=cond.SCOPE_UNIT, area_id=area_id, room_id=None))
+    flash("Unit saved.", "success")
+    return redirect(url_for("site_dd.area_detail",
+                            assessment_id=assessment_id, area_id=area_id))
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/areas/<int:area_id>/rooms", methods=["POST"])
+@login_required
+def add_room(assessment_id, area_id):
+    """Append one room. The order rooms are added IS the walk order --
+    tapping Kitchen first puts the kitchen first. One tap, one room, no
+    form to fill in, because this happens while standing in a doorway."""
+    if not _load(assessment_id):
+        return _not_found()
+    room_type = request.form.get("room_type")
+    if room_type not in uc.ROOM_TYPE_LABELS:
+        flash("Unknown room type.", "danger")
+        return redirect(url_for("site_dd.area_detail",
+                                assessment_id=assessment_id, area_id=area_id))
+    with db.get_connection() as conn:
+        if not _area_or_404(conn, assessment_id, area_id):
+            return _not_found()
+        # A second bathroom is "Bathroom 2" without anyone typing it.
+        same = [r for r in db.list_rooms(conn, area_id) if r["room_type"] == room_type]
+        label = None
+        if same:
+            label = f"{uc.ROOM_TYPE_LABELS[room_type]} {len(same) + 1}"
+        db.create_room(conn, area_id, room_type, label)
+    return redirect(url_for("site_dd.area_detail",
+                            assessment_id=assessment_id, area_id=area_id) + "#rooms")
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/areas/<int:area_id>/rooms/<int:room_id>/delete",
+                  methods=["POST"])
+@login_required
+def delete_room(assessment_id, area_id, room_id):
+    if not _load(assessment_id):
+        return _not_found()
+    with db.get_connection() as conn:
+        if not _area_or_404(conn, assessment_id, area_id):
+            return _not_found()
+        db.delete_room(conn, room_id)
+    flash("Room removed.", "success")
+    return redirect(url_for("site_dd.area_detail",
+                            assessment_id=assessment_id, area_id=area_id) + "#rooms")
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/areas/<int:area_id>/copy-layout",
+                  methods=["POST"])
+@login_required
+def copy_layout(assessment_id, area_id):
+    """Copy another unit's room sequence onto this one.
+
+    The layout copies; the findings do not. Two units can have identical
+    rooms in identical order and be in completely different condition, and
+    copying an inspection would be fabricating an observation nobody made.
+    """
+    if not _load(assessment_id):
+        return _not_found()
+    source_id = to_int(request.form.get("from_area_id"))
+    with db.get_connection() as conn:
+        target = _area_or_404(conn, assessment_id, area_id)
+        source = _area_or_404(conn, assessment_id, source_id) if source_id else None
+        if not target or not source:
+            flash("Pick a unit to copy the layout from.", "warning")
+            return redirect(url_for("site_dd.area_detail",
+                                    assessment_id=assessment_id, area_id=area_id))
+        if db.area_finding_count(conn, area_id):
+            flash("This unit already has findings recorded — copying a layout would "
+                  "discard them. Remove them first if you meant to start over.", "warning")
+            return redirect(url_for("site_dd.area_detail",
+                                    assessment_id=assessment_id, area_id=area_id))
+        copied = db.copy_layout(conn, source["id"], area_id)
+    flash(f"Copied {copied} room{'' if copied == 1 else 's'} from {source['label']} — "
+          f"the layout only, no findings.", "success")
+    return redirect(url_for("site_dd.area_detail",
+                            assessment_id=assessment_id, area_id=area_id) + "#rooms")
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/areas/<int:area_id>/delete", methods=["POST"])
+@login_required
+def delete_area(assessment_id, area_id):
+    if not _load(assessment_id):
+        return _not_found()
+    with db.get_connection() as conn:
+        if not _area_or_404(conn, assessment_id, area_id):
+            return _not_found()
+        db.delete_area(conn, area_id)
+    flash("Unit removed.", "success")
+    return redirect(url_for("site_dd.detail", assessment_id=assessment_id) + "#units")
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/areas/<int:area_id>/rooms/<int:room_id>")
+@login_required
+def room_detail(assessment_id, area_id, room_id):
+    """One room's checklist, with the next and previous room in the walk
+    order carried into the template. The inspector never returns to a menu
+    between rooms -- the walkthrough is sequential by design, so the page
+    knows where it sits in the sequence."""
+    if not _load(assessment_id):
+        return _not_found()
+    with db.get_connection() as conn:
+        area = _area_or_404(conn, assessment_id, area_id)
+        room = db.get_room(conn, room_id)
+        if not area or not room or room["area_id"] != area_id:
+            return _not_found()
+        rooms = db.list_rooms(conn, area_id)
+        rows = db.get_findings(conn, assessment_id, area_id, room_id)
+
+    order = [r["id"] for r in rooms]
+    idx = order.index(room_id) if room_id in order else 0
+    return render_template(
+        "tools/site_dd_room.html",
+        assessment=_load(assessment_id), area=area, room=room, rooms=rooms,
+        items=uc.items_for_room(room["room_type"]), rows=rows,
+        room_type_labels=uc.ROOM_TYPE_LABELS,
+        conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
+        condition_colours=cond.CONDITION_COLOURS,
+        position=idx + 1, room_count=len(rooms),
+        prev_room=rooms[idx - 1] if idx > 0 else None,
+        next_room=rooms[idx + 1] if idx + 1 < len(rooms) else None,
+        feedback_tool=FEEDBACK_TOOL_NAME,
+    )
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/areas/<int:area_id>/rooms/<int:room_id>/save",
+                  methods=["POST"])
+@login_required
+def save_room(assessment_id, area_id, room_id):
+    if not _load(assessment_id):
+        return _not_found()
+    with db.get_connection() as conn:
+        area = _area_or_404(conn, assessment_id, area_id)
+        room = db.get_room(conn, room_id)
+        if not area or not room or room["area_id"] != area_id:
+            return _not_found()
+        db.upsert_findings(conn, assessment_id,
+                           _collect(request.form, uc.items_for_room(room["room_type"]),
+                                    scope=cond.SCOPE_ROOM, area_id=area_id, room_id=room_id))
+        rooms = db.list_rooms(conn, area_id)
+
+    # "Save & next room" keeps the walkthrough moving without a detour
+    # through the unit page, which is the whole point of a sequential flow.
+    if request.form.get("go") == "next":
+        order = [r["id"] for r in rooms]
+        idx = order.index(room_id)
+        if idx + 1 < len(order):
+            return redirect(url_for("site_dd.room_detail", assessment_id=assessment_id,
+                                    area_id=area_id, room_id=order[idx + 1]))
+        flash("Last room saved — unit complete.", "success")
+        return redirect(url_for("site_dd.area_detail",
+                                assessment_id=assessment_id, area_id=area_id))
+
+    flash("Room saved.", "success")
+    return redirect(url_for("site_dd.room_detail", assessment_id=assessment_id,
+                            area_id=area_id, room_id=room_id))
+
+
+def _collect(form, items, *, scope, area_id, room_id):
+    """Turn a posted room or unit form into finding rows.
+
+    Only keys in the checklist are read, and a value that is not one of
+    the item's own options is discarded rather than stored -- the same
+    rule the property scope uses, so a hand-crafted POST cannot invent an
+    answer to a question that was not asked.
+    """
+    out = []
+    for item in items:
+        key = item["key"]
+        raw_condition = (form.get(f"condition_{key}") or "").strip()
+        raw_detail = (form.get(f"detail_{key}") or "").strip()
+        quantity = to_float(form.get(f"quantity_{key}"))
+        out.append({
+            "scope": scope, "area_id": area_id, "room_id": room_id,
+            "category_key": item["kind"],
+            "item_key": key,
+            "condition": raw_condition if cond.is_valid(raw_condition) else None,
+            "detail": raw_detail if uc.is_valid_option(item, raw_detail) else None,
+            "quantity": quantity if item["kind"] == uc.KIND_NUMBER else None,
+            "measure": item["measure"] if item["kind"] == uc.KIND_NUMBER else None,
+            "note": (form.get(f"note_{key}") or "").strip() or None,
+        })
+    return out
+
+
 # ── Report ───────────────────────────────────────────────────────────────
 
 @site_dd_bp.route("/assessment/<int:assessment_id>/report")
@@ -317,10 +606,24 @@ def download_report(assessment_id):
         assessment = db.get_assessment(conn, assessment_id)
         if not assessment:
             abort(404)
-        items = db.get_findings(conn, assessment_id)
+        # Property scope only: area_id and room_id both NULL. Unit and
+        # room findings live under their own pages and must not leak into
+        # the property checklist's completion figure.
+        items = db.get_findings(conn, assessment_id, None, None)
         photos = db.list_media(conn, assessment_id, kind=db.MEDIA_PHOTO)
         summary = cond.summarize({k: v["condition"] for k, v in items.items()},
                                  cl.CATEGORIES)
+        areas = db.list_areas(conn, assessment_id)
+        area_rollups = []
+        for a in areas:
+            rooms = db.list_rooms(conn, a["id"])
+            by_room = {r["id"]: db.get_conditions_map(conn, assessment_id, a["id"], r["id"])
+                       for r in rooms}
+            unit_rows = db.get_conditions_map(conn, assessment_id, a["id"], None)
+            area_rollups.append({
+                "area": a, "room_count": len(rooms),
+                "summary": uc.summarize_unit(by_room, rooms, unit_rows),
+            })
 
     upload_dir = _upload_dir(assessment_id)
     # Only raster images can be embedded as thumbnails; a PDF attachment

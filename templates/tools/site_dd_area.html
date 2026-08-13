@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}{{ area.label }} - Site DD{% endblock %}
+
+{#
+  One unit: its rooms in walk order, the pad for adding more, the
+  unit-wide items, and a roll-up across the whole unit rather than
+  per-room. Same mobile-first rules as the room page.
+#}
+
+{% macro condition_row(item, current) %}
+  <div class="sdd-cond-row" role="radiogroup" aria-label="{{ item.label }} condition">
+    <input class="sdd-cond-input" type="radio" id="uc_{{ item.key }}_none"
+           name="condition_{{ item.key }}" value="" {% if not current %}checked{% endif %}>
+    <label class="sdd-cond-btn" for="uc_{{ item.key }}_none">&ndash;</label>
+    {% for c in conditions %}
+      <input class="sdd-cond-input" type="radio" id="uc_{{ item.key }}_{{ c }}"
+             name="condition_{{ item.key }}" value="{{ c }}" {% if current == c %}checked{% endif %}>
+      <label class="sdd-cond-btn" for="uc_{{ item.key }}_{{ c }}">{{ condition_labels[c] }}</label>
+    {% endfor %}
+  </div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-header" style="margin-bottom:12px;">
+  <a href="{{ url_for('site_dd.detail', assessment_id=assessment.id) }}"
+     class="btn btn-ghost sdd-touch" style="margin-bottom:10px; display:inline-flex;">
+    &larr; {{ assessment.property_label }}
+  </a>
+  <h1 class="page-title" style="font-size:22px;">{{ area.label }}</h1>
+  <p class="page-subtitle" style="margin:4px 0 0;">
+    {{ 'Unit' if area.kind == 'unit' else 'Common area' }}
+    {%- if area.status %} &middot; {{ area.status|title }}{% endif %}
+    &middot; {{ rooms|length }} room{{ '' if rooms|length == 1 else 's' }}
+  </p>
+</div>
+
+<!-- ── Unit roll-up ───────────────────────────────────────────────────── -->
+<div class="card" style="padding:14px 16px;">
+  <div class="scorecard-mini-title" style="margin-bottom:10px;">This unit</div>
+  <div class="stats-grid">
+    {% for c in summary.ordered_counts %}
+      <div class="stat-box"{% if c.is_work and c.count %} style="border-left:3px solid {{ c.colour }};"{% endif %}>
+        <div class="stat-box-label">{{ c.label }}</div>
+        <div class="stat-box-value" style="color:{{ c.colour if c.count else '#9ca3af' }};">{{ c.count }}</div>
+      </div>
+    {% endfor %}
+    <div class="stat-box">
+      <div class="stat-box-label">Complete</div>
+      <div class="stat-box-value">{{ '%.0f%%'|format(summary.completion_pct) }}</div>
+      <div class="stat-box-sub">{{ summary.assessed_count }} of {{ summary.total_items }}</div>
+    </div>
+  </div>
+  <p class="page-subtitle" style="margin:10px 0 0;">
+    <strong>{{ summary.work_count }}</strong> item{{ '' if summary.work_count == 1 else 's' }} need work
+    across every room and the unit-wide checks.
+    {%- if summary.worst %} Worst: <strong style="color:{{ condition_colours[summary.worst] }};">{{ summary.worst_label }}</strong>.{% endif %}
+  </p>
+</div>
+
+<!-- ── Rooms, in walk order ───────────────────────────────────────────── -->
+<div class="card" id="rooms" style="padding:14px 16px;">
+  <div class="scorecard-mini-title" style="margin-bottom:6px;">Rooms, in the order you walk them</div>
+  <p class="page-subtitle" style="margin:0 0 12px;">
+    Tap a room type to add it. The order you tap is the order you walk &mdash; start at the front door.
+  </p>
+
+  {% if rooms %}
+    {% for r in rooms %}
+      {% set rs = room_summaries.get(r.id) %}
+      <div style="display:flex; align-items:center; gap:10px; border-bottom:1px solid #e5e7eb;">
+        <a class="sdd-room-row" style="flex:1 1 auto; border-bottom:0;"
+           href="{{ url_for('site_dd.room_detail', assessment_id=assessment.id, area_id=area.id, room_id=r.id) }}">
+          <span class="sdd-seq">{{ loop.index }}</span>
+          <span style="flex:1 1 auto;">
+            <span style="font-weight:600; color:#111827;">{{ r.label or room_type_labels[r.room_type] }}</span>
+            {% if rs %}
+              <span class="stat-box-sub" style="display:block;">
+                {{ rs.assessed_count }} / {{ rs.item_count }} assessed
+                {%- if rs.work_count %} &middot; <span style="color:#b45309;">{{ rs.work_count }} need work</span>{% endif %}
+                {%- if rs.worst %} &middot; worst {{ rs.worst_label }}{% endif %}
+              </span>
+            {% endif %}
+          </span>
+          <span class="stat-box-sub">&rsaquo;</span>
+        </a>
+        <form method="POST" style="flex:0 0 auto;"
+              action="{{ url_for('site_dd.delete_room', assessment_id=assessment.id, area_id=area.id, room_id=r.id) }}"
+              onsubmit="return confirm('Remove this room and everything recorded in it?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-ghost sdd-touch" style="padding:6px 10px;">&times;</button>
+        </form>
+      </div>
+    {% endfor %}
+    <div class="sdd-navbar" style="position:static; background:none; padding-top:14px;">
+      <a class="sdd-nav-btn sdd-nav-btn--primary"
+         href="{{ url_for('site_dd.room_detail', assessment_id=assessment.id, area_id=area.id, room_id=rooms[0].id) }}">
+        Start walkthrough &rarr;
+      </a>
+    </div>
+  {% else %}
+    <p class="page-subtitle" style="margin:0 0 12px;">No rooms yet — tap the first one you'll walk into.</p>
+  {% endif %}
+
+  <div style="margin-top:16px;">
+    <div class="scorecard-mini-title" style="margin-bottom:8px;">Add a room</div>
+    <div class="sdd-room-pad">
+      {% for value, label in room_types %}
+        <form method="POST" action="{{ url_for('site_dd.add_room', assessment_id=assessment.id, area_id=area.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="room_type" value="{{ value }}">
+          <button type="submit" class="sdd-room-btn">{{ label }}</button>
+        </form>
+      {% endfor %}
+    </div>
+  </div>
+
+  {#
+    Copy layout. Required, not optional: a 92-unit property is only
+    survivable if the second unit onward costs a tap. The room sequence
+    copies; the findings never do -- two units can have identical layouts
+    and completely different condition, and copying an inspection would
+    be fabricating an observation nobody made.
+  #}
+  {% if copy_sources %}
+    <div style="margin-top:18px; padding-top:14px; border-top:1px solid #e5e7eb;">
+      <div class="scorecard-mini-title" style="margin-bottom:6px;">Copy a layout</div>
+      {% if finding_count %}
+        <p class="page-subtitle" style="margin:0;">
+          This unit already has {{ finding_count }} finding{{ '' if finding_count == 1 else 's' }} recorded,
+          so copying a layout is disabled — it would discard them.
+        </p>
+      {% else %}
+        <form method="POST" action="{{ url_for('site_dd.copy_layout', assessment_id=assessment.id, area_id=area.id) }}"
+              style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <select class="form-input sdd-touch" name="from_area_id" style="flex:1 1 160px;">
+            {% for a in copy_sources %}
+              <option value="{{ a.id }}">{{ a.label }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="sdd-nav-btn" style="flex:0 0 auto; padding-left:18px; padding-right:18px;">
+            Copy rooms
+          </button>
+        </form>
+        <p class="page-subtitle" style="margin:8px 0 0;">
+          Copies the room sequence only. Every unit's condition is recorded on its own.
+        </p>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+
+<!-- ── Unit-wide items ────────────────────────────────────────────────── -->
+<form method="POST" action="{{ url_for('site_dd.save_area', assessment_id=assessment.id, area_id=area.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="card" style="padding:14px 16px;">
+    <div class="scorecard-mini-title" style="margin-bottom:10px;">Unit details</div>
+    <div class="form-group">
+      <label class="form-label" for="label">Unit</label>
+      <input class="form-input sdd-touch" type="text" id="label" name="label" value="{{ area.label }}">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="status">Status</label>
+      <select class="form-input sdd-touch" id="status" name="status">
+        <option value="">Not stated</option>
+        {% for st in statuses %}
+          <option value="{{ st }}" {% if area.status == st %}selected{% endif %}>{{ st|title }}</option>
+        {% endfor %}
+      </select>
+      <span class="stat-box-sub">Vacant units and common areas are what a lighter inspection covers.</span>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="notes">Notes</label>
+      <input class="form-input sdd-touch" type="text" id="notes" name="notes" value="{{ area.notes or '' }}">
+    </div>
+  </div>
+
+  <div class="card" style="padding:14px 16px;">
+    <div class="scorecard-mini-title" style="margin-bottom:6px;">Unit-wide checks</div>
+    <p class="page-subtitle" style="margin:0 0 6px;">
+      Things that belong to the dwelling rather than to any one room.
+    </p>
+    {% for item in unit_items %}
+      {% set row = unit_rows.get(item.key) %}
+      <div class="sdd-item">
+        <div class="sdd-item-label">{{ item.label }}</div>
+        {% if item.hint %}<div class="sdd-item-hint">{{ item.hint }}</div>{% endif %}
+        {% if item.kind == 'choice' %}
+          <div class="sdd-cond-row" role="radiogroup" aria-label="{{ item.label }}">
+            <input class="sdd-cond-input sdd-choice-input" type="radio" id="ud_{{ item.key }}_none"
+                   name="detail_{{ item.key }}" value="" {% if not (row and row.detail) %}checked{% endif %}>
+            <label class="sdd-cond-btn" for="ud_{{ item.key }}_none">&ndash;</label>
+            {% for value, label in item.options %}
+              <input class="sdd-cond-input sdd-choice-input" type="radio" id="ud_{{ item.key }}_{{ value }}"
+                     name="detail_{{ item.key }}" value="{{ value }}"
+                     {% if row and row.detail == value %}checked{% endif %}>
+              <label class="sdd-cond-btn" for="ud_{{ item.key }}_{{ value }}">{{ label }}</label>
+            {% endfor %}
+          </div>
+          {% if item.with_condition %}
+            <div class="sdd-item-hint" style="margin:10px 0 6px;">Condition, if present</div>
+            {{ condition_row(item, row.condition if row else none) }}
+          {% endif %}
+        {% elif item.kind == 'number' %}
+          <input class="sdd-note" type="number" inputmode="decimal" step="any"
+                 name="quantity_{{ item.key }}"
+                 value="{{ row.quantity if row and row.quantity is not none else '' }}"
+                 placeholder="{{ item.measure }}" aria-label="{{ item.label }} in {{ item.measure }}">
+        {% else %}
+          {{ condition_row(item, row.condition if row else none) }}
+        {% endif %}
+        <input class="sdd-note" type="text" name="note_{{ item.key }}"
+               value="{{ row.note if row and row.note else '' }}" placeholder="Note (optional)">
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="sdd-navbar">
+    <button type="submit" class="sdd-nav-btn sdd-nav-btn--primary">Save unit</button>
+  </div>
+</form>
+
+<div class="card" style="padding:12px 16px;">
+  <form method="POST" action="{{ url_for('site_dd.delete_area', assessment_id=assessment.id, area_id=area.id) }}"
+        onsubmit="return confirm('Remove this unit, its rooms and everything recorded in them?');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-danger sdd-touch">Remove unit</button>
+  </form>
+</div>
+{% endblock %}

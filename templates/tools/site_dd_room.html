@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}{{ room.label or room_type_labels[room.room_type] }} - {{ area.label }} - Site DD{% endblock %}
+
+{#
+  One room in the walkthrough.
+
+  Built for a phone held in one hand while standing in the room. Every
+  control is tap-first and at least 44px; there is no dropdown, nothing
+  depends on hover, and the whole page is one column. The condition
+  buttons are radios styled as buttons, so the form works with JavaScript
+  off entirely -- an inspector in a basement with no signal still gets a
+  working form.
+#}
+
+{% macro condition_row(item, current) %}
+  <div class="sdd-cond-row" role="radiogroup" aria-label="{{ item.label }} condition">
+    <input class="sdd-cond-input" type="radio" id="c_{{ item.key }}_none"
+           name="condition_{{ item.key }}" value="" {% if not current %}checked{% endif %}>
+    <label class="sdd-cond-btn" for="c_{{ item.key }}_none">&ndash;</label>
+    {% for c in conditions %}
+      <input class="sdd-cond-input" type="radio" id="c_{{ item.key }}_{{ c }}"
+             name="condition_{{ item.key }}" value="{{ c }}" {% if current == c %}checked{% endif %}>
+      <label class="sdd-cond-btn" for="c_{{ item.key }}_{{ c }}">{{ condition_labels[c] }}</label>
+    {% endfor %}
+  </div>
+{% endmacro %}
+
+{% macro choice_row(item, current) %}
+  <div class="sdd-cond-row" role="radiogroup" aria-label="{{ item.label }}">
+    <input class="sdd-cond-input sdd-choice-input" type="radio" id="d_{{ item.key }}_none"
+           name="detail_{{ item.key }}" value="" {% if not current %}checked{% endif %}>
+    <label class="sdd-cond-btn" for="d_{{ item.key }}_none">&ndash;</label>
+    {% for value, label in item.options %}
+      <input class="sdd-cond-input sdd-choice-input" type="radio" id="d_{{ item.key }}_{{ value }}"
+             name="detail_{{ item.key }}" value="{{ value }}" {% if current == value %}checked{% endif %}>
+      <label class="sdd-cond-btn" for="d_{{ item.key }}_{{ value }}">{{ label }}</label>
+    {% endfor %}
+  </div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-header" style="margin-bottom:12px;">
+  <a href="{{ url_for('site_dd.area_detail', assessment_id=assessment.id, area_id=area.id) }}"
+     class="btn btn-ghost sdd-touch" style="margin-bottom:10px; display:inline-flex;">
+    &larr; {{ area.label }}
+  </a>
+  <h1 class="page-title" style="font-size:22px;">{{ room.label or room_type_labels[room.room_type] }}</h1>
+  <p class="page-subtitle" style="margin:4px 0 0;">
+    Room {{ position }} of {{ room_count }} &middot; {{ assessment.property_label }}
+  </p>
+</div>
+
+<form method="POST" id="roomForm"
+      action="{{ url_for('site_dd.save_room', assessment_id=assessment.id, area_id=area.id, room_id=room.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="card" style="padding:14px 16px;">
+    {% for item in items %}
+      {% set row = rows.get(item.key) %}
+      <div class="sdd-item">
+        <div class="sdd-item-label">{{ item.label }}</div>
+        {% if item.hint %}<div class="sdd-item-hint">{{ item.hint }}</div>{% endif %}
+
+        {% if item.kind == 'choice' %}
+          {{ choice_row(item, row.detail if row else none) }}
+          {#
+            A condition is only offered where one can exist. An appliance
+            that is present can still be Good or Replace; an appliance
+            that was never installed has no condition, and asking for one
+            would invite a rating of something that is not there.
+          #}
+          {% if item.with_condition %}
+            <div class="sdd-item-hint" style="margin:10px 0 6px;">Condition, if present</div>
+            {{ condition_row(item, row.condition if row else none) }}
+          {% endif %}
+        {% elif item.kind == 'number' %}
+          <input class="sdd-note" type="number" inputmode="decimal" step="any"
+                 name="quantity_{{ item.key }}"
+                 value="{{ row.quantity if row and row.quantity is not none else '' }}"
+                 placeholder="{{ item.measure }}" aria-label="{{ item.label }} in {{ item.measure }}">
+        {% else %}
+          {{ condition_row(item, row.condition if row else none) }}
+        {% endif %}
+
+        <input class="sdd-note" type="text" name="note_{{ item.key }}"
+               value="{{ row.note if row and row.note else '' }}"
+               placeholder="Note (optional)" aria-label="{{ item.label }} note">
+      </div>
+    {% endfor %}
+  </div>
+
+  {#
+    Sequential navigation. The inspector never goes back to a menu between
+    rooms: Save & next moves straight into the next room in walk order,
+    and on the last room it returns to the unit instead.
+  #}
+  <div class="sdd-navbar">
+    {% if prev_room %}
+      <a class="sdd-nav-btn" href="{{ url_for('site_dd.room_detail', assessment_id=assessment.id, area_id=area.id, room_id=prev_room.id) }}">
+        &larr; {{ prev_room.label or room_type_labels[prev_room.room_type] }}
+      </a>
+    {% else %}
+      <span class="sdd-nav-btn" aria-disabled="true">&larr; First room</span>
+    {% endif %}
+    <button type="submit" class="sdd-nav-btn" name="go" value="stay">Save</button>
+    <button type="submit" class="sdd-nav-btn sdd-nav-btn--primary" name="go" value="next">
+      {% if next_room %}Save &amp; next &rarr;{% else %}Save &amp; finish{% endif %}
+    </button>
+  </div>
+</form>
+
+<div class="card" style="padding:12px 16px;">
+  <div class="scorecard-mini-title" style="margin-bottom:8px;">Rooms in this unit</div>
+  {% for r in rooms %}
+    <a class="sdd-room-row" href="{{ url_for('site_dd.room_detail', assessment_id=assessment.id, area_id=area.id, room_id=r.id) }}">
+      <span class="sdd-seq">{{ loop.index }}</span>
+      <span style="flex:1 1 auto; font-weight:{{ '700' if r.id == room.id else '500' }}; color:#111827;">
+        {{ r.label or room_type_labels[r.room_type] }}
+      </span>
+      {% if r.id == room.id %}<span class="stat-box-sub">here</span>{% endif %}
+    </a>
+  {% endfor %}
+</div>
+{% endblock %}
