@@ -249,6 +249,7 @@
         <input class="form-input" type="text" id="property_label" name="property_label" value="{{ scenario.property_label }}"></div>
       {% for key, label in [
           ('purchase_price','Purchase Price ($)'), ('closing_costs_pct','Closing Costs (%)'),
+          ('acquisition_fee_pct','Acquisition Fee (%)'),
           ('ltv_pct','LTV (%)'), ('interest_rate_pct','Interest Rate (%)'),
           ('amort_years','Amortization (yrs)'), ('hold_years','Hold Period (yrs)'),
           ('exit_cap_pct','Exit Cap Rate (%)'), ('selling_costs_pct','Selling Costs (%)'),
@@ -315,6 +316,9 @@
     <strong>replaces</strong> the flat closing-costs percentage rather than adding to it &mdash;
     the two describe the same money, so adding them would count it twice. Leave every field
     blank to keep using the percentage.
+    The <strong>acquisition fee</strong> is separate from both and is always <strong>added</strong>:
+    it is the GP's fee for sourcing and closing the deal, not a third-party cost of closing.
+    Set it in Assumptions above; leave it blank for no fee.
   </p>
 
   {% if acq %}
@@ -333,10 +337,30 @@
         </div>
         <div class="stat-box-sub">{{ 'overridden' if acq.is_itemized else 'used' }}</div>
       </div>
+      {# The acquisition fee is the GP's fee for sourcing and closing, not a
+         third-party cost of closing. It therefore ADDS to whichever of the
+         two above is in use, rather than participating in the override. #}
+      <div class="stat-box" style="{% if acq.has_acquisition_fee %}border-left:3px solid #059669;{% endif %}">
+        <div class="stat-box-label">Acquisition fee</div>
+        <div class="stat-box-value">{{ money(acq.acquisition_fee_total) }}</div>
+        <div class="stat-box-sub">
+          {% if acq.has_acquisition_fee %}
+            {{ '{:,.2f}%'.format(acq.acquisition_fee_pct) }} of price &mdash; added, not an override
+          {% else %}
+            not set
+          {% endif %}
+        </div>
+      </div>
       <div class="stat-box">
         <div class="stat-box-label">Applied to equity</div>
         <div class="stat-box-value">{{ money(acq.effective_total) }}</div>
-        <div class="stat-box-sub">= {{ '{:,.3f}%'.format(acq.effective_pct) }} of purchase price</div>
+        <div class="stat-box-sub">
+          {% if acq.has_acquisition_fee %}
+            {{ money(acq.costs_before_fee) }} costs + {{ money(acq.acquisition_fee_total) }} fee
+            &middot;
+          {% endif %}
+          = {{ '{:,.3f}%'.format(acq.effective_pct) }} of purchase price
+        </div>
       </div>
     </div>
 

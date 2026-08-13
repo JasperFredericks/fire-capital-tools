@@ -207,7 +207,8 @@ def total_operating_expenses(expense_lines: list[dict[str, Any]]) -> float:
 
 def acquisition_costs(expense_lines: list[dict[str, Any]],
                       purchase_price: Any,
-                      closing_costs_pct: Any) -> dict[str, Any]:
+                      closing_costs_pct: Any,
+                      acquisition_fee_pct: Any = None) -> dict[str, Any]:
     """Reconcile the itemized acquisition lines against the flat percentage.
 
     Itemizing OVERRIDES the percentage rather than adding to it: the two
@@ -219,6 +220,14 @@ def acquisition_costs(expense_lines: list[dict[str, Any]],
     can show the substitution, and a shortfall far below the estimate is
     flagged as probably-incomplete itemization -- the entered data still
     wins, but the reader is told.
+
+    The acquisition fee is different in kind and therefore ALWAYS ADDS,
+    whichever of the two above is in use. It is the GP's fee for sourcing
+    and closing the deal, not a third-party cost of closing -- none of the
+    nine itemized categories covers it, and the flat percentage does not
+    stand in for it either. Overriding it away when costs are itemized
+    would silently drop a real six-figure use of funds; the override rule
+    applies only between the two descriptions of the *same* money.
     """
     lines = [l for l in (expense_lines or [])
              if is_acquisition_line(l) and l.get("is_included")]
@@ -226,10 +235,15 @@ def acquisition_costs(expense_lines: list[dict[str, Any]],
 
     price = _f(purchase_price)
     flat_total = price * _pct(closing_costs_pct)
+    fee_pct = _f(acquisition_fee_pct)
+    fee_total = price * (fee_pct / 100.0)
 
     is_itemized = bool(lines)
-    effective = itemized_total if is_itemized else flat_total
+    effective = (itemized_total if is_itemized else flat_total) + fee_total
 
+    # Compares itemized against flat only. The fee is excluded deliberately:
+    # it is present in neither, so folding it in would make a complete
+    # itemization look like a shortfall.
     shortfall_pct = None
     if is_itemized and flat_total > 0:
         shortfall_pct = (flat_total - itemized_total) / flat_total * 100.0
@@ -240,6 +254,12 @@ def acquisition_costs(expense_lines: list[dict[str, Any]],
         "itemized_total": itemized_total,
         "flat_total": flat_total,
         "flat_pct": _f(closing_costs_pct),
+        "acquisition_fee_pct": fee_pct,
+        "acquisition_fee_total": fee_total,
+        "has_acquisition_fee": fee_total > 0,
+        # Closing costs alone, before the fee -- so the page can show the
+        # substitution and the addition as two separate statements.
+        "costs_before_fee": itemized_total if is_itemized else flat_total,
         "is_itemized": is_itemized,
         "effective_total": effective,
         # Percentage the shared engine is actually given, so the displayed
@@ -304,7 +324,8 @@ def analyze_scenario(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
         _f(scenario.get("rent_growth_pct")), _f(scenario.get("expense_growth_pct")),
     )
     acq = acquisition_costs(expense_lines, scenario.get("purchase_price"),
-                            scenario.get("closing_costs_pct"))
+                            scenario.get("closing_costs_pct"),
+                            scenario.get("acquisition_fee_pct"))
     # The shared engine takes a percentage, not a dollar amount, and is
     # deliberately not modified: itemized costs are handed over as the
     # equivalent percentage instead. Deal Analyzer therefore keeps

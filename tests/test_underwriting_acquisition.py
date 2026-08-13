@@ -175,3 +175,85 @@ class SharedEngineUntouchedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AcquisitionFeeTests(unittest.TestCase):
+    """The GP's fee for sourcing and closing the deal.
+
+    Distinct in kind from closing costs, so it ADDS rather than
+    participating in the itemize-vs-percentage override. Getting that
+    backwards would either double-count the fee or silently drop a
+    six-figure use of funds.
+    """
+
+    def test_absent_fee_changes_nothing(self):
+        """Zero regression for every scenario saved before this existed."""
+        scen, units, op = _scenario(), _units(), [_op(200_000)]
+        before = um.analyze_scenario(scen, units, op)
+        after = um.analyze_scenario(dict(scen, acquisition_fee_pct=None), units, op)
+        self.assertEqual(before["returns"]["equity_invested"],
+                         after["returns"]["equity_invested"])
+        self.assertEqual(before["returns"]["closing_costs"],
+                         after["returns"]["closing_costs"])
+        self.assertEqual(before["returns"]["levered_irr"],
+                         after["returns"]["levered_irr"])
+
+    def test_zero_fee_is_the_same_as_absent(self):
+        scen, units, op = _scenario(), _units(), [_op(200_000)]
+        a = um.analyze_scenario(scen, units, op)
+        b = um.analyze_scenario(dict(scen, acquisition_fee_pct=0.0), units, op)
+        self.assertEqual(a["returns"]["equity_invested"], b["returns"]["equity_invested"])
+
+    def test_equity_increases_by_exactly_the_fee(self):
+        scen, units, op = _scenario(), _units(), [_op(200_000)]
+        base = um.analyze_scenario(scen, units, op)
+        withfee = um.analyze_scenario(dict(scen, acquisition_fee_pct=2.5), units, op)
+        delta = (withfee["returns"]["equity_invested"]
+                 - base["returns"]["equity_invested"])
+        self.assertAlmostEqual(delta, PRICE * 0.025, places=6)
+
+    def test_fee_adds_to_the_flat_percentage(self):
+        a = um.acquisition_costs([], PRICE, FLAT_PCT, 2.5)
+        self.assertAlmostEqual(a["acquisition_fee_total"], 250_000, places=6)
+        self.assertAlmostEqual(a["costs_before_fee"], FLAT_TOTAL, places=6)
+        self.assertAlmostEqual(a["effective_total"], FLAT_TOTAL + 250_000, places=6)
+
+    def test_fee_adds_on_top_of_itemized_costs(self):
+        """The override is between itemized and flat only. The fee is in
+        neither, so it survives itemization."""
+        a = um.acquisition_costs([_acq(150_000)], PRICE, FLAT_PCT, 2.5)
+        self.assertTrue(a["is_itemized"])
+        self.assertAlmostEqual(a["costs_before_fee"], 150_000, places=6)
+        self.assertAlmostEqual(a["effective_total"], 150_000 + 250_000, places=6)
+
+    def test_fee_is_excluded_from_the_shortfall_comparison(self):
+        """Shortfall compares the two descriptions of the same money. Folding
+        the fee in would make a complete itemization look like a shortfall."""
+        a = um.acquisition_costs([_acq(200_000)], PRICE, FLAT_PCT, 3.5)
+        self.assertAlmostEqual(a["shortfall_pct"], 0.0, places=6)
+        self.assertFalse(a["shortfall_warning"])
+
+    def test_fee_reaches_the_engine_as_part_of_closing_costs(self):
+        scen, units, op = _scenario(), _units(), [_op(200_000)]
+        res = um.analyze_scenario(dict(scen, acquisition_fee_pct=2.5), units, op)
+        self.assertAlmostEqual(res["returns"]["closing_costs"],
+                               FLAT_TOTAL + 250_000, places=2)
+
+    def test_fee_does_not_touch_noi_or_operating_expenses(self):
+        scen, units, op = _scenario(), _units(), [_op(200_000)]
+        a = um.analyze_scenario(scen, units, op)
+        b = um.analyze_scenario(dict(scen, acquisition_fee_pct=3.5), units, op)
+        self.assertEqual(a["projection"]["noi_series"], b["projection"]["noi_series"])
+        self.assertEqual(a["operating_expenses_year1"], b["operating_expenses_year1"])
+
+    def test_fee_lowers_irr(self):
+        """More cash in at close for the same cash out must reduce return."""
+        scen, units, op = _scenario(), _units(), [_op(200_000)]
+        a = um.analyze_scenario(scen, units, op)
+        b = um.analyze_scenario(dict(scen, acquisition_fee_pct=2.5), units, op)
+        self.assertLess(b["returns"]["levered_irr"], a["returns"]["levered_irr"])
+
+    def test_effective_pct_still_reproduces_effective_dollars(self):
+        a = um.acquisition_costs([_acq(150_000)], PRICE, FLAT_PCT, 2.5)
+        self.assertAlmostEqual(PRICE * a["effective_pct"] / 100.0,
+                               a["effective_total"], places=6)
