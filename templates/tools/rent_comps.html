@@ -92,6 +92,10 @@
     <div class="scorecard-section-title">Rent Estimate &amp; Comparables (RentCast)</div>
     {% if has_address %}
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        {% if candidates %}
+          <a class="btn btn-ghost"
+             href="{{ url_for('rent_comps.export_csv', set='candidates', **ctx_query) }}">Download CSV</a>
+        {% endif %}
         {% if cached %}
           <form method="POST" action="{{ url_for('rent_comps.reload_from_cache') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -99,8 +103,23 @@
             <button type="submit" class="btn btn-ghost">Reload from Cache</button>
           </form>
         {% endif %}
+        {#
+          The spend confirmation is kept for Force Refresh and dropped for
+          the first pull, deliberately.
+
+          Force Refresh re-spends a call on an address that already has
+          cached data -- that is the wasteful case, and the one the
+          confirmation was built for. Pulling for the first time is the
+          user's obvious intent: they typed an address and asked for data,
+          there is nothing cached to lose, and interrupting that was the
+          friction Michelle reported.
+
+          The cap itself is untouched. pull() still refuses at cap and the
+          button below is still disabled at cap -- the guarantee never
+          lived in this dialog.
+        #}
         <form method="POST" action="{{ url_for('rent_comps.pull') }}"
-              onsubmit="return confirm('This uses 1 RentCast API call ({{ rentcast_quota.used }} of {{ rentcast_quota.threshold }} used this month). Continue?');">
+              {% if cached %}onsubmit="return confirm('This re-pulls data you already have cached and uses 1 RentCast API call ({{ rentcast_quota.used }} of {{ rentcast_quota.threshold }} used this month). Continue?');"{% endif %}>
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           {{ scope_fields() }}
           <button type="submit" class="btn btn-ghost" {% if rentcast_quota.at_cap %}disabled title="Monthly RentCast limit reached"{% endif %}>
@@ -185,8 +204,46 @@
     </div>
 
     <div class="scorecard-mini-title" style="margin-bottom:8px;">
-      Comparable Rentals{% if candidates %} ({{ candidates|length }}){% endif %}
+      Comparable Rentals{% if candidates %} (<span id="rc-shown">{{ candidates|length }}</span> of {{ candidates|length }}){% endif %}
     </div>
+
+    {#
+      Filters, and why the bedroom one exists.
+
+      RentCast returns the nearest rentals regardless of size. On
+      1120 Jackson St that is 0-, 1-, 2-, 3- and 4-bed units in a single
+      table, so the rent column spans $2,200 to $7,545 and the list reads
+      as wrong. It is not wrong -- it is unfiltered. Defaulting the bedroom
+      filter to the subject property's own bed count is what makes the
+      remaining spread meaningful, and it is a precondition for the outlier
+      badge below: flagging "outliers" across mixed unit sizes would just
+      flag the bigger units, which are not errors.
+
+      Purely client-side over rows already in the DOM. No request, no API
+      call, nothing to spend.
+    #}
+    {% if candidates %}
+      {% set subject_beds = (rentcast.property.bedrooms if rentcast.property else none) %}
+      <div class="rc-filters" style="display:flex; gap:14px; align-items:end; flex-wrap:wrap; margin-bottom:10px;">
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="rc-filter-beds">Bedrooms</label>
+          <select class="form-input" id="rc-filter-beds"
+                  data-subject-beds="{{ subject_beds if subject_beds is not none else '' }}">
+            <option value="">All sizes</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label" for="rc-filter-recency">Listing recency</label>
+          <select class="form-input" id="rc-filter-recency">
+            <option value="">Any</option>
+            <option value="listed">Currently listed only</option>
+            <option value="30">Seen in last 30 days</option>
+            <option value="90">Seen in last 90 days</option>
+          </select>
+        </div>
+        <div class="stat-box-sub" id="rc-filter-note" style="padding-bottom:10px;"></div>
+      </div>
+    {% endif %}
     <div class="table-wrap" style="margin-bottom:10px;">
       <table class="rent-comps-table">
         <thead>
@@ -204,7 +261,12 @@
             {% for c in candidates %}
               {% set addr_key = (c.get('address') or '')|trim|lower %}
               {% set is_saved = addr_key and addr_key in already_saved %}
-              <tr {% if loop.index0 >= candidate_preview %}class="rc-extra" hidden{% endif %}>
+              <tr class="rc-cand{% if loop.index0 >= candidate_preview %} rc-extra{% endif %}"
+                  {% if loop.index0 >= candidate_preview %}hidden{% endif %}
+                  data-beds="{{ c.get('bedrooms') if c.get('bedrooms') is not none else '' }}"
+                  data-days="{{ c.get('days_old') if c.get('days_old') is not none else '' }}"
+                  data-status="{{ (c.get('listing_status') or '')|lower }}"
+                  data-rent="{{ c.get('price') if c.get('price') is not none else '' }}">
                 {{ rc.comp_cells(c) }}
                 <td>
                   {% if is_saved %}
@@ -247,8 +309,14 @@
 
 <!-- ── Saved comps ────────────────────────────────────────────────────── -->
 <div class="card" id="saved-comps">
-  <div class="scorecard-section-title">
-    Saved Rent Comps{% if saved %} ({{ saved|length }}){% endif %}
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+    <div class="scorecard-section-title">
+      Saved Rent Comps{% if saved %} ({{ saved|length }}){% endif %}
+    </div>
+    {% if saved %}
+      <a class="btn btn-ghost"
+         href="{{ url_for('rent_comps.export_csv', set='saved', **ctx_query) }}">Download CSV</a>
+    {% endif %}
   </div>
   <p class="page-subtitle" style="margin:10px 0 12px;">
     {% if ctx.deal_id %}
@@ -258,6 +326,22 @@
     {% endif %}
     Ordered by match strength.
   </p>
+
+  {#
+    Saved comps are scoped: standalone saves have a NULL deal_id and never
+    appear in a deal's view. That is intentional -- one deal's comps must
+    not leak into another's -- but with nothing on screen saying so, comps
+    saved standalone look deleted when the tool is next opened from a
+    deal. That is the "it says saved but I can't access them" report.
+  #}
+  {% if ctx.deal_id and not saved and standalone_count %}
+    <div class="result-note" style="margin-bottom:12px;">
+      You have <strong>{{ standalone_count }}</strong> rent comp{{ 's' if standalone_count != 1 }}
+      saved to the <strong>standalone list</strong>, not to this deal &mdash; saved comps are kept
+      per deal, and anything saved outside a deal stays separate.
+      <a href="{{ url_for('rent_comps.index') }}">View the standalone list</a>.
+    </div>
+  {% endif %}
 
   <div class="table-wrap">
     <table class="rent-comps-table">
@@ -269,7 +353,9 @@
       </thead>
       <tbody>
         {% if not saved %}
-          <tr><td colspan="{{ columns|length + 1 }}">No rent comps saved yet — add one from the comparables above.</td></tr>
+          <tr><td colspan="{{ columns|length + 1 }}">
+            No rent comps saved to this deal yet — add one from the comparables above.
+          </td></tr>
         {% else %}
           {% for c in saved %}
             <tr {% if loop.index0 >= saved_preview %}class="rc-saved-extra" hidden{% endif %}>
@@ -294,6 +380,142 @@
     </button>
   {% endif %}
 </div>
+
+{#
+  Filtering + outlier flagging for the comparables table.
+
+  Order matters: the median is computed over the rows that survive the
+  filters, never over the whole set. An outlier is only meaningful
+  relative to comps of the same size -- against a mixed 0-to-4-bed list
+  the badge would land on every larger unit, which is exactly the
+  false alarm this ordering avoids.
+
+  Threshold is a flat +/-40% from the median of the visible rows.
+  Deliberately a plain, explainable rule rather than anything
+  distribution-based: whoever sees the badge can check the arithmetic.
+#}
+<script>
+(function () {
+  var bedsSel   = document.getElementById("rc-filter-beds");
+  var recencySel= document.getElementById("rc-filter-recency");
+  if (!bedsSel || !recencySel) return;
+
+  var rows = Array.prototype.slice.call(document.querySelectorAll("tr.rc-cand"));
+  var shownCount = document.getElementById("rc-shown");
+  var note = document.getElementById("rc-filter-note");
+  var OUTLIER_PCT = 0.40;
+
+  // Populate the bedroom options from the rows actually present.
+  var beds = [];
+  rows.forEach(function (r) {
+    var b = r.getAttribute("data-beds");
+    if (b !== "" && beds.indexOf(b) === -1) { beds.push(b); }
+  });
+  beds.sort(function (a, b) { return parseFloat(a) - parseFloat(b); });
+  beds.forEach(function (b) {
+    var o = document.createElement("option");
+    o.value = b;
+    o.textContent = (parseFloat(b) === 0 ? "Studio" : b + " bed") ;
+    bedsSel.appendChild(o);
+  });
+
+  // Default to the subject property's own size when RentCast told us what
+  // it is. When it did not (some addresses come back with no subject
+  // attributes at all), fall back to All rather than guessing.
+  var subject = bedsSel.getAttribute("data-subject-beds");
+  if (subject !== "" && beds.indexOf(subject) !== -1) {
+    bedsSel.value = subject;
+  }
+
+  function passes(row) {
+    var wantBeds = bedsSel.value;
+    if (wantBeds !== "" && row.getAttribute("data-beds") !== wantBeds) return false;
+    var rec = recencySel.value;
+    if (rec === "listed") {
+      if (row.getAttribute("data-status") !== "active") return false;
+    } else if (rec !== "") {
+      var d = row.getAttribute("data-days");
+      if (d === "" || parseFloat(d) > parseFloat(rec)) return false;
+    }
+    return true;
+  }
+
+  function apply() {
+    var visible = [];
+    rows.forEach(function (row) {
+      var ok = passes(row);
+      row.dataset.filtered = ok ? "in" : "out";
+      if (ok) visible.push(row);
+    });
+
+    // Re-apply the preview collapse over whatever survived, so "Show all"
+    // keeps working after filtering.
+    visible.forEach(function (row, i) {
+      if (row.classList.contains("rc-extra") && !expanded) { row.setAttribute("hidden", ""); }
+      else { row.removeAttribute("hidden"); }
+    });
+    rows.forEach(function (row) {
+      if (row.dataset.filtered === "out") row.setAttribute("hidden", "");
+    });
+
+    if (shownCount) shownCount.textContent = visible.length;
+
+    // Outliers, over the visible set only.
+    var rents = visible.map(function (r) { return parseFloat(r.getAttribute("data-rent")); })
+                       .filter(function (v) { return !isNaN(v); })
+                       .sort(function (a, b) { return a - b; });
+    document.querySelectorAll(".rc-outlier-badge").forEach(function (b) { b.remove(); });
+
+    var median = null, flagged = 0;
+    if (rents.length >= 4) {
+      var mid = Math.floor(rents.length / 2);
+      median = rents.length % 2 ? rents[mid] : (rents[mid - 1] + rents[mid]) / 2;
+      visible.forEach(function (row) {
+        var v = parseFloat(row.getAttribute("data-rent"));
+        if (isNaN(v) || !median) return;
+        var delta = (v - median) / median;
+        if (Math.abs(delta) > OUTLIER_PCT) {
+          flagged++;
+          var pct = Math.round(delta * 100);
+          var badge = document.createElement("span");
+          badge.className = "rc-outlier-badge";
+          badge.textContent = (pct > 0 ? "+" : "") + pct + "% vs median";
+          badge.title = "This comp's rent is more than " + (OUTLIER_PCT * 100) +
+                        "% away from the median of the " + visible.length +
+                        " comps currently shown (median $" + median.toLocaleString() + ").";
+          row.cells[0].appendChild(badge);
+        }
+      });
+    }
+
+    if (note) {
+      var bits = [];
+      bits.push(visible.length + " of " + rows.length + " match");
+      if (median) bits.push("median $" + median.toLocaleString());
+      if (flagged) bits.push(flagged + " flagged as unusual");
+      else if (rents.length < 4) bits.push("too few to flag outliers");
+      // Said when RentCast did not tell us the subject's own size, so the
+      // reader knows why the list was not narrowed for them.
+      if (subject === "" && bedsSel.value === "") {
+        bits.push("subject size unknown — showing all sizes");
+      }
+      note.textContent = bits.join(" · ");
+    }
+  }
+
+  // The shared expander toggles .rc-extra; keep our own notion of state so
+  // filtering does not undo an expand.
+  var expanded = false;
+  var expander = document.querySelector('[data-expand="rc-extra"]');
+  if (expander) {
+    expander.addEventListener("click", function () { expanded = !expanded; setTimeout(apply, 0); });
+  }
+
+  bedsSel.addEventListener("change", apply);
+  recencySel.addEventListener("change", apply);
+  apply();
+})();
+</script>
 
 {{ rc.expander_script() }}
 {% endblock %}

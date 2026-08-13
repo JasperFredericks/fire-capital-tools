@@ -1294,6 +1294,21 @@ hr.divider {
 
 /* Deal Dive filter box. New selectors rather than changes to .form-input,
    which 20+ templates share -- the icon inset is the only difference. */
+/* Outlier badge on a rent comp whose rent is far from the median of the
+   comps currently shown. New selector; shares no class with anything. */
+.rc-outlier-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fde68a;
+  white-space: nowrap;
+}
+
 .deal-search-wrap {
   position: relative;
 }

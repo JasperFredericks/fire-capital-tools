@@ -57,6 +57,27 @@
 
 {% macro sqft(v) %}{{ '{:,.0f}'.format(v) if v is not none else '—' }}{% endmacro %}
 
+{#
+  RentCast returns "Active"/"Inactive", which reads as though the listing
+  record is switched on or off rather than as whether the unit is still on
+  the market. Michelle's note was that the labels are not intuitive.
+
+  The raw value is kept in the title attribute -- it is what RentCast
+  actually said, and anyone reconciling against the API needs to see it.
+#}
+{% macro listing_status(status) %}
+  {%- set s = (status or '')|trim|lower -%}
+  {%- if s == 'active' -%}
+    <span title="RentCast status: Active">Currently Listed</span>
+  {%- elif s == 'inactive' -%}
+    <span title="RentCast status: Inactive" style="color:#6b7280;">No Longer Listed</span>
+  {%- elif status -%}
+    <span title="RentCast status: {{ status }}">{{ status }}</span>
+  {%- else -%}
+    &mdash;
+  {%- endif -%}
+{% endmacro %}
+
 {% macro last_seen(days_old) %}
   {%- if days_old is not none and days_old != '' -%}
     {{ days_old|int }}d ago
@@ -88,7 +109,7 @@
   <td>{{ '%.1f mi'|format(c.get('distance_miles')) if c.get('distance_miles') is not none else '—' }}</td>
   <td>{{ match_pct(c.get('correlation')) }}</td>
   <td>{{ last_seen(c.get('days_old')) }}</td>
-  <td>{{ c.get('listing_status') or '—' }}</td>
+  <td>{{ listing_status(c.get('listing_status')) }}</td>
 {% endmacro %}
 
 {% set COLUMNS = ['Address', 'Rent', 'Bd/Ba', 'Sqft', '$/Sqft', 'Distance', 'Match %', 'Last Seen', 'Status'] %}
