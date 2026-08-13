@@ -65,12 +65,12 @@ class TestSiteDDCascade(unittest.TestCase):
             aid = self.sdb.create_assessment(conn, {
                 "deal_id": deal_id, "property_label": "1 Cascade Way",
                 "checklist_version": self.cl.CHECKLIST_VERSION})
-            self.sdb.upsert_items(conn, aid, [
+            self.sdb.upsert_findings(conn, aid, [
                 {"category_key": self.cl.ITEM_CATEGORY[k], "item_key": k,
-                 "score": 4, "note": "ok"}
+                 "condition": "good", "note": "ok", "scope": self.cl.SCOPE}
                 for k in self.cl.ITEM_KEYS[:5]
             ])
-            self.sdb.add_photo(conn, aid, "foundation", "crack.png", "tok_crack.png", "hairline")
+            self.sdb.add_media(conn, aid, "foundation", "crack.png", "tok_crack.png", "hairline")
 
         photo_dir = Path(self.app.config["UPLOAD_FOLDER"]) / "site-dd" / str(aid)
         photo_dir.mkdir(parents=True, exist_ok=True)
@@ -78,14 +78,14 @@ class TestSiteDDCascade(unittest.TestCase):
         photo_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
         return deal_id, aid, photo_file
 
-    def test_deleting_deal_removes_assessment_items_photos_and_files(self):
+    def test_deleting_deal_removes_assessment_findings_media_and_files(self):
         deal_id, aid, photo_file = self._make_deal_with_assessment()
 
         # everything exists first
         with self.sdb.get_connection() as conn:
             self.assertIsNotNone(self.sdb.get_assessment(conn, aid))
-            self.assertEqual(len(self.sdb.get_items(conn, aid)), 5)
-            self.assertEqual(len(self.sdb.list_photos(conn, aid)), 1)
+            self.assertEqual(len(self.sdb.get_findings(conn, aid)), 5)
+            self.assertEqual(len(self.sdb.list_media(conn, aid)), 1)
         self.assertTrue(photo_file.exists())
 
         with self.app.test_client() as client:
@@ -94,8 +94,8 @@ class TestSiteDDCascade(unittest.TestCase):
 
         with self.sdb.get_connection() as conn:
             self.assertIsNone(self.sdb.get_assessment(conn, aid), "assessment row orphaned")
-            self.assertEqual(self.sdb.get_items(conn, aid), {}, "item rows orphaned")
-            self.assertEqual(self.sdb.list_photos(conn, aid), [], "photo rows orphaned")
+            self.assertEqual(self.sdb.get_findings(conn, aid), {}, "finding rows orphaned")
+            self.assertEqual(self.sdb.list_media(conn, aid), [], "media rows orphaned")
         self.assertFalse(photo_file.exists(), "uploaded file left on disk")
         self.assertFalse(photo_file.parent.exists(), "upload directory left behind")
 
@@ -142,8 +142,8 @@ class TestSiteDDCascade(unittest.TestCase):
             self.assertIn(resp.status_code, (302, 303))
         with self.sdb.get_connection() as conn:
             self.assertIsNone(self.sdb.get_assessment(conn, aid))
-            self.assertEqual(self.sdb.get_items(conn, aid), {})
-            self.assertEqual(self.sdb.list_photos(conn, aid), [])
+            self.assertEqual(self.sdb.get_findings(conn, aid), {})
+            self.assertEqual(self.sdb.list_media(conn, aid), [])
         self.assertFalse(photo_file.exists())
 
 

@@ -283,7 +283,7 @@ def build_pnl(scenario: dict[str, Any], unit_lines: list[dict[str, Any]],
 
     `result` is passed in rather than recomputed, so the P&L cannot
     disagree with the page that linked to it -- the same reason
-    site_dd_report takes its scores as an argument.
+    site_dd_report takes its summary as an argument.
 
     Raises PnLReconciliationError if any year's detail fails to sum back
     to the engine's total for that year.

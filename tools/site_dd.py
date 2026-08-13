@@ -2,8 +2,9 @@
 FIRE Capital Tools - Site DD (beta).
 
 A structured site walkthrough: a 32-item inspection checklist across six
-categories, scored 1-5 or N/A, rolled up into category scores, an overall
-score, a risk band and a critical-findings count, with per-item notes,
+categories, each recorded on the five-state condition scale
+(Excellent/Good/Satisfactory/Repair/Replace), rolled up into counts by
+state and a count of what needs work, with per-item notes,
 photos, and a PDF report.
 
 Supersedes Deal Dive's Condition tab, which was a single subjective rating
@@ -23,7 +24,7 @@ inspection date and inspector belong to the visit, not to the deal
 record, and follow the Deal Analyzer precedent of prefill-but-editable.
 
 Scores are never stored -- they are computed on read from the item rows by
-site_dd_checklist.score_assessment(), so what the screen shows, what the
+site_dd_conditions.summarize(), so what the screen shows, what the
 summary card shows, and what the PDF prints cannot drift apart.
 """
 
@@ -51,6 +52,7 @@ from werkzeug.utils import secure_filename
 from tools import branding
 from tools import deal_dive_db
 from tools import site_dd_checklist as cl
+from tools import site_dd_conditions as cond
 from tools import site_dd_db as db
 from tools import site_dd_report as report
 from tools.form_utils import to_int
@@ -105,7 +107,7 @@ def index():
     with db.get_connection() as conn:
         rows = db.list_assessments(conn, deal_id=deal_id, all_scopes=deal_id is None)
         for r in rows:
-            r["scores"] = cl.score_assessment(db.get_scores_map(conn, r["id"]))
+            r["summary"] = cond.summarize(db.get_conditions_map(conn, r["id"]), cl.CATEGORIES)
 
     return render_template(
         "tools/site_dd.html",
@@ -159,13 +161,16 @@ def detail(assessment_id):
         assessment = db.get_assessment(conn, assessment_id)
         if not assessment:
             abort(404)
-        items = db.get_items(conn, assessment_id)
-        photos = db.list_photos(conn, assessment_id)
-        scores = cl.score_assessment({k: v["score"] for k, v in items.items()})
+        items = db.get_findings(conn, assessment_id)
+        photos = db.list_media(conn, assessment_id, kind=db.MEDIA_PHOTO)
+        summary = cond.summarize({k: v["condition"] for k, v in items.items()},
+                                 cl.CATEGORIES)
 
+    # Media is keyed to a finding from Branch 3 onward; until then it is
+    # attached by item key, which is what the caption carries.
     photos_by_item = {}
     for p in photos:
-        photos_by_item.setdefault(p["item_key"] or "", []).append(p)
+        photos_by_item.setdefault(p.get("item_key") or "", []).append(p)
 
     return render_template(
         "tools/site_dd_detail.html",
@@ -176,8 +181,11 @@ def detail(assessment_id):
         item_labels=cl.ITEM_LABELS,
         photos=photos,
         photos_by_item=photos_by_item,
-        scores=scores,
-        score_labels=cl.SCORE_LABELS,
+        summary=summary,
+        conditions=cond.CONDITIONS,
+        condition_labels=cond.CONDITION_LABELS,
+        condition_hints=cond.CONDITION_HINTS,
+        condition_colours=cond.CONDITION_COLOURS,
         note_truncate_at=report.NOTE_TRUNCATE_AT,
         statuses=db.STATUSES,
         feedback_tool=FEEDBACK_TOOL_NAME,
@@ -190,22 +198,23 @@ def save(assessment_id):
     """Persist the whole checklist plus the assessment header in one go.
 
     Only keys in the checklist definition are accepted -- a hand-crafted
-    POST cannot insert a response to an item that does not exist. A score
-    outside 1-5, or the empty string, is stored as NULL (N/A) rather than
+    POST cannot insert a response to an item that does not exist. Anything
+    that is not one of the five conditions, including the empty string and
+    a leftover numeric score, is stored as NULL (not assessed) rather than
     being coerced to something arbitrary."""
     if not _load(assessment_id):
         return _not_found()
 
     responses = []
     for key in cl.ITEM_KEYS:
-        raw = (request.form.get(f"score_{key}") or "").strip()
-        score = to_int(raw)
-        if not cl.valid_score(score):
-            score = None
+        raw = (request.form.get(f"condition_{key}") or "").strip()
         responses.append({
+            "scope": cl.SCOPE,
+            "area_id": None,
+            "room_id": None,
             "category_key": cl.ITEM_CATEGORY[key],
             "item_key": key,
-            "score": score,
+            "condition": raw if cond.is_valid(raw) else None,
             "note": (request.form.get(f"note_{key}") or "").strip() or None,
         })
 
@@ -218,7 +227,7 @@ def save(assessment_id):
             "overall_notes": (request.form.get("overall_notes") or "").strip() or None,
             "status": status if status in db.STATUSES else db.STATUS_DRAFT,
         })
-        db.upsert_items(conn, assessment_id, responses)
+        db.upsert_findings(conn, assessment_id, responses)
 
     flash("Assessment saved.", "success")
     return redirect(url_for("site_dd.detail", assessment_id=assessment_id))
@@ -262,7 +271,7 @@ def upload_photo(assessment_id):
     stored_name = f"{secrets.token_urlsafe(8)}_{original_name}"
     upload.save(str(_upload_dir(assessment_id) / stored_name))
     with db.get_connection() as conn:
-        db.add_photo(conn, assessment_id, item_key, original_name, stored_name,
+        db.add_media(conn, assessment_id, item_key, original_name, stored_name,
                      (request.form.get("caption") or "").strip() or None)
 
     flash("Photo uploaded.", "success")
@@ -273,7 +282,7 @@ def upload_photo(assessment_id):
 @login_required
 def download_photo(assessment_id, photo_id):
     with db.get_connection() as conn:
-        record = db.get_photo(conn, assessment_id, photo_id)
+        record = db.get_media(conn, assessment_id, photo_id)
     if not record:
         abort(404)
     path = _upload_dir(assessment_id) / record["stored_name"]
@@ -286,9 +295,9 @@ def download_photo(assessment_id, photo_id):
 @login_required
 def delete_photo(assessment_id, photo_id):
     with db.get_connection() as conn:
-        record = db.get_photo(conn, assessment_id, photo_id)
+        record = db.get_media(conn, assessment_id, photo_id)
         if record:
-            db.delete_photo(conn, assessment_id, photo_id)
+            db.delete_media(conn, assessment_id, photo_id)
     if record:
         (_upload_dir(assessment_id) / record["stored_name"]).unlink(missing_ok=True)
     flash("Photo removed.", "success")
@@ -308,9 +317,10 @@ def download_report(assessment_id):
         assessment = db.get_assessment(conn, assessment_id)
         if not assessment:
             abort(404)
-        items = db.get_items(conn, assessment_id)
-        photos = db.list_photos(conn, assessment_id)
-        scores = cl.score_assessment({k: v["score"] for k, v in items.items()})
+        items = db.get_findings(conn, assessment_id)
+        photos = db.list_media(conn, assessment_id, kind=db.MEDIA_PHOTO)
+        summary = cond.summarize({k: v["condition"] for k, v in items.items()},
+                                 cl.CATEGORIES)
 
     upload_dir = _upload_dir(assessment_id)
     # Only raster images can be embedded as thumbnails; a PDF attachment
@@ -320,7 +330,7 @@ def download_report(assessment_id):
 
     out_path = upload_dir / report.report_filename(assessment)
     report.build_report(
-        out_path, assessment, items, scores, thumbable, photo_dir=upload_dir,
+        out_path, assessment, items, summary, thumbable, photo_dir=upload_dir,
         logo_path=branding.logo_png_path(Path(current_app.root_path) / "static"),
     )
     return send_file(str(out_path), as_attachment=True,
@@ -338,7 +348,8 @@ def summary_for_deal(deal_id: int) -> dict | None:
         latest = db.latest_for_deal(conn, deal_id)
         if not latest:
             return None
-        latest["scores"] = cl.score_assessment(db.get_scores_map(conn, latest["id"]))
+        latest["summary"] = cond.summarize(
+            db.get_conditions_map(conn, latest["id"]), cl.CATEGORIES)
         latest["total_count"] = db.count_for_deal(conn, deal_id)
         return latest
 
