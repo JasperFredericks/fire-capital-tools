@@ -327,11 +327,10 @@ class ScorecardUpdater:
             # itself; it's still available in full via the Accounts tab
             # and the exported KPI CSV/XLSX (both list every account code).
             self.diagnostics["warnings"].append(
-                f"Scorecard update: matched {matched_accounts} of {total_accounts} P&L accounts "
-                f"to rows in the scorecard; {len(unresolved)} line item(s) could not be confidently "
-                "matched (likely different account naming between the P&L export and this "
-                "scorecard's own layout) and were not updated. See the Accounts tab or exported "
-                "KPI data for the full account list."
+                "Some accounts in your P&L could not be matched to rows in the "
+                "scorecard, usually because the two files name them differently. "
+                f"{len(unresolved)} of {total_accounts} were left un-updated — the "
+                "full list is in the Accounts tab and the exported KPI data."
             )
         if ambiguous_names:
             self.diagnostics["warnings"].append(
