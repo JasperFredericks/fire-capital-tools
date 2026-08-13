@@ -24,9 +24,28 @@
     <a href="{{ url_for('deal_dive.new_deal') }}" class="btn btn-primary">+ New Deal</a>
   </div>
 
+  {#
+    Labelled "Filter deals", not "Search". The box only narrows the list
+    below -- it never looks an address up anywhere. Unlabelled and sitting
+    next to "+ New Deal", it read as a place to enter a property, so typing
+    an address and pressing Enter felt like it should do something and did
+    not. The label, the icon and the hint all say the same thing: this
+    filters what is already here.
+  #}
   {% if deals %}
-  <div class="form-group" style="max-width:320px; margin-bottom:14px;">
-    <input class="form-input" type="text" id="dealSearch" placeholder="Search by address, city, or state...">
+  <div class="form-group" style="max-width:360px; margin-bottom:14px;">
+    <label class="form-label" for="dealSearch">Filter deals</label>
+    <div class="deal-search-wrap">
+      <svg class="deal-search-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.817-4.817A6 6 0 012 8z" clip-rule="evenodd"/>
+      </svg>
+      <input class="form-input deal-search-input" type="text" id="dealSearch"
+             placeholder="Filter by address, city, or state"
+             aria-describedby="dealSearchHint">
+    </div>
+    <div class="stat-box-sub" id="dealSearchHint" style="margin-top:6px;">
+      Narrows the list below. Press Enter to open the deal when one matches.
+    </div>
   </div>
   {% endif %}
 
@@ -56,6 +75,20 @@
               <td>{{ deal.updated_at[:10] }}</td>
             </tr>
           {% endfor %}
+          {#
+            Shown by the filter when it hides every row. Deliberately a
+            separate message from the server-rendered one below: "no deals
+            exist yet" and "none of your deals match what you typed" are
+            different situations needing different next steps, and the two
+            can never appear together -- this row only exists when there ARE
+            deals, and the one below only when there are none.
+          #}
+          <tr id="dealNoMatch" style="display:none;">
+            <td colspan="7">
+              No deals match &ldquo;<span id="dealNoMatchQuery"></span>&rdquo;.
+              &mdash; <a id="dealNoMatchLink" href="{{ url_for('deal_dive.new_deal') }}">Create it as a new deal</a>
+            </td>
+          </tr>
         {% else %}
           <tr><td colspan="7">No deals yet{% if status_filter %} with this status{% endif %}. <a href="{{ url_for('deal_dive.new_deal') }}">Create one</a>.</td></tr>
         {% endif %}
@@ -71,14 +104,70 @@
   var tbody = table.tBodies[0];
   var searchInput = document.getElementById("dealSearch");
 
+  var noMatchRow   = document.getElementById("dealNoMatch");
+  var noMatchQuery = document.getElementById("dealNoMatchQuery");
+  var noMatchLink  = document.getElementById("dealNoMatchLink");
+  var newDealUrl   = "{{ url_for('deal_dive.new_deal') }}";
+
+  // Deal rows only -- never the no-match row, which must not filter itself.
+  function dealRows() {
+    return Array.prototype.filter.call(tbody.rows, function (row) {
+      return row !== noMatchRow && row.cells.length > 1;
+    });
+  }
+
+  function visibleDealRows() {
+    return dealRows().filter(function (row) { return row.style.display !== "none"; });
+  }
+
+  // The link carries the typed text so New Deal opens with the address
+  // already filled in, rather than discarding what was just typed.
+  function newDealHref(q) {
+    return q ? newDealUrl + "?address=" + encodeURIComponent(q) : newDealUrl;
+  }
+
+  function applyFilter() {
+    var raw = searchInput.value.trim();
+    var q = raw.toLowerCase();
+    dealRows().forEach(function (row) {
+      var text = row.textContent.toLowerCase();
+      row.style.display = !q || text.indexOf(q) !== -1 ? "" : "none";
+    });
+    // An empty table with no explanation was the actual dead end: it looked
+    // like the page had broken rather than like nothing matched.
+    if (noMatchRow) {
+      var none = q && visibleDealRows().length === 0;
+      noMatchRow.style.display = none ? "" : "none";
+      if (none) {
+        noMatchQuery.textContent = raw;
+        noMatchLink.setAttribute("href", newDealHref(raw));
+      }
+    }
+  }
+
   if (searchInput) {
-    searchInput.addEventListener("input", function () {
-      var q = searchInput.value.trim().toLowerCase();
-      Array.prototype.forEach.call(tbody.rows, function (row) {
-        if (!row.cells.length || !row.cells[0].querySelector) return;
-        var text = row.textContent.toLowerCase();
-        row.style.display = !q || text.indexOf(q) !== -1 ? "" : "none";
-      });
+    searchInput.addEventListener("input", applyFilter);
+
+    // Enter previously did nothing at all: the input is not inside a form,
+    // so there was no implicit submission and no handler to catch it.
+    //
+    //   exactly one match -> open that deal
+    //   no matches        -> start a new deal, carrying the typed address
+    //   several matches   -> do nothing beyond the filter already applied;
+    //                        there is no single deal to open, and the list
+    //                        on screen is already the answer
+    searchInput.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      var raw = searchInput.value.trim();
+      if (!raw) return;
+      var matches = visibleDealRows();
+      if (matches.length === 1) {
+        var link = matches[0].cells[0].querySelector("a");
+        if (link) { window.location.assign(link.getAttribute("href")); }
+      } else if (matches.length === 0) {
+        window.location.assign(newDealHref(raw));
+      }
     });
   }
 

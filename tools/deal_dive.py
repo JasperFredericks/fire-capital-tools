@@ -156,7 +156,18 @@ def new_deal():
         flash("Deal created.", "success")
         return redirect(url_for("deal_dive.detail", deal_id=deal_id))
 
-    return render_template("tools/deal_dive_new.html", form={})
+    # Pre-fill the address when the user arrived from the Deal Dive list by
+    # typing something that matched no existing deal and pressing Enter.
+    # Typing an address and getting an empty table was the dead end Michelle
+    # hit; carrying the text through means Enter starts the deal instead of
+    # discarding what she just typed.
+    #
+    # The template already renders `form.get('address', '')`, so this is the
+    # whole of the change -- read the query param, hand it to the same dict
+    # the POST path uses.
+    prefill = (request.args.get("address") or "").strip()
+    return render_template("tools/deal_dive_new.html",
+                           form={"address": prefill} if prefill else {})
 
 
 @deal_dive_bp.route("/deal/<int:deal_id>")
