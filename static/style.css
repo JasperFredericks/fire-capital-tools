@@ -3090,3 +3090,98 @@ hr.divider {
   border-color: #fca5a5;
   color: #b91c1c;
 }
+
+/* ── Site DD: the item bank picker ─────────────────────────────────────
+   One "+ Add item" per room or unit -- not one per item. A per-item
+   control would put twenty affordances on a page whose job is answering
+   six questions, and the inspector is not adding a fireplace to the
+   flooring.
+
+   Built on <details>, so it opens and submits with JavaScript off. The
+   sheet presentation below is what turns that into a phone control: on a
+   narrow screen [open] pins it to the bottom of the viewport where a
+   thumb reaches; wider up it is an ordinary inline panel. */
+.sdd-picker { margin: 4px 0 14px; }
+.sdd-picker > summary { list-style: none; display: block; text-align: center; }
+.sdd-picker > summary::-webkit-details-marker { display: none; }
+.sdd-picker-open { line-height: 22px; }
+.sdd-picker[open] > summary { border-style: solid; color: #374151; }
+
+.sdd-sheet {
+  margin-top: 8px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+.sdd-sheet-head { padding: 12px 14px 8px; border-bottom: 1px solid #f3f4f6; }
+.sdd-sheet-body { padding: 10px 14px 14px; }
+.sdd-picker-search { margin-bottom: 10px; }
+.sdd-picker-group { margin-bottom: 12px; }
+.sdd-picker-cat {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #9ca3af;
+  margin: 0 0 6px;
+}
+.sdd-picker-item {
+  display: block;
+  width: 100%;
+  min-height: 44px;          /* thumb-sized, same floor as every other control */
+  text-align: left;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border: 1px solid #e5e7eb;
+  border-radius: 9px;
+  background: #fff;
+  cursor: pointer;
+}
+.sdd-picker-item:hover { border-color: #d1d5db; background: #f9fafb; }
+/* An explicit display beats the UA stylesheet's [hidden] { display:none },
+   so the search filter would set the attribute and nothing would move. */
+.sdd-picker-item[hidden],
+.sdd-picker-group[hidden] { display: none; }
+.sdd-picker-label { display: block; font-size: 14px; font-weight: 600; color: #111827; }
+.sdd-picker-item--go {
+  margin-top: 8px;
+  border-color: #c7d2fe;
+  background: #eef2ff;
+}
+.sdd-picker-item--go .sdd-picker-label { color: #3730a3; }
+
+/* An item somebody added, marked as added. Not decoration: "Fireplace"
+   sitting in a bathroom's list with no explanation reads like a bug. */
+.sdd-added-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #6b7280;
+  background: #f3f4f6;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+@media (max-width: 640px) {
+  /* The sheet: bottom of the viewport, where the hand already is. */
+  .sdd-picker[open] > .sdd-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    margin: 0;
+    max-height: 72vh;
+    overflow-y: auto;
+    border-radius: 14px 14px 0 0;
+    border-bottom: 0;
+    box-shadow: 0 -8px 28px rgba(17, 24, 39, 0.18);
+    /* Clear of the home indicator on a notched phone. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+}

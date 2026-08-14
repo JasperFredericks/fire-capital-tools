@@ -1,0 +1,124 @@
+{#
+  The item picker: one control per room or unit, not one per item.
+
+  WHY <details> AND NOT A SCRIPTED SHEET
+
+  It opens, closes and submits with JavaScript disabled, because the
+  browser implements it. The bottom-sheet presentation is pure CSS on
+  [open], so a phone gets a sheet and a desktop gets an inline panel from
+  the same markup and neither depends on a script running. The only
+  JavaScript here is the search box, which is hidden until a script
+  reveals it -- an inspector with JS off sees the full list instead of a
+  filter that does nothing, which is the right failure.
+
+  WHY IT DECLARES NO <form> OF ITS OWN
+
+  It renders inside the room's (or unit's) answer form, and HTML has no
+  nested forms -- a browser would silently drop the inner one and the
+  first tap would post the room's answers to the add-item route. So the
+  controls belong to a form declared alongside, by id, exactly as the
+  capture and instance buttons already do on these pages.
+
+  Every entry is a submit button carrying its own key. No radio to select
+  then confirm: one tap adds the item, because the inspector is standing
+  in front of the thing and holding the phone in one hand.
+#}
+{% macro item_picker(scope, groups, form_id) %}
+<details class="sdd-picker">
+  <summary class="sdd-add-btn sdd-picker-open">+ Add item</summary>
+
+  <div class="sdd-sheet">
+    <div class="sdd-sheet-head">
+      <span class="scorecard-mini-title">Add to this {{ 'unit' if scope == 'unit' else 'room' }}</span>
+      <p class="page-subtitle" style="margin:2px 0 0;">
+        Things the checklist doesn't ask about. Nothing here is required.
+      </p>
+    </div>
+
+    <div class="sdd-sheet-body">
+      {# Hidden until JS reveals it: a filter that cannot filter is worse
+         than no filter. #}
+      <input class="sdd-note sdd-picker-search" type="search" hidden
+             placeholder="Search items" aria-label="Search items"
+             autocomplete="off">
+
+      {% for group in groups %}
+        <div class="sdd-picker-group">
+          <div class="sdd-picker-cat">{{ group.name }}</div>
+          {% for entry in group['items'] %}
+            <button type="submit" form="{{ form_id }}" class="sdd-picker-item"
+                    name="bank_item_key" value="{{ entry.key }}"
+                    data-label="{{ entry.label|lower }}">
+              <span class="sdd-picker-label">{{ entry.label }}</span>
+              {% if entry.hint %}<span class="stat-box-sub">{{ entry.hint }}</span>{% endif %}
+            </button>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="page-subtitle" style="margin:0 0 10px;">
+          Everything in the bank is already on this
+          {{ 'unit' if scope == 'unit' else 'room' }}. Type anything else below.
+        </p>
+      {% endfor %}
+
+      {#
+        The fallback, and deliberately not framed as one. An inspector who
+        types here gets the same record as a curated pick -- condition,
+        note, photos, a place in the roll-up -- minus only the capex
+        reference nobody has written yet.
+      #}
+      <div class="sdd-picker-group sdd-picker-free">
+        <div class="sdd-picker-cat">Something else</div>
+        <input class="sdd-note" type="text" name="custom_label" form="{{ form_id }}"
+               maxlength="80" placeholder="What is it?"
+               aria-label="Name of the item to add">
+        <button type="submit" form="{{ form_id }}" class="sdd-picker-item sdd-picker-item--go">
+          <span class="sdd-picker-label">Add it</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</details>
+
+<script>
+/*
+  Search only. The picker already works without this: the list is
+  rendered, the buttons submit, the sheet opens. All this adds is
+  filtering twenty items, so it reveals its own input rather than the
+  server rendering a control that would do nothing.
+*/
+(function () {
+  document.querySelectorAll(".sdd-picker-search").forEach(function (box) {
+    box.hidden = false;
+    var sheet = box.closest(".sdd-sheet-body");
+    box.addEventListener("input", function () {
+      var q = box.value.trim().toLowerCase();
+      sheet.querySelectorAll(".sdd-picker-item[data-label]").forEach(function (btn) {
+        btn.hidden = q !== "" && btn.dataset.label.indexOf(q) === -1;
+      });
+      // A category heading with nothing left under it is noise.
+      sheet.querySelectorAll(".sdd-picker-group").forEach(function (group) {
+        if (group.classList.contains("sdd-picker-free")) return;
+        var visible = group.querySelectorAll(".sdd-picker-item:not([hidden])");
+        group.hidden = visible.length === 0;
+      });
+    });
+  });
+})();
+</script>
+{% endmacro %}
+
+
+{#
+  The form the picker's controls belong to. Declared by each page OUTSIDE
+  its answer form, once.
+#}
+{% macro picker_form(assessment, scope, area_id, room_id, form_id) %}
+<form id="{{ form_id }}" method="POST"
+      action="{{ url_for('site_dd.add_item', assessment_id=assessment.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  {% if area_id %}<input type="hidden" name="area_id" value="{{ area_id }}">{% endif %}
+  {% if room_id %}<input type="hidden" name="room_id" value="{{ room_id }}">{% endif %}
+  <input type="hidden" name="scope" value="{{ scope }}">
+</form>
+{% endmacro %}

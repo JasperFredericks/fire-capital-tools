@@ -65,6 +65,12 @@ def _item(key: str, label: str, kind: str = KIND_CONDITION,
     }
 
 
+# Public name for the same builder. The item bank shapes its entries like
+# checklist items so they flow through the form loop, _collect and the
+# roll-up unchanged; that only works if they are built the same way.
+make_item = _item
+
+
 # ── Shared option sets ───────────────────────────────────────────────────
 
 FLOORING_TYPES = (
@@ -238,7 +244,9 @@ def item_map(items) -> dict[str, dict[str, Any]]:
 
 def summarize_unit(findings_by_room: dict[Any, dict[str, Any]],
                    rooms: list[dict[str, Any]],
-                   unit_findings: dict[str, Any] | None = None) -> dict[str, Any]:
+                   unit_findings: dict[str, Any] | None = None,
+                   added_by_room: dict[Any, list[dict[str, Any]]] | None = None,
+                   added_unit: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Roll a whole unit up: every room plus the unit-wide items.
 
     `findings_by_room` maps room_id -> {item_key: [condition per instance]}.
@@ -252,14 +260,28 @@ def summarize_unit(findings_by_room: dict[Any, dict[str, Any]],
     Only conditions are counted. A choice like "Hookup only" is a fact
     about the unit, not a rating, and totalling it alongside wear states
     would produce a number that means nothing.
+
+    ADDED ITEMS COUNT LIKE ANY OTHER
+
+    `added_by_room` and `added_unit` carry the item-bank picks and the
+    freeform entries recorded on this unit, already shaped like checklist
+    items. They are passed in rather than inferred from unrecognised keys
+    in the answers, so the tolerance that lets a stale key from an older
+    checklist be ignored is preserved -- an unknown key is still skipped,
+    and an added item is counted because the caller said it exists.
+
+    A fireplace added to a living room raises the denominator by one, the
+    same way a second sink does. Adding something and then never
+    assessing it should make the unit look less complete, because it is.
     """
     counts = {c: 0 for c in cond.CONDITIONS}
     assessed = 0
     total = 0
     room_rows = []
 
+    added_rooms = added_by_room or {}
     for room in rooms:
-        items = items_for_room(room["room_type"])
+        items = tuple(items_for_room(room["room_type"])) +             tuple(added_rooms.get(room["id"], ()))
         condition_keys = [i["key"] for i in items if i["with_condition"]]
         answers = findings_by_room.get(room["id"], {}) or {}
         room_counts = {c: 0 for c in cond.CONDITIONS}
@@ -289,7 +311,7 @@ def summarize_unit(findings_by_room: dict[Any, dict[str, Any]],
         })
 
     unit_answers = unit_findings or {}
-    for item in UNIT_WIDE:
+    for item in tuple(UNIT_WIDE) + tuple(added_unit or ()):
         if not item["with_condition"]:
             continue
         values = cond.as_instances(unit_answers.get(item["key"]))

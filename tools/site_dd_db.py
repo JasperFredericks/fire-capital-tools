@@ -63,6 +63,15 @@ CREATE TABLE IF NOT EXISTS site_dd_findings (
     -- reads better than "#2" six weeks later).
     instance_no INTEGER NOT NULL DEFAULT 1,
     instance_label TEXT,
+    -- Which item bank entry this came from, or NULL.
+    --
+    -- NULL means one of two things, and they are the same thing for every
+    -- purpose that matters: either this is a fixed-checklist item (whose
+    -- key is already stable and known to the catalogue), or it is a
+    -- freeform item somebody typed. In both cases there is no bank entry
+    -- to look a capex category up from. Set for a curated pick, which is
+    -- exactly when Branch 4 can price the line automatically.
+    bank_item_key TEXT,
     condition TEXT,
     -- A categorical fact about the item that is NOT a condition: the
     -- flooring is vinyl, the dishwasher is a hookup with no machine in
@@ -193,6 +202,24 @@ CREATE TABLE IF NOT EXISTS site_dd_media (
     uploaded_at TEXT NOT NULL
 );
 
+-- The item bank, seeded from tools/site_dd_bank.py on every connection.
+-- CODE IS THE SOURCE OF TRUTH; this table is a mirror, not a store. It
+-- exists so that a finding's bank_item_key has something to join to for
+-- a label and a capex category without every reader importing the
+-- catalogue, and so that making the bank user-editable later is a
+-- behaviour change rather than a migration. Nothing in the app writes
+-- here except the seeder.
+CREATE TABLE IF NOT EXISTS site_dd_bank_items (
+    key TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    scope TEXT NOT NULL,                       -- 'unit' | 'room' | 'both'
+    room_types TEXT,                           -- CSV, NULL = any room type
+    category TEXT,                             -- capex category (Branch 4)
+    default_kind TEXT NOT NULL,                -- 'condition' | 'choice'
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    code_version INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_sitedd_areas ON site_dd_areas (assessment_id);
 CREATE INDEX IF NOT EXISTS idx_sitedd_rooms ON site_dd_rooms (area_id);
 CREATE INDEX IF NOT EXISTS idx_sitedd_find ON site_dd_findings (assessment_id);
@@ -214,6 +241,10 @@ def get_db_path() -> Path:
 # saved before the upgrade raises "no such column" on read.
 _FINDING_ADDED_COLUMNS = (
     ("detail", "TEXT"),
+    # A plain ALTER, deliberately: adding a nullable column needs no table
+    # rebuild, so this migration cannot disturb the rows the instances
+    # rebuild just moved. Production carries real inspection data.
+    ("bank_item_key", "TEXT"),
 )
 
 # The unique key widened from (assessment, area, room, item) to include
@@ -311,7 +342,67 @@ def init_schema(conn: sqlite3.Connection) -> None:
     for name, coltype in _MEDIA_ADDED_COLUMNS:
         if name not in existing_media:
             conn.execute(f"ALTER TABLE site_dd_media ADD COLUMN {name} {coltype}")
+    _seed_bank(conn)
     conn.commit()
+
+
+def _seed_bank(conn: sqlite3.Connection) -> None:
+    """Mirror tools/site_dd_bank.py into site_dd_bank_items.
+
+    Guarded by a version count so the common case is one COUNT rather
+    than twenty upserts -- init_schema runs on every connection, and a
+    single Site DD page opens several.
+
+    Entries are never deleted here. A bank item withdrawn from the code
+    would still be referenced by findings recorded while it existed, and
+    dropping the row would turn those into unlabelled keys. Stale rows
+    are inert; a missing label is not.
+    """
+    from tools import site_dd_bank as bank
+
+    have = conn.execute(
+        "SELECT COUNT(*) FROM site_dd_bank_items WHERE code_version = ?",
+        (bank.BANK_VERSION,)).fetchone()[0]
+    if have == len(bank.BANK_ITEMS):
+        return
+    conn.executemany(
+        """
+        INSERT INTO site_dd_bank_items
+            (key, label, scope, room_types, category, default_kind,
+             sort_order, code_version)
+        VALUES (:key, :label, :scope, :room_types, :category, :default_kind,
+                :sort_order, :code_version)
+        ON CONFLICT(key) DO UPDATE SET
+            label = excluded.label,
+            scope = excluded.scope,
+            room_types = excluded.room_types,
+            category = excluded.category,
+            default_kind = excluded.default_kind,
+            sort_order = excluded.sort_order,
+            code_version = excluded.code_version
+        """,
+        [
+            {
+                "key": entry["key"],
+                "label": entry["label"],
+                "scope": entry["scope"],
+                "room_types": (",".join(entry["room_types"])
+                               if entry["room_types"] else None),
+                "category": entry["category"],
+                "default_kind": entry["default_kind"],
+                "sort_order": i,
+                "code_version": bank.BANK_VERSION,
+            }
+            for i, entry in enumerate(bank.BANK_ITEMS)
+        ],
+    )
+
+
+def list_bank_items(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """The mirrored bank, in code order. Reads the table rather than the
+    module so a caller can see what the database actually holds."""
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM site_dd_bank_items ORDER BY sort_order, key")]
 
 
 @contextmanager
@@ -490,13 +581,18 @@ def upsert_findings(conn: sqlite3.Connection, assessment_id: int,
         """
         INSERT INTO site_dd_findings
             (assessment_id, area_id, room_id, scope, category_key, item_key,
-             instance_no, instance_label, condition, detail, note, quantity,
-             measure, created_at)
+             instance_no, instance_label, bank_item_key, condition, detail,
+             note, quantity, measure, created_at)
         VALUES (:assessment_id, :area_id, :room_id, :scope, :category_key,
-                :item_key, :instance_no, :instance_label, :condition, :detail,
-                :note, :quantity, :measure, :created_at)
+                :item_key, :instance_no, :instance_label, :bank_item_key,
+                :condition, :detail, :note, :quantity, :measure, :created_at)
         ON CONFLICT(assessment_id, COALESCE(area_id, -1), COALESCE(room_id, -1),
                     item_key, instance_no) DO UPDATE SET
+            -- COALESCE, not a plain assignment: a save posted from a page
+            -- that does not carry the bank key must not erase the link
+            -- that made the item priceable.
+            bank_item_key = COALESCE(excluded.bank_item_key,
+                                     site_dd_findings.bank_item_key),
             instance_label = excluded.instance_label,
             condition = excluded.condition,
             detail = excluded.detail,
@@ -514,6 +610,7 @@ def upsert_findings(conn: sqlite3.Connection, assessment_id: int,
                 "item_key": r["item_key"],
                 "instance_no": int(r.get("instance_no") or 1),
                 "instance_label": (r.get("instance_label") or None),
+                "bank_item_key": r.get("bank_item_key"),
                 "condition": r.get("condition"),
                 "detail": r.get("detail"),
                 "note": (r.get("note") or None) and r["note"][:MAX_NOTE_LEN],
@@ -632,6 +729,81 @@ def add_first_instance(conn: sqlite3.Connection, assessment_id: int, item_key: s
         (assessment_id, area_id, room_id, scope, category_key, item_key, _now()))
     conn.commit()
     return cur.lastrowid
+
+
+def add_item(conn: sqlite3.Connection, assessment_id: int, item_key: str,
+             area_id: int | None, room_id: int | None,
+             scope: str = "room", bank_item_key: str | None = None,
+             category_key: str | None = None,
+             instance_label: str | None = None) -> int:
+    """Put an item from the bank -- or a freeform one -- onto a scope.
+
+    Deliberately the same shape as add_instance, and deliberately
+    tolerant of being called twice: adding an item that is already here
+    appends another instance rather than refusing. Two fireplaces in one
+    living room is a real thing to record, and the alternative (an error
+    toast telling an inspector the room already has one when they are
+    looking at two) is worse than the duplicate it prevents.
+    """
+    n = next_instance_no(conn, assessment_id, item_key, area_id, room_id)
+    cur = conn.execute(
+        """INSERT INTO site_dd_findings
+           (assessment_id, area_id, room_id, scope, category_key, item_key,
+            instance_no, instance_label, bank_item_key, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (assessment_id, area_id, room_id, scope, category_key, item_key,
+         n, instance_label, bank_item_key, _now()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def added_item_keys(conn: sqlite3.Connection, assessment_id: int,
+                    area_id: int | None, room_id: int | None,
+                    known_keys: set[str]) -> list[dict[str, Any]]:
+    """The keys in this scope that the fixed checklist does not cover.
+
+    Read from the findings themselves rather than from a separate
+    "this assessment has these extras" table. There is no second source
+    of truth to fall out of step: an item is on this room because a row
+    for it is on this room, which is also exactly what makes deleting the
+    last instance remove the item.
+
+    Returns one entry per key, earliest first, carrying the bank link and
+    the label an inspector typed, so the caller can shape it into a
+    checklist item without a second query.
+    """
+    rows = conn.execute(
+        "SELECT item_key, MIN(id) AS first_id, "
+        "       MAX(bank_item_key) AS bank_item_key, "
+        "       MAX(instance_label) AS instance_label "
+        "FROM site_dd_findings "
+        "WHERE assessment_id = ? AND area_id IS ? AND room_id IS ? "
+        "GROUP BY item_key ORDER BY MIN(id)",
+        (assessment_id, area_id, room_id)).fetchall()
+    return [dict(r) for r in rows if r["item_key"] not in known_keys]
+
+
+def delete_item(conn: sqlite3.Connection, assessment_id: int, item_key: str,
+                area_id: int | None, room_id: int | None) -> int:
+    """Take an added item off a scope entirely, every instance of it.
+
+    Media is detached, never deleted -- same rule as delete_instance, and
+    for the same reason: a photograph is evidence somebody walked over
+    and took, and a row being removed is not grounds for destroying it.
+    """
+    rows = conn.execute(
+        "SELECT id FROM site_dd_findings WHERE assessment_id = ? "
+        "AND area_id IS ? AND room_id IS ? AND item_key = ?",
+        (assessment_id, area_id, room_id, item_key)).fetchall()
+    ids = [r["id"] for r in rows]
+    if not ids:
+        return 0
+    marks = ",".join("?" * len(ids))
+    conn.execute(f"UPDATE site_dd_media SET finding_id = NULL "
+                 f"WHERE finding_id IN ({marks})", ids)
+    conn.execute(f"DELETE FROM site_dd_findings WHERE id IN ({marks})", ids)
+    conn.commit()
+    return len(ids)
 
 
 def delete_instance(conn: sqlite3.Connection, finding_id: int) -> None:
