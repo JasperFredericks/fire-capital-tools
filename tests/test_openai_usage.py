@@ -374,31 +374,38 @@ class TestIsolationTests(unittest.TestCase):
             import openai  # noqa: F401
         except Exception:
             self.skipTest("openai package not installed in this environment")
+        import os
         from unittest.mock import MagicMock, patch
         from tools import fire_metrics_ai_summary as ai
 
-        before = self._live_rows()
+        configured = os.environ["OPENAI_USAGE_DB_PATH"]
+        before = self._counted()
         with patch("openai.OpenAI") as MockOpenAI:
             MockOpenAI.return_value.responses.create.return_value = MagicMock()
             ai.openai_cre_research(api_key="sk-test", model_name="gpt-4.1-mini",
                                    city="Nowhere", state="ZZ",
                                    display_name="Nowhere, ZZ")
-        self.assertEqual(before, self._live_rows(),
-                         "a test just wrote to the configured usage database")
 
-    def _live_rows(self):
-        """Whatever the CONFIGURED path holds -- which the bootstrap has
-        pointed at a temp dir, so this should be inert."""
+        # The write is EXPECTED -- the counter is doing its job. What
+        # matters is where it landed. It must go to the disposable path,
+        # never to a deployment volume.
+        self.assertEqual(self._counted(), before + 1,
+                         "the mocked call should still have been counted")
+        self.assertFalse(configured.startswith("/data/"),
+                         f"the suite recorded into a deployment path: {configured}")
+
+    def _counted(self):
         import os
         path = Path(os.environ["OPENAI_USAGE_DB_PATH"])
         if not path.exists():
-            return []
+            return 0
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
-            return sorted(tuple(r) for r in conn.execute(
-                "SELECT year_month, feature, calls FROM openai_usage"))
+            row = conn.execute(
+                "SELECT COALESCE(SUM(calls), 0) FROM openai_usage").fetchone()
+            return int(row[0])
         except sqlite3.OperationalError:
-            return []
+            return 0
         finally:
             conn.close()
 
