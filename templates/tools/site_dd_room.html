@@ -114,6 +114,43 @@
                placeholder="Note (optional)" aria-label="{{ item.label }} note">
 
         {#
+          The estimate, and where it came from, together.
+
+          A <details> rather than an always-visible field: a cost is
+          meaningful on a handful of items in a room and rendering
+          thirty-three money inputs would bury the questions the
+          checklist actually asks. It is still reachable on ANY finding
+          in one tap, and it opens by itself where an estimate is
+          plainly wanted -- work has been flagged, or a figure is
+          already recorded.
+
+          No script. <details> is the browser's, so this works in a
+          basement with no signal.
+        #}
+        {% set est = cost_describe(row) %}
+        <details class="sdd-cost"
+                 {{ 'open' if est.has_cost or (row and row.condition in work_conditions) else '' }}>
+          <summary class="sdd-cost-open">
+            {%- if est.has_cost %}Est. {{ '${:,.0f}'.format(est.cost) }} · {{ est.short }}
+            {%- else %}+ Estimated cost{% endif -%}
+          </summary>
+          <div class="sdd-cost-body">
+            <input class="sdd-note" type="number" inputmode="decimal" min="0" step="any"
+                   name="cost_{{ item.key }}{{ sfx }}"
+                   value="{{ '%.2f'|format(est.cost)|float|round|int if est.has_cost else '' }}"
+                   placeholder="Cost to put right"
+                   aria-label="{{ item.label }} estimated cost">
+            {#
+              Shown every single time a figure can be entered or read.
+              An inspector's guess and a priced line item look identical
+              once they are both a number in a column, and only this
+              sentence keeps them apart.
+            #}
+            <p class="sdd-cost-src">{{ est.label or manual_cost_label }}</p>
+          </div>
+        </details>
+
+        {#
           Capture. TWO inputs, because branch 2 confirmed Android removes
           the gallery option entirely when `capture` is set -- one clever
           combined control would leave an inspector unable to attach a
