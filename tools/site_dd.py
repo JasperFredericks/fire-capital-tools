@@ -54,6 +54,7 @@ from tools import deal_dive_db
 from tools import site_dd_bank as bank
 from tools import site_dd_checklist as cl
 from tools import site_dd_conditions as cond
+from tools import site_dd_costs as costs
 from tools import site_dd_capture as cap
 from tools import site_dd_unit_checklist as uc
 from tools import upload_limits as ul
@@ -233,6 +234,8 @@ def save(assessment_id):
         for n in _posted_instances(request.form, key, existing.get(key, [])):
             suffix = "" if n == 1 else f"__{n}"
             raw = (request.form.get(f"condition_{key}{suffix}") or "").strip()
+            est_cost, est_source = _kept_cost(request.form, key, suffix,
+                                              existing.get(key), n)
             responses.append({
                 "scope": cl.SCOPE,
                 "area_id": None,
@@ -243,6 +246,8 @@ def save(assessment_id):
                 "instance_label": _kept_label(request.form, key, suffix,
                                               existing.get(key), n),
                 "condition": raw if cond.is_valid(raw) else None,
+                "est_unit_cost": est_cost,
+                "est_cost_source": est_source,
                 "note": (request.form.get(f"note_{key}{suffix}") or "").strip() or None,
             })
 
@@ -527,6 +532,9 @@ def area_detail(assessment_id, area_id):
         add_scope="unit",
         summary=summary, room_summaries={r["room"]["id"]: r for r in summary["rooms"]},
         conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
+        work_conditions=cond.WORK_CONDITIONS,
+        cost_describe=costs.describe,
+        manual_cost_label=costs.SOURCE_LABELS[costs.SOURCE_MANUAL],
         condition_colours=cond.CONDITION_COLOURS,
         statuses=db.AREA_STATUSES, copy_sources=others,
         finding_count=finding_count,
@@ -687,6 +695,9 @@ def room_detail(assessment_id, area_id, room_id):
         add_scope="room",
         room_type_labels=uc.ROOM_TYPE_LABELS,
         conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
+        work_conditions=cond.WORK_CONDITIONS,
+        cost_describe=costs.describe,
+        manual_cost_label=costs.SOURCE_LABELS[costs.SOURCE_MANUAL],
         condition_colours=cond.CONDITION_COLOURS,
         media_by_item=media_by_item,
         media_by_finding=media_by_finding,
@@ -792,6 +803,8 @@ def _collect(form, items, *, scope, area_id, room_id, existing=None):
             raw_condition = (form.get(f"condition_{key}{suffix}") or "").strip()
             raw_detail = (form.get(f"detail_{key}{suffix}") or "").strip()
             quantity = to_float(form.get(f"quantity_{key}{suffix}"))
+            est_cost, est_source = _kept_cost(form, key, suffix,
+                                              existing.get(key), n)
             out.append({
                 "scope": scope, "area_id": area_id, "room_id": room_id,
                 "category_key": item["kind"],
@@ -806,6 +819,8 @@ def _collect(form, items, *, scope, area_id, room_id, existing=None):
                 "detail": raw_detail if uc.is_valid_option(item, raw_detail) else None,
                 "quantity": quantity if item["kind"] == uc.KIND_NUMBER else None,
                 "measure": item["measure"] if item["kind"] == uc.KIND_NUMBER else None,
+                "est_unit_cost": est_cost,
+                "est_cost_source": est_source,
                 "note": (form.get(f"note_{key}{suffix}") or "").strip() or None,
             })
     return out
@@ -828,6 +843,30 @@ def _kept_label(form, key, suffix, existing_rows, n):
         if int(row.get("instance_no") or 1) == n:
             return row.get("instance_label")
     return None
+
+
+def _kept_cost(form, key, suffix, existing_rows, n):
+    """The estimate and its provenance after this save.
+
+    Absent means unchanged, exactly as for the instance label -- and for
+    a sharper reason here. The cost field is only rendered where an
+    estimate is plausible, so most saves do not mention most items; and
+    when reference costs land, a save from a page that predates them
+    must not silently downgrade a table figure to nothing.
+
+    A typed number is always 'manual'. Typing over a reference figure
+    makes the number the inspector's, and the provenance follows the
+    number rather than lingering on the row it replaced.
+    """
+    field = f"cost_{key}{suffix}"
+    if field not in form:
+        for row in existing_rows or ():
+            if int(row.get("instance_no") or 1) == n:
+                return (row.get("est_unit_cost"),
+                        costs.normalize_source(row.get("est_cost_source")))
+        return (None, costs.SOURCE_NONE)
+    value = costs.clean_cost(form.get(field))
+    return (value, costs.source_for(value))
 
 
 def _posted_instances(form, key, existing_rows):

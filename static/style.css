@@ -3185,3 +3185,36 @@ hr.divider {
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }
+
+/* ── Site DD: the repair estimate ──────────────────────────────────────
+   A <details> per finding rather than a permanent money input. Thirty-
+   three visible cost boxes in a room would bury the questions the
+   checklist is actually asking, and a cost is wanted on a handful of
+   items. Quiet when closed, open by itself where work has been flagged. */
+.sdd-cost { margin-top: 8px; }
+.sdd-cost > summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 4px 2px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #6b7280;
+  cursor: pointer;
+}
+.sdd-cost > summary::-webkit-details-marker { display: none; }
+.sdd-cost[open] > summary { color: #374151; }
+.sdd-cost-body { padding: 4px 0 2px; }
+/* The provenance line. Deliberately not muted into invisibility: it is
+   the difference between a tradesman's guess and a priced line item. */
+.sdd-cost-src {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: #92400e;
+  background: #fffbeb;
+  border-left: 2px solid #fcd34d;
+  padding: 5px 8px;
+  border-radius: 0 6px 6px 0;
+}

@@ -35,6 +35,8 @@ from __future__ import annotations
 import os
 import sqlite3
 from contextlib import contextmanager
+
+from tools import site_dd_costs as costs
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +86,17 @@ CREATE TABLE IF NOT EXISTS site_dd_findings (
     note TEXT,
     quantity REAL,
     measure TEXT,                              -- 'ea' | 'sqft' | 'lf' ...
+    -- What it is estimated to cost to put right, and WHERE THAT NUMBER
+    -- CAME FROM. The two are one fact and are stored together: a cost
+    -- without its provenance is a number that will be read as priced.
+    --
+    -- est_cost_source is 'reference' | 'manual' | 'none'. Nothing writes
+    -- 'reference' yet -- the reference table is still gated on the
+    -- decision between Michelle's numbers, RSMeans and disclaimed
+    -- placeholders. The column exists first because a provenance column
+    -- added later cannot describe the rows already written.
+    est_unit_cost REAL,
+    est_cost_source TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -245,6 +258,12 @@ _FINDING_ADDED_COLUMNS = (
     # rebuild, so this migration cannot disturb the rows the instances
     # rebuild just moved. Production carries real inspection data.
     ("bank_item_key", "TEXT"),
+    # Plain nullable ALTERs again -- no rebuild, so production's real
+    # inspection rows are not touched. NULL in est_cost_source reads as
+    # 'none' (site_dd_costs.normalize_source), which is what a row with
+    # no estimate has always meant.
+    ("est_unit_cost", "REAL"),
+    ("est_cost_source", "TEXT"),
 )
 
 # The unique key widened from (assessment, area, room, item) to include
@@ -277,6 +296,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_sitedd_finding_identity
 _FINDINGS_REBUILD_COLUMNS = (
     "assessment_id", "area_id", "room_id", "scope", "category_key",
     "item_key", "condition", "detail", "note", "quantity", "measure",
+    "bank_item_key", "est_unit_cost", "est_cost_source",
     "created_at",
 )
 
@@ -582,10 +602,12 @@ def upsert_findings(conn: sqlite3.Connection, assessment_id: int,
         INSERT INTO site_dd_findings
             (assessment_id, area_id, room_id, scope, category_key, item_key,
              instance_no, instance_label, bank_item_key, condition, detail,
-             note, quantity, measure, created_at)
+             note, quantity, measure, est_unit_cost, est_cost_source,
+             created_at)
         VALUES (:assessment_id, :area_id, :room_id, :scope, :category_key,
                 :item_key, :instance_no, :instance_label, :bank_item_key,
-                :condition, :detail, :note, :quantity, :measure, :created_at)
+                :condition, :detail, :note, :quantity, :measure,
+                :est_unit_cost, :est_cost_source, :created_at)
         ON CONFLICT(assessment_id, COALESCE(area_id, -1), COALESCE(room_id, -1),
                     item_key, instance_no) DO UPDATE SET
             -- COALESCE, not a plain assignment: a save posted from a page
@@ -598,7 +620,9 @@ def upsert_findings(conn: sqlite3.Connection, assessment_id: int,
             detail = excluded.detail,
             note = excluded.note,
             quantity = excluded.quantity,
-            measure = excluded.measure
+            measure = excluded.measure,
+            est_unit_cost = excluded.est_unit_cost,
+            est_cost_source = excluded.est_cost_source
         """,
         [
             {
@@ -616,6 +640,8 @@ def upsert_findings(conn: sqlite3.Connection, assessment_id: int,
                 "note": (r.get("note") or None) and r["note"][:MAX_NOTE_LEN],
                 "quantity": r.get("quantity"),
                 "measure": r.get("measure"),
+                "est_unit_cost": r.get("est_unit_cost"),
+                "est_cost_source": costs.normalize_source(r.get("est_cost_source")),
                 "created_at": now,
             }
             for r in responses
