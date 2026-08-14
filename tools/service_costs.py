@@ -28,9 +28,18 @@ Two rules govern the data below, both about not overstating what is known:
    since. The template renders the two differently so they can never be
    read as equally current.
 
-Usage is measurable for exactly two services. Google Maps JS bills on
-client-side map loads the server never sees, and OpenAI has no local
-counter (adding one is a deliberate future decision, not an oversight).
+Usage is measurable for three of them. Google Maps JS bills on
+client-side map loads the server never sees, so it stays unmeasurable
+from here.
+
+OpenAI is counted as of 2026-08-14 (tools/openai_usage.py) and is
+reported differently from the other two on purpose. RentCast and Places
+are shown as used-against-threshold because this app enforces a real cap
+on each. The OpenAI cap is $60/month at the account, set outside this
+application, so there is no local threshold to divide by -- inventing one
+would put a number on the page that nobody agreed to. It is shown as a
+per-feature breakdown of calls and tokens instead, which is the figure
+that actually answers "what is spending the budget".
 """
 
 from __future__ import annotations
@@ -155,7 +164,8 @@ SERVICES: tuple[Service, ...] = (
             "can be explicitly set to false to disable AI summary and CRE research spend. The model "
             "is whatever FIRE_METRICS_SUMMARY_MODEL is set to and is not fixed in code, "
             "so the per-token rate cannot be derived here. Summaries are cached per "
-            "city, so re-viewing a market does not re-spend."
+            "city, so re-viewing a market does not re-spend. Calls and tokens are "
+            "counted per feature — see the OpenAI usage breakdown above."
         ),
         configured_key="OPENAI_API_KEY",
     ),

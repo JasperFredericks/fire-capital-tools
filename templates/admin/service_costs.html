@@ -35,8 +35,8 @@
     </div>
     <div class="stat-box">
       <div class="stat-box-label">Live usage counters</div>
-      <div class="stat-box-value">2</div>
-      <div class="stat-box-sub">RentCast and Google Places only.</div>
+      <div class="stat-box-value">3</div>
+      <div class="stat-box-sub">RentCast, Google Places and OpenAI.</div>
     </div>
     <div class="stat-box" style="border-left:3px solid {{ '#b45309' if tbd_count else '#059669' }};">
       <div class="stat-box-label">Cost figures still unknown</div>
@@ -92,6 +92,99 @@
     Google Places has no published free-allowance figure to divide by, so it shows usage
     against the threshold this app enforces rather than against a vendor limit &mdash; see
     its note below.
+  </p>
+</div>
+
+<!-- ── OpenAI, per feature ────────────────────────────────────────────── -->
+{#
+  Deliberately its own card rather than a fourth box in the grid above.
+  Those boxes read "used / threshold" because this app enforces a real cap
+  on RentCast and Places. It enforces none on OpenAI -- the $60/month cap
+  is set at the account, outside this application -- so there is no
+  denominator to show, and inventing one would put a number on the page
+  nobody agreed to.
+
+  Per feature, not one total, because that is the question a shared budget
+  actually raises. One CRE research call runs a hosted web search and can
+  cost more than fifty summaries; "something used $60" is not actionable.
+#}
+<div class="card">
+  <div class="scorecard-section-title">OpenAI Usage This Month &mdash; by feature</div>
+  <p class="page-subtitle" style="margin:8px 0 12px;">
+    Real calls only &mdash; a cached summary never reaches the API and never counts here.
+    Resets {{ reset_label }}. There is <strong>no cap enforced by this app</strong>: the
+    $60/month limit sits on the OpenAI account itself, so these are counts, not a quota.
+  </p>
+
+  {% if not openai_storage.persistent %}
+    <div class="result-note" style="margin-bottom:14px; border-left:3px solid #b91c1c;">
+      <strong>These counts reset on every deploy.</strong>
+      <code>{{ openai_storage.env_var }}</code> is not set, so the counter is writing to
+      <code>{{ openai_storage.path }}</code> on the container filesystem rather than to the
+      persistent volume. The numbers below are correct for this container only and understate
+      the month. Set <code>{{ openai_storage.env_var }}=/data/openai_usage.db</code> to fix it.
+    </div>
+  {% endif %}
+
+  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-bottom:14px;">
+    <div class="stat-box">
+      <div class="stat-box-label">Calls this month</div>
+      <div class="stat-box-value">{{ openai_usage.total_calls }}</div>
+      <div class="stat-box-sub">Across every feature.</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Tokens this month</div>
+      <div class="stat-box-value">{{ '{:,}'.format(openai_usage.total_tokens) }}</div>
+      <div class="stat-box-sub">Prompt and completion combined.</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-box-label">Account cap</div>
+      <div class="stat-box-value" style="font-size:15px;">$60 / month</div>
+      <div class="stat-box-sub">Set on the OpenAI account, not enforced here.</div>
+    </div>
+  </div>
+
+  <div style="overflow-x:auto;">
+    <table class="rent-comps-table">
+      <thead>
+        <tr><th>Feature</th><th style="text-align:right;">Calls</th>
+          <th style="text-align:right;">Prompt tokens</th>
+          <th style="text-align:right;">Completion tokens</th>
+          <th style="text-align:right;">Total tokens</th></tr>
+      </thead>
+      <tbody>
+        {% for f in openai_usage.rows %}
+          <tr{% if not f.calls %} style="color:#9ca3af;"{% endif %}>
+            <td>
+              {{ f.label }}
+              {%- if not f.known %}
+                {# Recorded by something not yet named in openai_usage.py.
+                   Shown rather than hidden: an unattributed spend is
+                   exactly the thing this page exists to surface. #}
+                <span class="stat-box-sub">(unrecognised feature key)</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right;">{{ f.calls }}</td>
+            <td style="text-align:right;">{{ '{:,}'.format(f.prompt_tokens) }}</td>
+            <td style="text-align:right;">{{ '{:,}'.format(f.completion_tokens) }}</td>
+            <td style="text-align:right;">{{ '{:,}'.format(f.total_tokens) }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if not openai_usage.any_usage %}
+    <p class="page-subtitle" style="margin-top:12px;">
+      No OpenAI calls recorded in {{ openai_usage.year_month }}. Features are listed at zero
+      rather than omitted, so &ldquo;nothing spent&rdquo; and &ldquo;not being counted&rdquo;
+      cannot be confused.
+    </p>
+  {% endif %}
+
+  <p class="page-subtitle" style="margin-top:12px;">
+    Counting only &mdash; nothing here refuses a call. Confirm-before-spend belongs with each
+    feature that spends, next to its own cost estimate.
   </p>
 </div>
 

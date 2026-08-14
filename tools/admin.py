@@ -20,6 +20,7 @@ from flask import Blueprint, current_app, render_template
 from flask_login import login_required
 
 from tools import market_data_service
+from tools import openai_usage
 from tools import site_dd_capture as capture
 from tools import site_dd_db as sdd_db, service_costs
 
@@ -131,9 +132,16 @@ def _media_storage():
 @admin_bp.route("/service-costs")
 @login_required
 def service_costs_page():
-    """The cost inventory. Live counters for the two services that have
-    them, static figures for everything else, and an explicit count of
-    what still needs a human number."""
+    """The cost inventory. Live counters for the services that have them,
+    static figures for everything else, and an explicit count of what
+    still needs a human number.
+
+    OpenAI is read separately from the other two: it has no app-enforced
+    cap to show usage against, so it is reported as a per-feature
+    breakdown rather than as used-against-threshold."""
+    with openai_usage.get_connection() as conn:
+        openai_breakdown = openai_usage.usage_for_month(conn)
+
     live_usage = {
         "rentcast": market_data_service.rentcast_quota(),
         "google_places": market_data_service.google_places_quota(),
@@ -151,6 +159,9 @@ def service_costs_page():
         reset_label=market_data_service.quota_reset_label(),
         last_reviewed=service_costs.LAST_REVIEWED,
         tbd_marker=service_costs.TBD,
+        openai_usage=openai_breakdown,
+        openai_features=openai_usage.KNOWN_FEATURES,
+        openai_storage=openai_usage.storage_status(),
         storage=storage,
         ai_summaries_enabled=bool(
             current_app.config.get("FIRE_METRICS_AI_SUMMARIES_ENABLED", False)
