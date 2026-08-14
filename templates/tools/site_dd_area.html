@@ -182,7 +182,7 @@
       Things that belong to the dwelling rather than to any one room.
     </p>
     {% for item in unit_items %}
-      {% set row = unit_rows.get(item.key) %}
+      {% set row = (unit_rows.get(item.key) or [none])[0] %}
       <div class="sdd-item">
         <div class="sdd-item-label">{{ item.label }}</div>
         {% if item.hint %}<div class="sdd-item-hint">{{ item.hint }}</div>{% endif %}

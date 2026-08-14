@@ -103,7 +103,7 @@ class CopyLayoutTests(unittest.TestCase):
                 self.assertEqual(found, {}, "a copied unit must start empty")
             # The source keeps its own.
             src_found = db.get_findings(conn, self.aid, self.src, self.src_rooms[0])
-            self.assertEqual(src_found["flooring"]["condition"], "replace")
+            self.assertEqual(src_found["flooring"][0]["condition"], "replace")
 
     def test_copying_twice_does_not_duplicate_rooms(self):
         with db.get_connection(self.path) as conn:
@@ -302,7 +302,7 @@ class AreaTests(unittest.TestCase):
             area = db.create_area(conn, self.aid, {"kind": "unit", "label": "204"})
             db.delete_area(conn, area)
             prop = db.get_findings(conn, self.aid, None, None)
-        self.assertEqual(prop["roof_covering"]["condition"], "repair")
+        self.assertEqual(prop["roof_covering"][0]["condition"], "repair")
 
 
 if __name__ == "__main__":

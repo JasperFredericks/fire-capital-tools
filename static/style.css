@@ -3054,3 +3054,39 @@ hr.divider {
   background: #eef2ff;
   color: #1a2744;
 }
+
+/* ── Site DD repeatable items ────────────────────────────────────────────
+   Deliberately quiet. Most units have exactly one of everything, so these
+   controls sit under the item as low-contrast affordances rather than
+   competing with the checklist itself. */
+.sdd-instance-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #1a2744;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.sdd-add-another { padding: 6px 0 14px; }
+.sdd-add-btn,
+.sdd-instance-remove {
+  min-height: 44px;
+  width: 100%;
+  padding: 11px 12px;
+  font-size: 13.5px;
+  font-weight: 600;
+  border-radius: 9px;
+  border: 1px dashed #d1d5db;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+}
+.sdd-instance-remove {
+  margin-top: 8px;
+  border-style: solid;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}

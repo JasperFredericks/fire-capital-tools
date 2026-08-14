@@ -174,20 +174,29 @@ def build_report(path, assessment: dict[str, Any], items: dict[str, dict[str, An
                          ha="right", fontsize=9.5, color=MUTED)
                 y -= 0.035
                 for item_key, item_label in cat["items"]:
-                    row = items.get(item_key) or {}
-                    value = row.get("condition")
-                    if not cond.is_valid(value):
-                        shown, colour = "Not assessed", MUTED
-                    else:
-                        shown = cond.CONDITION_LABELS[value]
-                        colour = (cond.CONDITION_COLOURS[value]
-                                  if cond.needs_work(value) else BODY)
-                    fig.text(0.075, y, item_label, fontsize=9, color=BODY)
-                    fig.text(0.42, y, shown, fontsize=9, fontweight="bold", color=colour)
-                    note = truncate_note(row.get("note"))
-                    if note:
-                        fig.text(0.56, y, note, fontsize=8, color=MUTED)
-                    y -= 0.026
+                    # Every instance gets its own line: two sinks needing
+                    # replacement are two lines in the report, because they
+                    # are two work orders.
+                    for row in (items.get(item_key) or [{}]):
+                        value = row.get("condition")
+                        if not cond.is_valid(value):
+                            shown, colour = "Not assessed", MUTED
+                        else:
+                            shown = cond.CONDITION_LABELS[value]
+                            colour = (cond.CONDITION_COLOURS[value]
+                                      if cond.needs_work(value) else BODY)
+                        label_text = item_label
+                        n = row.get("instance_no") or 1
+                        if n > 1 or row.get("instance_label"):
+                            tag = row.get("instance_label") or f"#{n}"
+                            label_text = f"{item_label} — {tag}"
+                        fig.text(0.075, y, label_text, fontsize=9, color=BODY)
+                        fig.text(0.42, y, shown, fontsize=9, fontweight="bold",
+                                 color=colour)
+                        note = truncate_note(row.get("note"))
+                        if note:
+                            fig.text(0.56, y, note, fontsize=8, color=MUTED)
+                        y -= 0.026
                 y -= 0.025
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
