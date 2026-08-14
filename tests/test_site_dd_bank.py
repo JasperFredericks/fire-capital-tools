@@ -365,3 +365,89 @@ class RollupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LabelSurvivalTests(unittest.TestCase):
+    """A save that does not mention a label must not erase it.
+
+    No template rendered label_* for a checklist item, so treating an
+    absent field as an empty one nulled every instance label on every
+    save. Latent while nothing set labels; fatal once a freeform item's
+    typed name became the only thing identifying it.
+    """
+
+    def setUp(self):
+        self.path = Path(tempfile.mkdtemp()) / "sd.db"
+        with db.get_connection(self.path) as conn:
+            self.aid = db.create_assessment(conn, {"property_label": "T",
+                                                   "checklist_version": 2})
+            self.area = db.create_area(conn, self.aid, {"kind": "unit", "label": "1"})
+            self.room = db.create_room(conn, self.area, "living")
+
+    def _label(self, key="custom_koi_pond"):
+        with db.get_connection(self.path) as conn:
+            return db.get_findings(conn, self.aid, self.area,
+                                   self.room)[key][0]["instance_label"]
+
+    def _add(self):
+        with db.get_connection(self.path) as conn:
+            db.add_item(conn, self.aid, "custom_koi_pond", self.area, self.room,
+                        scope="room", instance_label="Koi pond")
+
+    def _save(self, form):
+        from tools import site_dd as routes
+        items = [bank.as_item("custom_koi_pond", "Koi pond")]
+        with db.get_connection(self.path) as conn:
+            existing = db.get_findings(conn, self.aid, self.area, self.room)
+            db.upsert_findings(conn, self.aid, routes._collect(
+                form, items, scope="room", area_id=self.area,
+                room_id=self.room, existing=existing))
+
+    def test_a_save_with_no_label_field_keeps_the_name(self):
+        self._add()
+        self._save({"condition_custom_koi_pond": "replace"})
+        self.assertEqual(self._label(), "Koi pond")
+
+    def test_a_posted_label_replaces_it(self):
+        self._add()
+        self._save({"condition_custom_koi_pond": "replace",
+                    "label_custom_koi_pond": "Ornamental pond"})
+        self.assertEqual(self._label(), "Ornamental pond")
+
+    def test_a_posted_empty_label_clears_it(self):
+        """Absent means unchanged; present-and-empty means cleared. The
+        two must stay distinguishable or one of them is unreachable."""
+        self._add()
+        self._save({"condition_custom_koi_pond": "replace",
+                    "label_custom_koi_pond": "  "})
+        self.assertIsNone(self._label())
+
+    def test_repeated_saves_never_erode_the_name(self):
+        self._add()
+        for _ in range(4):
+            self._save({"condition_custom_koi_pond": "replace"})
+        self.assertEqual(self._label(), "Koi pond")
+
+    def test_a_cleared_name_still_reads_as_something(self):
+        self.assertEqual(bank.as_item("custom_koi_pond", None)["label"], "Koi pond")
+        self.assertEqual(bank.label_from_key("custom_koi_pond"), "Koi pond")
+        self.assertEqual(bank.label_from_key("custom_item"), "Item")
+
+    def test_instance_labels_on_checklist_items_survive_too(self):
+        """The same bug, on the feature that introduced it: a second sink
+        named "by the window" lost its name on the next room save."""
+        with db.get_connection(self.path) as conn:
+            bath = db.create_room(conn, self.area, "bathroom")
+            db.upsert_findings(conn, self.aid, [
+                {"scope": "room", "area_id": self.area, "room_id": bath,
+                 "item_key": "vanity_sink", "instance_no": 1,
+                 "instance_label": "by the window", "condition": "good"}])
+        from tools import site_dd as routes
+        with db.get_connection(self.path) as conn:
+            existing = db.get_findings(conn, self.aid, self.area, bath)
+            db.upsert_findings(conn, self.aid, routes._collect(
+                {"condition_vanity_sink": "repair"}, uc.items_for_room("bathroom"),
+                scope="room", area_id=self.area, room_id=bath, existing=existing))
+            row = db.get_findings(conn, self.aid, self.area, bath)["vanity_sink"][0]
+        self.assertEqual(row["instance_label"], "by the window")
+        self.assertEqual(row["condition"], "repair")
