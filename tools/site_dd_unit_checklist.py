@@ -51,12 +51,117 @@ KIND_CHOICE = "choice"
 KIND_NUMBER = "number"
 
 
+# ── Capex category per item ──────────────────────────────────────────────
+#
+# Aligned to how site_dd_checklist already categorises the equivalent
+# property-scope item, so the two scopes agree rather than each inventing
+# its own grouping:
+#
+#   windows_doors     -> structural_envelope   so: windows
+#   alarms_detectors  -> life_safety           so: smoke / CO alarms
+#   egress_signage    -> life_safety           so: egress window
+#   hvac_units        -> mep                   so: hvac, hvac_age
+#   water_heaters     -> mep                   so: water_heater*
+#   electrical_panels -> mep                   so: outlets, lighting, GFCI
+#   plumbing_supply   -> mep                   so: fixtures
+#   ventilation       -> mep                   so: exhaust fan, dryer vent
+#   flooring          -> interior_units
+#   walls_ceilings    -> interior_units
+#   unit_appliances   -> interior_units        so: every appliance_*
+#
+# The one judgement not read straight off that list is the fixture/finish
+# split inside kitchens and bathrooms. The rule is "who does the work":
+# a plumber or electrician (mep), or a contractor doing finishes and
+# cabinetry (interior_units). So tub, toilet, sink and faucet are mep;
+# cabinets, countertops, flooring and closets are interior_units.
+#
+# A key absent from this table gets None, which to_capex_lines() reports
+# as an uncategorised line. That is the honest outcome for an item nobody
+# has classified, and better than a catch-all bucket that looks like a
+# decision.
+CATEGORIES_BY_ITEM: dict[str, str] = {
+    # Every room
+    "flooring_type": "interior_units",
+    "flooring": "interior_units",
+    "walls_ceiling": "interior_units",
+    "windows": "structural_envelope",
+    "outlets_switches": "mep",
+    "lighting": "mep",
+    # Kitchen
+    "appliance_range": "interior_units",
+    "appliance_fridge": "interior_units",
+    "appliance_dishwasher": "interior_units",
+    "appliance_microwave": "interior_units",
+    "appliance_disposal": "interior_units",
+    "cabinets": "interior_units",
+    "countertops": "interior_units",
+    "sink_faucet": "mep",
+    "gfci": "mep",
+    # Bathroom
+    "tub_shower": "mep",
+    "toilet": "mep",
+    "vanity_sink": "mep",
+    "exhaust_fan": "mep",
+    "visible_leaks": "mep",
+    # Bedroom
+    "closet": "interior_units",
+    "egress_window": "life_safety",
+    "smoke_alarm": "life_safety",
+    # Laundry
+    "washer": "interior_units",
+    "dryer": "interior_units",
+    "dryer_vent": "mep",
+    # Unit-wide
+    "smoke_alarm_unit": "life_safety",
+    "co_alarm": "life_safety",
+    "water_heater": "mep",
+    "water_heater_gal": "mep",
+    "water_heater_age": "mep",
+    "hvac": "mep",
+    "hvac_age": "mep",
+    # "Entry door & lock", categorised on the lock rather than the door.
+    # An exterior door is envelope work, but a unit entry door is recorded
+    # here because it secures the dwelling, and that is what a failing one
+    # costs money to put right.
+    "entry_door": "life_safety",
+}
+
+
+def category_for(item_key: str) -> str | None:
+    """The capex category for a room or unit checklist item, or None."""
+    return CATEGORIES_BY_ITEM.get(item_key)
+
+
 def _item(key: str, label: str, kind: str = KIND_CONDITION,
           options: tuple[tuple[str, str], ...] | None = None,
           measure: str | None = None, hint: str | None = None,
           with_condition: bool = True) -> dict[str, Any]:
+    """One checklist item.
+
+    KIND AND CATEGORY ARE TWO DIFFERENT FACTS, KEPT SEPARATE
+
+    `kind` is a UI fact: whether this renders as condition buttons, a set
+    of choices, or a number box. `category` is a CAPEX fact: which budget
+    heading the work belongs under once it reaches Underwriting.
+
+    They were conflated. site_dd.py wrote item["kind"] into the findings
+    table's category_key column, so every room and unit checklist row
+    carried "condition" or "choice" where a real category should have
+    been, and the capex export emitted those as budget headings. Nothing
+    ever read the column back expecting a kind, so the fix is to stop
+    overwriting one with the other -- no stored data has to move.
+
+    The category is looked up from CATEGORIES_BY_ITEM rather than passed
+    in, so the whole mapping is readable in one place instead of being
+    scattered across forty constructor calls.
+    """
     return {
         "key": key, "label": label, "kind": kind,
+        # The capex heading this item's work belongs under. Same
+        # vocabulary as site_dd_checklist.CATEGORIES and the item bank,
+        # so a budget assembled across scopes groups coherently rather
+        # than by accident of which scope recorded the finding.
+        "category": CATEGORIES_BY_ITEM.get(key),
         "options": options or (), "measure": measure, "hint": hint,
         # Whether a condition is offered alongside a choice. An appliance
         # that is present has a condition; an alarm that is missing does

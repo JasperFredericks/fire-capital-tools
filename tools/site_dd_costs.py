@@ -167,24 +167,20 @@ _INTERIOR_CATEGORIES = {"interior_units", "mep", "life_safety"}
 def capex_category(finding: dict[str, Any]) -> str | None:
     """The capex category, or None when the finding does not have one.
 
-    site_dd_findings.category_key carries TWO different vocabularies,
-    which is a conflation inherited from Branch 2 rather than something
-    this branch introduced:
+    Every scope now writes a real category: the property checklist, the
+    room and unit checklists, and the item bank all draw on the same
+    vocabulary. Room and unit rows used to hold the input KIND instead --
+    'condition', 'choice', 'number' -- which the capex export emitted as
+    budget headings. That was corrected at the write site, and existing
+    rows were rewritten by site_dd_db._backfill_capex_categories.
 
-      * property-scope rows and item-bank rows hold a real capex
-        category -- 'mep', 'interior_units' and so on;
-      * room and unit CHECKLIST rows hold the item KIND instead --
-        'condition', 'choice', 'number'.
-
-    Taken at face value the mapping would put "condition" into a capital
-    budget as a category heading, which is not wrong so much as
-    meaningless, and meaningless is worse: it looks like a real grouping.
-    So anything that is not a known capex category becomes None, and an
-    uncategorised line is honestly uncategorised.
-
-    Giving the room and unit checklists real capex categories is Branch
-    4's work -- it is part of deciding how findings are priced, not part
-    of recording what they cost.
+    This filter stays regardless. It is what makes the export's output
+    provably inside one vocabulary rather than merely expected to be:
+    a database restored from an old backup, a row written by a build that
+    predates the fix, or a future catalogue that forgets to map a new key
+    all arrive here, and all become None rather than putting a
+    meaningless heading into a capital budget. Meaningless is worse than
+    blank, because it looks like a real grouping.
     """
     value = finding.get("category_key")
     return value if value in cl.CATEGORY_NAMES else None

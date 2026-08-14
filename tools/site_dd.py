@@ -344,7 +344,7 @@ def upload_photo(assessment_id):
                     conn, assessment_id, item_key, area_id, room_id,
                     scope=(cond.SCOPE_ROOM if room_id else
                            cond.SCOPE_UNIT if area_id else cond.SCOPE_PROPERTY),
-                    category_key=cl.ITEM_CATEGORY.get(item_key))
+                    category_key=_category_for(item_key))
 
     kind = info["kind"]
     duration_s = None
@@ -750,6 +750,20 @@ def save_room(assessment_id, area_id, room_id):
                             area_id=area_id, room_id=room_id))
 
 
+def _category_for(item_key):
+    """The capex category for any item key, whatever scope defines it.
+
+    The property checklist, the room/unit checklists and the item bank
+    each own part of the key space and all three use the same category
+    vocabulary. Callers that create a finding outside a form save -- a
+    photo arriving before any judgement, an added instance -- go through
+    here rather than knowing which catalogue an item came from.
+    """
+    return (cl.ITEM_CATEGORY.get(item_key)
+            or uc.category_for(item_key)
+            or (bank.get(item_key) or {}).get("category"))
+
+
 def _added_items(conn, assessment_id, area_id, room_id, catalogue):
     """The bank picks and freeform items recorded on one scope.
 
@@ -807,7 +821,13 @@ def _collect(form, items, *, scope, area_id, room_id, existing=None):
                                               existing.get(key), n)
             out.append({
                 "scope": scope, "area_id": area_id, "room_id": room_id,
-                "category_key": item["kind"],
+                # The capex heading, NOT the input kind. This column used
+                # to receive item["kind"], so every room and unit row
+                # carried "condition"/"choice"/"number" and the capex
+                # export emitted those as budget headings. The kind is
+                # still on the item dict, where the form rendering reads
+                # it -- the two were never the same fact.
+                "category_key": item.get("category"),
                 "item_key": key,
                 "instance_no": n,
                 # Set only for a curated pick. COALESCEd in the upsert, so
@@ -912,7 +932,7 @@ def add_instance(assessment_id):
     with db.get_connection() as conn:
         db.add_instance(conn, assessment_id, item_key, area_id, room_id,
                         scope=scope if scope in cond.SCOPES else cond.SCOPE_ROOM,
-                        category_key=cl.ITEM_CATEGORY.get(item_key))
+                        category_key=_category_for(item_key))
     flash("Added another.", "success")
     return redirect(_capture_redirect(assessment_id) + f"#item-{item_key}")
 

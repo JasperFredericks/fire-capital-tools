@@ -347,6 +347,55 @@ _MEDIA_ADDED_COLUMNS = (
 )
 
 
+# The three values site_dd.py used to write into category_key before the
+# capex category and the input kind were separated. Rows carrying one of
+# these are legacy and are rewritten in place; nothing else is touched.
+_LEGACY_KIND_CATEGORIES = ("condition", "choice", "number")
+
+
+def _backfill_capex_categories(conn: sqlite3.Connection) -> int:
+    """Give room and unit checklist rows their real capex category.
+
+    Only rows whose category_key is one of the three input KINDS are
+    touched, and only that one column is written. A row that already
+    holds a real category, or NULL, is left exactly as it was -- so this
+    cannot reach a property-scope row, an item-bank row, or anything a
+    user recorded.
+
+    Idempotent: after one pass no row matches the WHERE clause, so this
+    is a cheap no-op on every subsequent connection.
+
+    The condition, detail, note, quantity, instance and cost columns are
+    never referenced. An inspector's answers are not involved in a
+    correction to a column that was holding the wrong KIND of fact.
+    """
+    from tools import site_dd_unit_checklist as uc
+
+    marks = ",".join("?" * len(_LEGACY_KIND_CATEGORIES))
+    rows = conn.execute(
+        f"SELECT DISTINCT item_key FROM site_dd_findings "
+        f"WHERE category_key IN ({marks})", _LEGACY_KIND_CATEGORIES).fetchall()
+    if not rows:
+        return 0
+
+    updated = 0
+    for row in rows:
+        category = uc.category_for(row["item_key"])
+        if not category:
+            # No mapping for this key: leave the legacy value rather than
+            # guessing. to_capex_lines() already reports anything outside
+            # the real vocabulary as uncategorised.
+            continue
+        cur = conn.execute(
+            f"UPDATE site_dd_findings SET category_key = ? "
+            f"WHERE item_key = ? AND category_key IN ({marks})",
+            (category, row["item_key"], *_LEGACY_KIND_CATEGORIES))
+        updated += cur.rowcount
+    if updated:
+        conn.commit()
+    return updated
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     # Order matters: the identity index names instance_no, which a legacy
@@ -364,6 +413,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE site_dd_media ADD COLUMN {name} {coltype}")
     _seed_bank(conn)
     conn.commit()
+    # After the bank seed, so a fresh database has its catalogue in place
+    # before any row is examined.
+    _backfill_capex_categories(conn)
 
 
 def _seed_bank(conn: sqlite3.Connection) -> None:
