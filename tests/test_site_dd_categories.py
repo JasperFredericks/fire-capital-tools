@@ -273,3 +273,71 @@ class ExportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BankAgreesWithChecklistTests(unittest.TestCase):
+    """The bank and the checklists must categorise the same kind of work
+    the same way.
+
+    They are separate catalogues that both feed one capex budget. When
+    they disagree, a budget shows the same job under two headings --
+    "In-unit washer / dryer" under MEP and "Washer" under Interior --
+    and the grouping stops meaning anything.
+    """
+
+    EQUIVALENTS = {
+        # bank key           checklist key it describes the same work as
+        "washer_dryer": "washer",
+        "disposal": "appliance_disposal",
+        "tankless_water_heater": "water_heater",
+        "skylight": "windows",
+        "security_screen_door": "entry_door",
+        "ceiling_fan": "lighting",
+        "walk_in_closet": "closet",
+    }
+
+    def test_equivalent_items_share_a_category(self):
+        for bank_key, checklist_key in self.EQUIVALENTS.items():
+            with self.subTest(bank_key):
+                self.assertEqual(
+                    bank.get(bank_key)["category"],
+                    uc.category_for(checklist_key),
+                    f"{bank_key} and {checklist_key} describe the same work")
+
+    def test_appliances_are_interior_not_mep(self):
+        """The specific mismatch this fixes. A washer is an appliance;
+        the pipe it drains into is MEP, and that is wd_hookups."""
+        self.assertEqual(bank.get("washer_dryer")["category"], "interior_units")
+        self.assertEqual(bank.get("disposal")["category"], "interior_units")
+
+    def test_the_hookups_stay_mep(self):
+        """Not over-corrected: hookups with no machine on them are
+        plumbing and electrical infrastructure, not an appliance."""
+        self.assertEqual(bank.get("wd_hookups")["category"], "mep")
+
+    def test_no_other_bank_item_disagrees(self):
+        """Guards against fixing two and leaving a third."""
+        mismatches = []
+        for bank_key, checklist_key in self.EQUIVALENTS.items():
+            if bank.get(bank_key)["category"] != uc.category_for(checklist_key):
+                mismatches.append(bank_key)
+        self.assertEqual(mismatches, [])
+
+    def test_every_bank_category_is_in_the_shared_vocabulary(self):
+        for entry in bank.BANK_ITEMS:
+            with self.subTest(entry["key"]):
+                self.assertIn(entry["category"], cl.CATEGORY_NAMES)
+
+    def test_the_mirror_is_reseeded_when_a_category_changes(self):
+        """A stale row in site_dd_bank_items would report the old
+        category to anything reading the table instead of the module."""
+        path = Path(tempfile.mkdtemp()) / "sd.db"
+        with db.get_connection(path) as conn:
+            conn.execute(
+                "UPDATE site_dd_bank_items SET category = 'mep', code_version = 1 "
+                "WHERE key IN ('washer_dryer', 'disposal')")
+            conn.commit()
+        with db.get_connection(path) as conn:
+            rows = {r["key"]: r["category"] for r in db.list_bank_items(conn)}
+        self.assertEqual(rows["washer_dryer"], "interior_units")
+        self.assertEqual(rows["disposal"], "interior_units")

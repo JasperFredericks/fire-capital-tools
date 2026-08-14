@@ -110,7 +110,12 @@ BANK_ITEMS: tuple[dict[str, Any], ...] = (
     _bank("garage_carport", "Attached garage / carport", SCOPE_UNIT, "site_exterior"),
 
     # Mechanical, electrical, plumbing
-    _bank("washer_dryer", "In-unit washer / dryer", SCOPE_UNIT, "mep",
+    # interior_units, not mep: the room checklist files washer and dryer
+    # under appliances, following the property checklist's
+    # unit_appliances. A budget that put the bank's washer/dryer in MEP
+    # and the laundry checklist's under Interior would split one job
+    # across two headings.
+    _bank("washer_dryer", "In-unit washer / dryer", SCOPE_UNIT, "interior_units",
           None, uc.KIND_CHOICE, uc.PRESENCE),
     _bank("wd_hookups", "W/D hookups only", SCOPE_UNIT, "mep", None,
           uc.KIND_CHOICE,
@@ -121,7 +126,9 @@ BANK_ITEMS: tuple[dict[str, Any], ...] = (
     _bank("ceiling_fan", "Ceiling fan", SCOPE_ROOM, "mep"),
     _bank("window_ac", "Window AC unit", SCOPE_ROOM, "mep"),
     _bank("baseboard_heater", "Baseboard / wall heater", SCOPE_ROOM, "mep"),
-    _bank("disposal", "Garbage disposal", SCOPE_ROOM, "mep",
+    # Same reason: appliance_disposal on the kitchen checklist is
+    # interior_units, and the hint below points at that very item.
+    _bank("disposal", "Garbage disposal", SCOPE_ROOM, "interior_units",
           ("laundry", "other"), uc.KIND_CHOICE, uc.PRESENCE,
           hint="The kitchen checklist already asks about its own."),
     _bank("water_softener", "Water softener", SCOPE_UNIT, "mep"),
@@ -262,4 +269,7 @@ def search(query: str, scope: str, room_type: str | None = None,
 # Bumped whenever BANK_ITEMS changes. The database copy is reseeded when
 # its row count for this version does not match, which is one cheap COUNT
 # per connection rather than twenty upserts.
-BANK_VERSION = 1
+# Bumped when a category or label changes, so the mirrored copy in
+# site_dd_bank_items is rewritten rather than left holding the old value.
+# 2 -- washer_dryer and disposal moved from mep to interior_units.
+BANK_VERSION = 2
