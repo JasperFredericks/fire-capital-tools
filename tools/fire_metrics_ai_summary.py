@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from tools import openai_usage
+
 PROMPT_VERSION = "fire_metrics_summary_v5"
 SUMMARY_SCHEMA_NAME = "fire_metrics_market_overview"
 
@@ -1448,6 +1450,13 @@ def openai_summary(
         },
     )
 
+    # Recorded here rather than in the route: this line is reached only
+    # when a real request has already been billed. The route's cache short
+    # -circuits before it, so a cache hit cannot reach this and cannot
+    # inflate the count -- the same guarantee the RentCast and Places
+    # counters make. record() never raises.
+    openai_usage.record(openai_usage.FEATURE_FIRE_METRICS_SUMMARY, response)
+
     parsed = json.loads(response.output_text)
     return {
         "strength_sentence": one_sentence(parsed.get("strength_sentence", "")),
@@ -1654,6 +1663,12 @@ def openai_cre_research(
             # Keep request shape canonical to reduce schema drift risk.
             input=search_prompt,
         )
+
+        # Counted the moment the call returns, BEFORE the result is judged.
+        # A response that comes back as an error, or with nothing useful in
+        # it, was still billed -- counting only successes would understate
+        # spend in exactly the situation where spend is being investigated.
+        openai_usage.record(openai_usage.FEATURE_FIRE_METRICS_CRE, response)
 
         response_error = _safe_get(response, "error", None)
         err_code_raw = _safe_get(response_error, "code", None) if response_error is not None else None

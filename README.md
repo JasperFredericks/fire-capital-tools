@@ -137,6 +137,7 @@ Tested against:
 	- `SITE_DD_DB_PATH` (optional; defaults to `site_dd.db`)
 	- `UNDERWRITING_DB_PATH` (optional; defaults to `underwriting.db`)
 	- `INVESTOR_REPORT_DB_PATH` (optional; defaults to `investor_report.db`)
+	- `OPENAI_USAGE_DB_PATH` (optional; defaults to `openai_usage.db`)
 	- `CENSUS_API_KEY`
 - Required for the FIRE Metric updater to pull ACS/Census data: `CENSUS_API_KEY`
 - Required for Scorecard Pro's upload history/trend to persist across Railway deploys: `SCORECARD_PRO_DB_PATH`
@@ -148,6 +149,7 @@ Tested against:
 - Required for Site DD assessments to persist across Railway deploys: `SITE_DD_DB_PATH`
 - Required for Underwriting scenarios to persist across Railway deploys: `UNDERWRITING_DB_PATH`
 - Required for Investor Report waterfalls and capital records to persist across Railway deploys: `INVESTOR_REPORT_DB_PATH`
+- Required for the OpenAI per-feature usage counter to persist across Railway deploys: `OPENAI_USAGE_DB_PATH`. Without it the counter still works but resets on every deploy, silently under-reporting the month; the Admin → Service Costs page shows a warning when it is unset.
 - Required for FIRE Metric Google Maps display: `GOOGLE_MAPS_API_KEY`, `GOOGLE_MAPS_MAP_ID`
 
 ### Google Maps API key restrictions
