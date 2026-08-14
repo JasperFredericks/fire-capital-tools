@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block title %}Meeting Notes - Investor Report{% endblock %}
+
+{#
+  The transcript pool: what has been uploaded, what it matched, and the
+  aliases that make matching work.
+
+  Every automatic match is shown WITH ITS EVIDENCE and is overridable
+  from this page. Nothing here has been sent to a model -- that happens
+  only from the review screen, behind an explicit confirmation.
+#}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('investor_report.index') }}" class="btn btn-ghost"
+     style="margin-bottom:10px; display:inline-flex;">&larr; Investor Report</a>
+  <h1 class="page-title">Meeting Notes</h1>
+  <p class="page-subtitle">
+    Export a transcript from Fathom or Otter, upload it here with the date of
+    the meeting, and it is matched to a property. Nothing is sent to a model
+    from this page.
+  </p>
+</div>
+
+{% if not storage.persistent %}
+  <div class="result-note" style="border-left:3px solid #b91c1c;">
+    <strong>Uploads here will not survive a deploy.</strong>
+    <code>{{ storage.env_var }}</code> is not set, so transcripts are being
+    written to <code>{{ storage.path }}</code> on the container filesystem.
+    Set <code>{{ storage.env_var }}=/data/investor_notes.db</code> to fix it.
+  </div>
+{% endif %}
+
+<!-- ── Upload ─────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Upload a transcript</div>
+  <form method="POST" enctype="multipart/form-data"
+        action="{{ url_for('investor_notes.upload') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:12px;">
+      <div class="form-group">
+        <label class="form-label" for="transcript">Transcript file</label>
+        <input class="form-input" type="file" id="transcript" name="transcript"
+               accept=".txt,.md,.vtt,.srt,.csv" required>
+        <span class="stat-box-sub">Plain text export, up to {{ max_mb }} MB.</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="transcript_date">Date of the meeting</label>
+        <input class="form-input" type="date" id="transcript_date"
+               name="transcript_date" max="{{ today }}" required>
+        {#
+          Typed, not parsed. Fathom and Otter both put a date in their
+          exports but not in a shape that can be relied on across their
+          formats and locales -- and a parser that is right most of the
+          time files a meeting under the wrong quarter silently, which is
+          the error that survives review.
+        #}
+        <span class="stat-box-sub">
+          Not the upload date. Read from the file is not reliable enough to guess.
+        </span>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="source">Source</label>
+        <select class="form-input" id="source" name="source">
+          {% for s in sources %}
+            <option value="{{ s }}">{{ source_labels[s] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="title">Meeting title (optional)</label>
+        <input class="form-input" type="text" id="title" name="title"
+               placeholder="e.g. Ops sync">
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">Upload</button>
+  </form>
+</div>
+
+<!-- ── Pool ───────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Transcripts ({{ transcripts|length }})</div>
+  {% if not transcripts %}
+    <p class="page-subtitle">Nothing uploaded yet.</p>
+  {% else %}
+    <div style="overflow-x:auto;">
+      <table class="rent-comps-table">
+        <thead>
+          <tr><th>Date</th><th>Meeting</th><th>Source</th><th>Property</th>
+            <th>Why</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for t in transcripts %}
+            <tr>
+              <td>{{ t.transcript_date }}</td>
+              <td>{{ t.title or t.original_name }}</td>
+              <td>{{ source_labels.get(t.source, t.source) }}</td>
+              <td>
+                {% if t.property_key %}
+                  <strong>{{ t.property_label }}</strong><br>
+                  <span class="stat-box-sub">
+                    {{ 'matched automatically' if t.match_method == 'auto' else 'assigned by hand' }}
+                  </span>
+                {% else %}
+                  <span style="color:#b45309; font-weight:600;">
+                    {{ 'Ambiguous' if t.match_method == 'ambiguous' else 'Unassigned' }}
+                  </span>
+                {% endif %}
+              </td>
+              <td style="max-width:340px;">
+                {#
+                  The evidence, always. A match a reader cannot check is a
+                  guess wearing a result's clothes.
+                #}
+                {% if t.evidence %}
+                  <span class="stat-box-sub">{{ t.evidence.reason }}</span>
+                  {% if t.evidence.candidates %}
+                    <div class="stat-box-sub" style="margin-top:4px;">
+                      {% for c in t.evidence.candidates if c.mentions %}
+                        {{ c.label }} ({{ c.mentions }}){% if not loop.last %} · {% endif %}
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                {% endif %}
+              </td>
+              <td style="white-space:nowrap;">
+                <form method="POST" style="display:inline-flex; gap:4px;"
+                      action="{{ url_for('investor_notes.assign', tid=t.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <select class="form-input" name="property_key" style="min-width:170px;">
+                    <option value="">— unassigned —</option>
+                    {% for e in entries %}
+                      <option value="{{ e.key }}"
+                        {% if e.key == t.property_key %}selected{% endif %}>{{ e.label }}</option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit" class="btn btn-ghost">Assign</button>
+                </form>
+                <form method="POST" style="display:inline;"
+                      action="{{ url_for('investor_notes.delete_transcript', tid=t.id) }}"
+                      onsubmit="return confirm('Remove this transcript?');">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-ghost" style="color:#b91c1c;">Remove</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</div>
+
+<!-- ── Build an update ────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">Build an investor update</div>
+  <form method="GET" action="{{ url_for('investor_notes.review') }}">
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(190px,1fr)); gap:12px;">
+      <div class="form-group">
+        <label class="form-label" for="property_key">Property</label>
+        <select class="form-input" id="property_key" name="property_key" required>
+          {% for e in entries %}
+            <option value="{{ e.key }}">{{ e.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="start">From</label>
+        <input class="form-input" type="date" id="start" name="start" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="end">To</label>
+        <input class="form-input" type="date" id="end" name="end" required>
+      </div>
+    </div>
+    <div style="margin:6px 0 10px;">
+      {% for q in quarters %}
+        <button type="submit" class="btn btn-ghost" name="preset" value="{{ q.label }}"
+                onclick="document.getElementById('start').value='{{ q.start }}';
+                         document.getElementById('end').value='{{ q.end }}';">
+          {{ q.label }}
+        </button>
+      {% endfor %}
+    </div>
+    <button type="submit" class="btn btn-primary">Review transcripts &rarr;</button>
+    <span class="stat-box-sub" style="margin-left:8px;">
+      Nothing is generated yet — the next screen shows what would be used.
+    </span>
+  </form>
+</div>
+
+<!-- ── Aliases ────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="scorecard-section-title">What each property is called</div>
+  <p class="page-subtitle" style="margin:8px 0 12px;">
+    Matching looks for these in the transcript. Nobody says
+    &ldquo;1120 Jackson Street&rdquo; on a call &mdash; they say &ldquo;Jackson&rdquo;.
+    Adding the words actually used is the single most useful thing for making
+    matching work.
+  </p>
+
+  {% for e in entries %}
+    <div style="margin-bottom:12px;">
+      <strong>{{ e.label }}</strong>
+      <span class="stat-box-sub">
+        {{ e.sources|join(', ') }}{% if not e.has_deal %} · no Deal Dive record{% endif %}
+      </span>
+      {% if e.match_risk %}
+        <div class="result-note" style="border-left:3px solid #b45309; margin:6px 0;">
+          Matchable only by its exact label, and it has no Deal Dive record to
+          fall back on. Add what people call it, or transcripts about it will
+          not be matched.
+        </div>
+      {% endif %}
+      <div style="margin:6px 0;">
+        {% for a in aliases if a.property_key == e.key %}
+          <span class="sdd-added-tag" style="margin-right:6px;">
+            {{ a.alias }}
+            <form method="POST" style="display:inline;"
+                  action="{{ url_for('investor_notes.delete_alias', alias_id=a.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" style="border:0;background:none;cursor:pointer;color:#6b7280;">&times;</button>
+            </form>
+          </span>
+        {% else %}
+          <span class="stat-box-sub">No aliases yet.</span>
+        {% endfor %}
+      </div>
+      <form method="POST" style="display:flex; gap:6px; max-width:420px;"
+            action="{{ url_for('investor_notes.add_alias') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="property_key" value="{{ e.key }}">
+        <input class="form-input" type="text" name="alias" maxlength="120"
+               placeholder="What people call it">
+        <button type="submit" class="btn btn-ghost">Add</button>
+      </form>
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

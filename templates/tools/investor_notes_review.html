@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Review - Meeting Notes - Investor Report{% endblock %}
+
+{#
+  THE SPEND GATE.
+
+  Everything ticked here is what gets sent, and the model is not called
+  until the button at the bottom is pressed. Same discipline as Force
+  Refresh elsewhere: a real, non-trivial spend gets an explicit
+  confirmation with the inputs visible first, so a mistaken date range
+  costs nothing.
+#}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('investor_notes.index') }}" class="btn btn-ghost"
+     style="margin-bottom:10px; display:inline-flex;">&larr; Meeting Notes</a>
+  <h1 class="page-title">Review before generating</h1>
+  <p class="page-subtitle">
+    {% if entry %}{{ entry.label }} &middot; {% endif %}
+    {{ start or 'any date' }} to {{ end or 'any date' }}
+  </p>
+</div>
+
+{% if not entry %}
+  <div class="card">
+    <p>Pick a property to review.</p>
+    <a class="btn btn-primary" href="{{ url_for('investor_notes.index') }}">Back</a>
+  </div>
+{% else %}
+
+{% if cached %}
+  <div class="result-note" style="border-left:3px solid #059669;">
+    <strong>This exact update already exists.</strong>
+    Same property, same dates, same transcripts &mdash; opening it costs nothing.
+    <a href="{{ url_for('investor_notes.view_update', uid=cached.id) }}">Open it</a>,
+    or regenerate below only if you want it rewritten.
+  </div>
+{% endif %}
+
+<form method="POST" action="{{ url_for('investor_notes.generate') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="property_key" value="{{ entry.key }}">
+  <input type="hidden" name="start" value="{{ start }}">
+  <input type="hidden" name="end" value="{{ end }}">
+
+  <div class="card">
+    <div class="scorecard-section-title">
+      Transcripts that would be used ({{ matched|length }})
+    </div>
+    {% if not matched %}
+      <p class="page-subtitle">
+        No transcripts are matched to {{ entry.label }} in this range. Widen the
+        dates, or assign an unmatched transcript on the previous screen.
+      </p>
+    {% else %}
+      <div style="overflow-x:auto;">
+        <table class="rent-comps-table">
+          <thead>
+            <tr><th style="width:38px;">Use</th><th>Date</th><th>Meeting</th>
+              <th>Source</th><th>Matched because</th></tr>
+          </thead>
+          <tbody>
+            {% for t in matched %}
+              <tr>
+                <td>
+                  <input type="checkbox" name="transcript_ids" value="{{ t.id }}" checked>
+                </td>
+                <td>{{ t.transcript_date }}</td>
+                <td>{{ t.title or t.original_name }}</td>
+                <td>{{ source_labels.get(t.source, t.source) }}</td>
+                <td class="stat-box-sub">
+                  {% if t.match_method == 'manual' %}Assigned by hand.
+                  {% elif t.evidence %}{{ t.evidence.reason }}
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="page-subtitle" style="margin-top:10px;">
+        Untick anything that should not be in this update. Up to
+        {{ max_transcripts }} meetings in one go.
+      </p>
+    {% endif %}
+  </div>
+
+  {% if unassigned %}
+    <div class="card">
+      <div class="scorecard-section-title">
+        Not matched to any property ({{ unassigned|length }})
+      </div>
+      <p class="page-subtitle" style="margin:8px 0 10px;">
+        These are excluded. They are listed rather than hidden, because a
+        transcript silently left out of an update looks exactly like one that
+        was never uploaded.
+      </p>
+      {% for t in unassigned %}
+        <div class="stat-box-sub">
+          {{ t.transcript_date }} &middot; {{ t.title or t.original_name }}
+          &mdash; <a href="{{ url_for('investor_notes.index') }}">assign it</a>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <div class="card">
+    <div class="scorecard-section-title">What will be produced</div>
+    <ul style="margin:8px 0 12px 18px;">
+      {% for s in sections %}
+        <li><strong>{{ s.name }}</strong>
+          <span class="stat-box-sub">&mdash; {{ s.brief }}</span></li>
+      {% endfor %}
+    </ul>
+    <p class="page-subtitle">
+      Each point is tagged with the meeting it came from. A section nothing was
+      said about will say so rather than being padded. Figures mentioned are
+      narrative only &mdash; nothing is written into Underwriting, Deal Dive or
+      any other tool.
+    </p>
+  </div>
+
+  <div class="card" style="border-left:3px solid #b45309;">
+    <div class="scorecard-section-title">This spends money</div>
+    <p class="page-subtitle" style="margin:8px 0 12px;">
+      One call to OpenAI against the shared $60/month budget, sized by how much
+      transcript is selected. Re-opening a generated update is free; only
+      pressing this button spends.
+      {% if usage and usage.row %}
+        This feature has made {{ usage.row.calls }} call(s) in {{ usage.month }}
+        ({{ '{:,}'.format(usage.row.total_tokens) }} tokens).
+      {% endif %}
+    </p>
+    <button type="submit" class="btn btn-primary" {{ 'disabled' if not matched }}>
+      Generate the update
+    </button>
+    {% if cached %}
+      <label style="margin-left:12px;">
+        <input type="checkbox" name="force" value="1">
+        Regenerate even though an identical one exists
+      </label>
+    {% endif %}
+  </div>
+</form>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Investor Update - {{ update.property_label }}{% endblock %}
+
+{#
+  The generated document. Every point carries the meeting and date it came
+  from, and a section nothing was said about says so rather than being
+  padded to look complete.
+#}
+
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('investor_notes.index') }}" class="btn btn-ghost"
+     style="margin-bottom:10px; display:inline-flex;">&larr; Meeting Notes</a>
+  <h1 class="page-title">Investor Update</h1>
+  <p class="page-subtitle">
+    {{ update.property_label }} &middot; {{ update.period_start }} to
+    {{ update.period_end }} &middot; generated {{ update.generated_at[:16] }}
+    {% if update.model %}&middot; {{ update.model }}{% endif %}
+  </p>
+  <div style="margin-top:10px;">
+    <a class="btn btn-ghost"
+       href="{{ url_for('investor_notes.export_update', uid=update.id, fmt='pdf') }}">Download PDF</a>
+    <a class="btn btn-ghost"
+       href="{{ url_for('investor_notes.export_update', uid=update.id, fmt='xlsx') }}">Download Excel</a>
+  </div>
+</div>
+
+{% for section in sections %}
+  <div class="card">
+    <div class="scorecard-section-title">{{ section.name }}</div>
+    {% if section.empty %}
+      {#
+        Said plainly. Padding a section nobody discussed is how a document
+        stops being worth reading.
+      #}
+      <p class="page-subtitle" style="margin:8px 0 0;">
+        {{ section.empty_text }}
+      </p>
+    {% else %}
+      <ul style="margin:10px 0 0 18px;">
+        {% for p in section.points %}
+          <li style="margin-bottom:10px;">
+            {{ p.text }}
+            <div class="stat-box-sub">
+              &mdash; {{ p.title }}, {{ p.date }}
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+{% endfor %}
+
+{% if figures %}
+  <div class="card" style="border-left:3px solid #b45309;">
+    <div class="scorecard-section-title">Figures mentioned on these calls</div>
+    <p class="page-subtitle" style="margin:8px 0 12px;">
+      These are things people <em>said</em>, pulled out so they are easy to
+      check against the model. They are <strong>not</strong> accounting records,
+      and none of them has been written into Underwriting, Deal Dive or
+      anywhere else &mdash; that is deliberate, not pending.
+    </p>
+    <div style="overflow-x:auto;">
+      <table class="rent-comps-table">
+        <thead><tr><th>Amount</th><th>Section</th><th>Said in</th><th>Context</th></tr></thead>
+        <tbody>
+          {% for f in figures %}
+            <tr>
+              <td>${{ '{:,.2f}'.format(f.value) }}</td>
+              <td>{{ f.section }}</td>
+              <td>{{ f.date }}</td>
+              <td class="stat-box-sub" style="max-width:460px;">{{ f.text }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+
+<div class="card">
+  <div class="scorecard-section-title">Sources ({{ sources|length }})</div>
+  <p class="page-subtitle" style="margin:8px 0 10px;">
+    Every statement above comes from one of these meetings. Anything the model
+    could not tie to one of them was dropped rather than included unattributed.
+  </p>
+  {% for s in sources %}
+    <div class="stat-box-sub">
+      {{ s.transcript_date }} &middot; {{ s.title or s.original_name }}
+      &middot; {{ s.source }}
+    </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <form method="POST" onsubmit="return confirm('Delete this update?');"
+        action="{{ url_for('investor_notes.delete_update', uid=update.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-danger">Delete this update</button>
+    <span class="stat-box-sub" style="margin-left:8px;">
+      The transcripts it was built from are not deleted.
+    </span>
+  </form>
+</div>
+{% endblock %}

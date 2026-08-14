@@ -72,6 +72,7 @@ def create_app(config_class: type = Config) -> Flask:
     from tools.rent_comps import rent_comps_bp
     from tools.scorecard_pro import scorecard_bp
     from tools.site_dd import site_dd_bp
+    from tools.investor_notes import investor_notes_bp
     from tools.investor_report import investor_report_bp
     from tools.underwriting import underwriting_bp
 
@@ -85,6 +86,9 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(site_dd_bp, url_prefix="/tools/site-dd")
     app.register_blueprint(underwriting_bp, url_prefix="/tools/underwriting")
     app.register_blueprint(investor_report_bp, url_prefix="/tools/investor-report")
+    # The notetaker shares Investor Report's prefix: it is a feature of
+    # that tool, not a tool of its own.
+    app.register_blueprint(investor_notes_bp, url_prefix="/tools/investor-report")
     app.register_blueprint(admin_bp, url_prefix="/admin")
     app.register_blueprint(feedback_bp, url_prefix="/feedback")
 
