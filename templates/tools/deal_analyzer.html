@@ -120,7 +120,7 @@
   {% endif %}
 
     <div class="scorecard-mini-title" style="margin:14px 0 8px;">Build the NOI</div>
-    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
+    <div class="da-grid-3" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
       <div class="form-group">
         <label class="form-label" for="gross_potential_income">Gross Potential Income ($/yr)</label>
         <input class="form-input" type="text" id="gross_potential_income" name="gross_potential_income" value="{{ form.gross_potential_income }}" placeholder="1,315,737">
@@ -147,7 +147,7 @@
       </div>
     </div>
 
-    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:14px; margin-top:4px;">
+  <div class="da-grid-3" style="display:grid; grid-template-columns: 1fr 1fr; gap:14px; margin-top:4px;">
       <div class="form-group">
         <label class="form-label" for="operating_expenses">Operating Expenses</label>
         <div style="display:flex; gap:8px;">
@@ -167,7 +167,7 @@
     </div>
 
     <div class="scorecard-mini-title" style="margin:14px 0 8px;">Value It</div>
-    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
+    <div class="da-grid-3" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
       <div class="form-group">
         <label class="form-label" for="cap_rate_pct">Target Cap Rate (%)</label>
         <input class="form-input" type="text" id="cap_rate_pct" name="cap_rate_pct" value="{{ form.cap_rate_pct }}" placeholder="6.0" required>

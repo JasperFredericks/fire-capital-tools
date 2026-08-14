@@ -46,12 +46,12 @@
     <p class="page-subtitle" style="margin:10px 0 12px;">
       Scoped to a Deal Dive property &mdash; comps you save here belong to this deal. The address comes from the deal record and is edited there, not here.
     </p>
-    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+    <div class="deal-page-actions" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
       <div>
         <div class="stat-box-value" style="font-size:15px;">{{ ctx.address }}</div>
         <div class="stat-box-sub">{{ ctx.city }}, {{ ctx.state }} {{ ctx.zip or '' }}</div>
       </div>
-      <div style="display:flex; gap:8px;">
+      <div class="deal-page-actions" style="display:flex; gap:8px;">
         <a href="{{ url_for('deal_dive.detail', deal_id=ctx.deal_id) }}" class="btn btn-ghost">Back to Deal</a>
         <a href="{{ url_for('rent_comps.index') }}" class="btn btn-ghost">Standalone Search</a>
       </div>
@@ -63,7 +63,7 @@
     </p>
     <form method="POST" action="{{ url_for('rent_comps.search') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <div style="display:grid; grid-template-columns: 2fr 1fr 0.6fr 0.8fr auto; gap:10px; align-items:end;">
+      <div class="rc-search-grid" style="display:grid; grid-template-columns: 2fr 1fr 0.6fr 0.8fr auto; gap:10px; align-items:end;">
         <div class="form-group" style="margin-bottom:0;">
           <label class="form-label" for="rc_address">Address</label>
           <input class="form-input" type="text" id="rc_address" name="address" value="{{ ctx.address or '' }}" placeholder="1200 Peachtree St NE">
@@ -88,10 +88,10 @@
 
 <!-- ── Rent data ──────────────────────────────────────────────────────── -->
 <div class="card" id="rent-data">
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
+  <div class="deal-page-actions" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:10px;">
     <div class="scorecard-section-title">Rent Estimate &amp; Comparables (RentCast)</div>
     {% if has_address %}
-      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <div class="deal-page-actions" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         {% if candidates %}
           <a class="btn btn-ghost"
              href="{{ url_for('rent_comps.export_csv', set='candidates', **ctx_query) }}">Download CSV</a>

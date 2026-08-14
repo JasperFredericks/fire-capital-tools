@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, send_from_directory, session, url_for
 from flask_login import LoginManager, current_user, logout_user
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
@@ -122,6 +122,20 @@ def create_app(config_class: type = Config) -> Flask:
                 return redirect(url_for("auth.login"))
         session["_last_active"] = datetime.utcnow().isoformat()
         session.modified = True
+
+    # ── PWA routes (root-level so service worker scope covers all of /) ────
+    @app.route("/service-worker.js")
+    def service_worker():
+        response = send_from_directory(app.static_folder, "service-worker.js")
+        response.headers["Service-Worker-Allowed"] = "/"
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["Content-Type"] = "application/javascript"
+        return response
+
+    @app.route("/manifest.json")
+    def manifest():
+        return send_from_directory(app.static_folder, "manifest.json",
+                                   mimetype="application/manifest+json")
 
     # ── Core routes ────────────────────────────────────────────────────────
     @app.route("/")

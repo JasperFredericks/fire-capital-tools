@@ -2,6 +2,59 @@
 
 Internal tooling for FIRE Capital real estate operations.
 
+## Progressive Web App (PWA)
+
+Fire Capital Tools supports PWA installation. Users on Chrome (desktop/Android) and Safari (iOS 16.4+) can install the app to their home screen or app launcher and open it in a standalone window.
+
+### Files involved
+
+| File | Purpose |
+|---|---|
+| `static/manifest.json` | Web App Manifest — name, icons, colors, display mode |
+| `static/service-worker.js` | Service worker — caches static assets, serves offline fallback |
+| `static/offline.html` | Shown when the user is offline and navigates to an uncached page |
+| `static/img/icon-192.png` | PWA icon 192×192 (generated from `logo-mark.png`) |
+| `static/img/icon-512.png` | PWA icon 512×512 (copy of `logo-mark.png`) |
+
+Routes `/manifest.json` and `/service-worker.js` are served at root level by Flask so the service worker scope covers the entire application (`/`).
+
+### How it works
+
+**Manifest:** Linked from `<head>` in `base.html`. Tells the browser the app name, icons, theme color, and that it should open in `standalone` mode (no browser chrome).
+
+**Service worker:** Registered globally via a `<script>` at the bottom of `base.html`. On install it precaches core static assets (CSS, icons). On fetch it applies a cache-first strategy for `/static/` assets. All authenticated routes, tool routes, API calls, and POST requests bypass the cache entirely and always go to the network.
+
+### V1 offline behavior
+
+**What works offline:** The app shell (CSS, icons) is cached. An offline fallback page is shown if the user has no connection and tries to navigate somewhere uncached.
+
+**What does NOT work offline:** Everything dynamic — login, dashboard, tools (FIRE Metric, Deal Analyzer, Scorecard Pro, etc.), database queries, API calls, Google Maps. This is intentional. Fire Capital Tools handles financial/investment data where stale cached results could cause incorrect decisions.
+
+### Testing installation locally
+
+1. Start the app: `flask run` (or `python app.py`)
+2. Open Chrome and navigate to `http://localhost:5000`
+3. Open DevTools → **Application** tab → **Manifest** — verify name, icons, and display mode load correctly
+4. **Service Workers** panel — verify the worker registered with scope `/`
+5. To test the install prompt on desktop Chrome: look for the install icon (⊕) in the address bar
+
+### Testing installation in production (Railway)
+
+The production app is already on HTTPS (required for PWA). In Chrome on mobile or desktop:
+1. Navigate to the production URL
+2. Chrome will show an "Install" banner or address-bar prompt after a short visit
+3. On iOS Safari: tap the Share button → **Add to Home Screen**
+
+### Verifying manifest and service worker
+
+```
+# Manifest
+curl https://<your-domain>/manifest.json
+
+# Service worker
+curl https://<your-domain>/service-worker.js
+```
+
 ## mmr-summary
 
 Automatically generates a formatted **Summary** tab in any Resman MMR (Monthly Management Report) Excel file, replacing a broken VBA approach.
