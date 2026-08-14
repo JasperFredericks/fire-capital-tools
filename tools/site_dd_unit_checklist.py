@@ -220,6 +220,18 @@ def is_valid_option(item: dict[str, Any], value: Any) -> bool:
     return any(key == value for key, _ in item.get("options", ()))
 
 
+def is_known_item(item_key: str) -> bool:
+    """True for any key this module defines, in any room type or unit-wide.
+    Used to validate a capture's item_key without the caller needing to
+    know which room it came from."""
+    if any(i["key"] == item_key for i in UNIT_WIDE):
+        return True
+    for room_type, _ in ROOM_TYPES:
+        if any(i["key"] == item_key for i in items_for_room(room_type)):
+            return True
+    return False
+
+
 def item_map(items) -> dict[str, dict[str, Any]]:
     return {i["key"]: i for i in items}
 

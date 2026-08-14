@@ -1,5 +1,59 @@
 {% extends "base.html" %}
-{% block title %}{{ room.label or room_type_labels[room.room_type] }} - {{ area.label }} - Site DD{% endblock %}
+{% block title %}{{ room.label or room_type_labels[room.room_type] }} - {{ area.label }} - Site DD
+<script>
+/*
+  Pre-upload checks. Purely to save an inspector uploading 80 MB over a
+  site's mobile signal before being told no -- the server enforces the
+  same limits and trusts none of this. A browser without these APIs
+  simply uploads and gets the server's answer.
+*/
+(function () {
+  function mb(bytes) { return (bytes / 1048576).toFixed(1); }
+
+  document.querySelectorAll(".sdd-file").forEach(function (input) {
+    input.addEventListener("change", function () {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      var maxMb = parseFloat(input.dataset.maxmb || "0");
+      var label = input.closest(".sdd-capture-btn");
+
+      function reject(message) {
+        input.value = "";
+        if (label) { label.classList.remove("sdd-capture-btn--ready"); }
+        alert(message);
+      }
+
+      if (maxMb && file.size > maxMb * 1048576) {
+        reject("That file is " + mb(file.size) + " MB — the limit is " + maxMb +
+               " MB. Record a shorter clip, or set the camera to 720p.");
+        return;
+      }
+
+      var isVideo = (file.type || "").indexOf("video") === 0
+                    || input.dataset.kind === "video";
+      var maxSec = parseFloat(input.dataset.maxsec || "0");
+      if (isVideo && maxSec && window.URL && window.URL.createObjectURL) {
+        // Read duration before uploading. Metadata only -- the file is
+        // never fully decoded here.
+        var probe = document.createElement("video");
+        probe.preload = "metadata";
+        probe.onloadedmetadata = function () {
+          window.URL.revokeObjectURL(probe.src);
+          if (probe.duration && probe.duration > maxSec + 2) {
+            reject("That clip is " + Math.round(probe.duration) +
+                   " seconds — the limit is " + maxSec + ".");
+          }
+        };
+        probe.onerror = function () { window.URL.revokeObjectURL(probe.src); };
+        probe.src = window.URL.createObjectURL(file);
+      }
+
+      if (label) { label.classList.add("sdd-capture-btn--ready"); }
+    });
+  });
+})();
+</script>
+{% endblock %}
 
 {#
   One room in the walkthrough.
@@ -85,6 +139,60 @@
         <input class="sdd-note" type="text" name="note_{{ item.key }}"
                value="{{ row.note if row and row.note else '' }}"
                placeholder="Note (optional)" aria-label="{{ item.label }} note">
+
+        {#
+          Capture. TWO inputs, because branch 2 confirmed Android removes
+          the gallery option entirely when `capture` is set -- one clever
+          combined control would leave an inspector unable to attach a
+          photo they had already taken. `capture` is a preference, not a
+          guarantee, so nothing here depends on the camera opening.
+
+          They belong to #captureForm via the form attribute, since this
+          block sits inside the room's own form and HTML has no nested
+          forms. Each button carries its item and scope in formaction, so
+          the whole thing works with JavaScript off.
+        #}
+        {% set shots = media_by_item.get(item.key, []) %}
+        {% set has_video = shots | selectattr('kind', 'equalto', 'video') | list | length %}
+        <div class="sdd-capture">
+          <label class="sdd-capture-btn">
+            <input type="file" name="photo" form="captureForm" class="sdd-file"
+                   accept="image/*" capture="environment"
+                   data-maxmb="{{ max_photo_mb }}" data-kind="photo">
+            <span>Take photo</span>
+          </label>
+          <label class="sdd-capture-btn{{ ' sdd-capture-btn--used' if has_video else '' }}">
+            <input type="file" name="photo" form="captureForm" class="sdd-file"
+                   accept="video/*" capture="environment"
+                   data-maxmb="{{ max_video_mb }}" data-maxsec="{{ max_video_seconds }}"
+                   data-kind="video" {{ 'disabled' if has_video else '' }}>
+            <span>{{ 'Video added' if has_video else 'Take video' }}</span>
+          </label>
+          {# No capture attribute: the one that still offers the gallery. #}
+          <label class="sdd-capture-btn sdd-capture-btn--ghost">
+            <input type="file" name="photo" form="captureForm" class="sdd-file"
+                   accept="image/*,video/*" data-maxmb="{{ max_video_mb }}" data-kind="any">
+            <span>Choose file</span>
+          </label>
+          <button type="submit" form="captureForm" class="sdd-capture-btn sdd-capture-btn--go"
+                  formenctype="multipart/form-data"
+                  formaction="{{ url_for('site_dd.upload_photo', assessment_id=assessment.id,
+                                         item_key=item.key, area_id=area.id, room_id=room.id) }}">
+            Upload
+          </button>
+        </div>
+
+        {% if shots %}
+          <div class="sdd-shots">
+            {% for m in shots %}
+              <a class="sdd-shot" href="{{ url_for('site_dd.download_photo', assessment_id=assessment.id, photo_id=m.id) }}">
+                <span class="sdd-shot-kind">{{ 'VIDEO' if m.kind == 'video' else 'PHOTO' }}</span>
+                <span>{{ m.original_name }}</span>
+                <span class="stat-box-sub">{{ human_bytes(m.bytes) }}{% if m.duration_s %} · {{ '%.0f'|format(m.duration_s) }}s{% endif %}</span>
+              </a>
+            {% endfor %}
+          </div>
+        {% endif %}
       </div>
     {% endfor %}
   </div>
@@ -109,6 +217,13 @@
   </div>
 </form>
 
+{# Declared once, outside the room form. Every capture input above
+   belongs to it by id, and each Upload button supplies its own action. #}
+<form id="captureForm" method="POST" enctype="multipart/form-data"
+      action="{{ url_for('site_dd.upload_photo', assessment_id=assessment.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+</form>
+
 <div class="card" style="padding:12px 16px;">
   <div class="scorecard-mini-title" style="margin-bottom:8px;">Rooms in this unit</div>
   {% for r in rooms %}
@@ -121,4 +236,58 @@
     </a>
   {% endfor %}
 </div>
+
+<script>
+/*
+  Pre-upload checks. Purely to save an inspector uploading 80 MB over a
+  site's mobile signal before being told no -- the server enforces the
+  same limits and trusts none of this. A browser without these APIs
+  simply uploads and gets the server's answer.
+*/
+(function () {
+  function mb(bytes) { return (bytes / 1048576).toFixed(1); }
+
+  document.querySelectorAll(".sdd-file").forEach(function (input) {
+    input.addEventListener("change", function () {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      var maxMb = parseFloat(input.dataset.maxmb || "0");
+      var label = input.closest(".sdd-capture-btn");
+
+      function reject(message) {
+        input.value = "";
+        if (label) { label.classList.remove("sdd-capture-btn--ready"); }
+        alert(message);
+      }
+
+      if (maxMb && file.size > maxMb * 1048576) {
+        reject("That file is " + mb(file.size) + " MB — the limit is " + maxMb +
+               " MB. Record a shorter clip, or set the camera to 720p.");
+        return;
+      }
+
+      var isVideo = (file.type || "").indexOf("video") === 0
+                    || input.dataset.kind === "video";
+      var maxSec = parseFloat(input.dataset.maxsec || "0");
+      if (isVideo && maxSec && window.URL && window.URL.createObjectURL) {
+        // Read duration before uploading. Metadata only -- the file is
+        // never fully decoded here.
+        var probe = document.createElement("video");
+        probe.preload = "metadata";
+        probe.onloadedmetadata = function () {
+          window.URL.revokeObjectURL(probe.src);
+          if (probe.duration && probe.duration > maxSec + 2) {
+            reject("That clip is " + Math.round(probe.duration) +
+                   " seconds — the limit is " + maxSec + ".");
+          }
+        };
+        probe.onerror = function () { window.URL.revokeObjectURL(probe.src); };
+        probe.src = window.URL.createObjectURL(file);
+      }
+
+      if (label) { label.classList.add("sdd-capture-btn--ready"); }
+    });
+  });
+})();
+</script>
 {% endblock %}

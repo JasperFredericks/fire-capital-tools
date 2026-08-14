@@ -170,6 +170,15 @@ CREATE TABLE IF NOT EXISTS site_dd_media (
     caption TEXT,
     bytes INTEGER,
     duration_s REAL,
+    -- Which item, and in which scope, this was taken for. Branch 1 built
+    -- this table ahead of its use and add_media() accepted an item_key it
+    -- then dropped on the floor, so every photo bucketed under "no item".
+    -- Added as columns rather than inferred from finding_id because a
+    -- capture is often taken before the finding row exists -- you
+    -- photograph the crack, then decide it is a Replace.
+    item_key TEXT,
+    area_id INTEGER,
+    room_id INTEGER,
     uploaded_at TEXT NOT NULL
 );
 
@@ -196,6 +205,12 @@ _FINDING_ADDED_COLUMNS = (
     ("detail", "TEXT"),
 )
 
+_MEDIA_ADDED_COLUMNS = (
+    ("item_key", "TEXT"),
+    ("area_id", "INTEGER"),
+    ("room_id", "INTEGER"),
+)
+
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
@@ -203,6 +218,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
     for name, coltype in _FINDING_ADDED_COLUMNS:
         if name not in existing:
             conn.execute(f"ALTER TABLE site_dd_findings ADD COLUMN {name} {coltype}")
+    existing_media = {row[1] for row in conn.execute("PRAGMA table_info(site_dd_media)")}
+    for name, coltype in _MEDIA_ADDED_COLUMNS:
+        if name not in existing_media:
+            conn.execute(f"ALTER TABLE site_dd_media ADD COLUMN {name} {coltype}")
     conn.commit()
 
 
@@ -627,16 +646,17 @@ MEDIA_VIDEO = "video"
 def add_media(conn: sqlite3.Connection, assessment_id: int, item_key: str | None,
               original_name: str, stored_name: str, caption: str | None,
               kind: str = MEDIA_PHOTO, finding_id: int | None = None,
-              size_bytes: int | None = None, duration_s: float | None = None) -> int:
+              size_bytes: int | None = None, duration_s: float | None = None,
+              area_id: int | None = None, room_id: int | None = None) -> int:
     cur = conn.execute(
         """
         INSERT INTO site_dd_media
             (assessment_id, finding_id, kind, original_name, stored_name,
-             caption, bytes, duration_s, uploaded_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             caption, bytes, duration_s, item_key, area_id, room_id, uploaded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (assessment_id, finding_id, kind, original_name, stored_name,
-         caption, size_bytes, duration_s, _now()),
+         caption, size_bytes, duration_s, item_key, area_id, room_id, _now()),
     )
     conn.commit()
     return cur.lastrowid
@@ -653,6 +673,41 @@ def list_media(conn: sqlite3.Connection, assessment_id: int,
             "SELECT * FROM site_dd_media WHERE assessment_id = ? AND kind = ? ORDER BY id",
             (assessment_id, kind)).fetchall()
     return [dict(r) for r in rows]
+
+
+def list_media_for_scope(conn: sqlite3.Connection, assessment_id: int,
+                         area_id: int | None = None,
+                         room_id: int | None = None) -> list[dict[str, Any]]:
+    """Media captured in one scope. IS rather than = so NULL (the property
+    scope) selects the property rows instead of matching nothing."""
+    rows = conn.execute(
+        "SELECT * FROM site_dd_media WHERE assessment_id = ? "
+        "AND area_id IS ? AND room_id IS ? ORDER BY id",
+        (assessment_id, area_id, room_id)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def media_totals(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Storage used by Site DD media across every assessment.
+
+    Exists because video changes the storage math in a way photos never
+    did: at 40 MB a clip, the production volume holds about 115 of them.
+    A footprint nobody can see is one nobody checks until it is full.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b FROM site_dd_media"
+    ).fetchone()
+    photos = conn.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b "
+        "FROM site_dd_media WHERE kind = ?", (MEDIA_PHOTO,)).fetchone()
+    videos = conn.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS b "
+        "FROM site_dd_media WHERE kind = ?", (MEDIA_VIDEO,)).fetchone()
+    return {
+        "count": int(row["n"] or 0), "bytes": int(row["b"] or 0),
+        "photo_count": int(photos["n"] or 0), "photo_bytes": int(photos["b"] or 0),
+        "video_count": int(videos["n"] or 0), "video_bytes": int(videos["b"] or 0),
+    }
 
 
 def get_media(conn: sqlite3.Connection, assessment_id: int,

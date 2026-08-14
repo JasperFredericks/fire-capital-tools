@@ -51,7 +51,15 @@ class Config:
         "UPLOAD_FOLDER_PATH",
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads"),
     )
-    MAX_CONTENT_LENGTH: int = 20 * 1024 * 1024   # 20 MB
+    # Raised from 20 MB for Site DD video (30s at 720p runs 25-40 MB).
+    #
+    # Raising this alone would have removed the only size guard from every
+    # other upload endpoint in the app, which had been protected by it as
+    # a side effect rather than by any deliberate per-endpoint limit. So
+    # tools/upload_limits.py now gives each endpoint its own explicit cap
+    # at the value it effectively had before, and this figure is only the
+    # backstop for the largest single thing the app accepts.
+    MAX_CONTENT_LENGTH: int = 48 * 1024 * 1024   # 48 MB
 
     # ── Admin credentials (loaded from .env) ──────────────────────────────
     ADMIN_USERNAME: str = os.environ.get("ADMIN_USERNAME", "michelle")

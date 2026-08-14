@@ -36,6 +36,7 @@ from tools import market_data_service
 from tools import rent_comps
 from tools import rent_comps_db
 from tools import site_dd
+from tools import upload_limits as ul
 from tools import investor_report
 from tools import underwriting
 
@@ -461,6 +462,12 @@ def upload_file(deal_id):
     upload = request.files.get("file")
     if not upload or not upload.filename:
         flash("No file selected.", "danger")
+        return redirect(url_for("deal_dive.detail", deal_id=deal_id) + f"#{category}")
+
+    try:
+        ul.check(request.content_length, ul.DOCUMENT_BYTES, "document")
+    except ul.UploadTooLarge as exc:
+        flash(str(exc), "danger")
         return redirect(url_for("deal_dive.detail", deal_id=deal_id) + f"#{category}")
 
     original_name = secure_filename(upload.filename)

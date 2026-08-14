@@ -2982,3 +2982,75 @@ hr.divider {
   .sdd-form-grid > button,
   .sdd-form-grid > .btn { width: 100%; }
 }
+
+/* ── Site DD capture ─────────────────────────────────────────────────────
+   Two camera inputs plus a plain file picker, per item. Android removes
+   the gallery option whenever `capture` is set, so the third control is
+   not redundancy -- it is the only way to attach a photo already taken. */
+.sdd-capture {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.sdd-capture-btn {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 11px 12px;
+  font-size: 13.5px;
+  font-weight: 600;
+  border-radius: 9px;
+  border: 1.5px solid #d1d5db;
+  background: #fff;
+  color: #1a2744;
+  cursor: pointer;
+  text-align: center;
+}
+.sdd-capture-btn--ghost { color: #4b5563; border-style: dashed; }
+.sdd-capture-btn--go { background: #1a2744; border-color: #1a2744; color: #fff; }
+.sdd-capture-btn--ready { border-color: #2563eb; color: #2563eb; }
+.sdd-capture-btn--used { opacity: 0.55; }
+/* The file input covers its label so the whole control is the tap target,
+   rather than the browser's own tiny "Choose file" button.
+   Negative inset by the border width: `inset: 0` is measured from the
+   PADDING box, which left the 1.5px border as a dead zone -- measured,
+   not assumed: a tap on the bottom-right corner did not reach the input. */
+.sdd-capture-btn input[type="file"] {
+  position: absolute;
+  /* The offsets define the box. width/height:100% would override the
+     right and bottom offsets and re-anchor it to the padding box, which
+     is what left a dead corner in the first attempt. */
+  inset: -1.5px;
+  opacity: 0;
+  cursor: pointer;
+}
+.sdd-capture-btn input[type="file"]:disabled { cursor: not-allowed; }
+
+.sdd-shots { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.sdd-shot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #111827;
+  text-decoration: none;
+}
+.sdd-shot-kind {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: #eef2ff;
+  color: #1a2744;
+}

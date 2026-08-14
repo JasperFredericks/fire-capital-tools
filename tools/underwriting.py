@@ -51,6 +51,7 @@ from tools import underwriting_db as db
 from tools import underwriting_market as umkt
 from tools import quick_analyzer_t12 as qa_t12
 from tools import underwriting_property as uprop
+from tools import upload_limits as ul
 from tools import deal_readiness_defaults as readiness
 from tools import underwriting_loans_math as ulm
 from tools import underwriting_math as um
@@ -903,6 +904,11 @@ def upload_rentroll(scenario_id):
     if not upload or not upload.filename:
         flash("No rent roll file selected.", "danger")
         return redirect(url_for("underwriting.detail", scenario_id=scenario_id))
+    try:
+        ul.check(request.content_length, ul.SPREADSHEET_BYTES, "rent roll")
+    except ul.UploadTooLarge as exc:
+        flash(str(exc), "danger")
+        return redirect(url_for("underwriting.detail", scenario_id=scenario_id))
 
     try:
         original, path = _save_upload(scenario_id, upload)
@@ -943,6 +949,11 @@ def upload_t12(scenario_id):
     upload = request.files.get("t12")
     if not upload or not upload.filename:
         flash("No T12 file selected.", "danger")
+        return redirect(url_for("underwriting.detail", scenario_id=scenario_id))
+    try:
+        ul.check(request.content_length, ul.SPREADSHEET_BYTES, "T12")
+    except ul.UploadTooLarge as exc:
+        flash(str(exc), "danger")
         return redirect(url_for("underwriting.detail", scenario_id=scenario_id))
 
     try:

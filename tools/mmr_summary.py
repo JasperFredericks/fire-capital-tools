@@ -50,6 +50,7 @@ from tools.mmr_report import (
 )
 
 import openpyxl  # already required by generate_summary
+from tools import upload_limits as ul
 
 # ── Core processing ────────────────────────────────────────────────────────
 
@@ -196,6 +197,11 @@ def upload():
     file = request.files["file"]
     if not file or not file.filename:
         return jsonify({"error": "No file selected."}), 400
+
+    try:
+        ul.check(request.content_length, ul.SPREADSHEET_BYTES, "file")
+    except ul.UploadTooLarge as exc:
+        return jsonify({"error": str(exc)}), 413
 
     original_name = secure_filename(file.filename)
     if Path(original_name).suffix.lower() not in ALLOWED_EXT:

@@ -54,6 +54,7 @@ from werkzeug.utils import secure_filename
 from tools import deal_dive_db
 from tools import quick_analyzer_math as calc
 from tools import quick_analyzer_t12 as t12
+from tools import upload_limits as ul
 from tools.form_utils import to_float, to_int
 
 deal_analyzer_bp = Blueprint("deal_analyzer", __name__)
@@ -173,6 +174,13 @@ def _parse_uploaded_t12(file_storage):
     is removed in a finally block so a parse failure cannot leave the
     upload behind either.
     """
+    # Raised as T12Unreadable rather than UploadTooLarge so it travels the
+    # tool's existing degrade-to-manual-entry path: an oversized file is
+    # still "we could not read that", and the form stays usable.
+    try:
+        ul.check(request.content_length, ul.SPREADSHEET_BYTES, "T12")
+    except ul.UploadTooLarge as exc:
+        raise t12.T12Unreadable(f"{exc} Enter the figures below by hand instead.") from exc
     name = secure_filename(file_storage.filename or "")
     ext = Path(name).suffix.lower()
     if ext not in ALLOWED_UPLOAD_EXT:
