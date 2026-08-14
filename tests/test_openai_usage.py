@@ -20,6 +20,32 @@ import tempfile
 import unittest
 from pathlib import Path
 
+# ── Suite-wide guard, deliberately at module scope ───────────────────────
+#
+# tools/openai_usage.record() is called from inside openai_cre_research(),
+# which is the placement that guarantees a cache hit cannot inflate the
+# count. The side effect is that any test exercising that function with a
+# mocked client writes a real row, and
+# tests/test_fire_metrics_improvements.py does it eighteen times.
+#
+# That reached production: running the suite there took the live counter
+# from 1 call to 37, thirty-six phantom calls at one token each, because
+# int(MagicMock()) is 1.
+#
+# This runs at IMPORT time. `unittest discover` imports every test module
+# before running any test, so pointing the path at a temp file here
+# protects the whole suite regardless of which module the offending call
+# lives in -- including modules not yet written. tests/__init__.py carries
+# the same guard for package-style runs (`python -m unittest tests.x`),
+# where discovery does not import this module top-level.
+import os as _os
+import tempfile as _tempfile
+
+_configured = _os.environ.get("OPENAI_USAGE_DB_PATH", "")
+if not _configured or _configured.startswith("/data/"):
+    _os.environ["OPENAI_USAGE_DB_PATH"] = _os.path.join(
+        _tempfile.mkdtemp(prefix="fct-test-openai-usage-"), "openai_usage.db")
+
 from tools import openai_usage as ou
 
 
@@ -55,6 +81,9 @@ class SchemaTests(unittest.TestCase):
             self.assertEqual(ou.get_db_path(), self.path)
             os.environ["OPENAI_USAGE_DB_PATH"] = ""
             self.assertEqual(ou.get_db_path().name, "openai_usage.db")
+            # Restored by the finally below. Left empty it would point the
+            # rest of the suite at the repo-root fallback, which is a real
+            # file on a developer's machine.
         finally:
             if old is None:
                 os.environ.pop("OPENAI_USAGE_DB_PATH", None)
@@ -308,3 +337,74 @@ class StorageStatusTests(unittest.TestCase):
         # Compared as a Path: str() uses the host separator, and this test
         # runs on Windows as well as in the Linux container.
         self.assertEqual(Path(st["path"]), Path("/data/openai_usage.db"))
+
+
+class TestIsolationTests(unittest.TestCase):
+    """The suite must not write to a real usage database.
+
+    This is a regression test for a defect that reached production: the
+    counter is recorded inside openai_cre_research(), and
+    test_fire_metrics_improvements.py calls that function eighteen times
+    with a mocked OpenAI client. Running the suite on production took the
+    live counter from 1 call to 37 -- thirty-six phantom calls at one
+    token each, because int(MagicMock()) is 1.
+
+    A spend counter inflated by CI is worse than no counter: it is the
+    number someone would use to decide what is eating the budget.
+    """
+
+    def test_the_bootstrap_points_the_counter_somewhere_disposable(self):
+        import os
+        path = os.environ.get("OPENAI_USAGE_DB_PATH", "")
+        self.assertTrue(path, "tests/__init__.py should have set this")
+        self.assertFalse(
+            path.startswith("/data/"),
+            f"the suite is pointed at a deployment path: {path}")
+
+    def test_a_mocked_client_cannot_reach_a_real_database(self):
+        """The exact shape that caused it: the real function, a mock
+        client, and no db_path anywhere in sight.
+
+        Skipped where the openai package is not installed -- which is the
+        same reason the offending test file could not run locally, and
+        the reason this defect reached production unseen. It runs in the
+        container, which is where it matters.
+        """
+        try:
+            import openai  # noqa: F401
+        except Exception:
+            self.skipTest("openai package not installed in this environment")
+        from unittest.mock import MagicMock, patch
+        from tools import fire_metrics_ai_summary as ai
+
+        before = self._live_rows()
+        with patch("openai.OpenAI") as MockOpenAI:
+            MockOpenAI.return_value.responses.create.return_value = MagicMock()
+            ai.openai_cre_research(api_key="sk-test", model_name="gpt-4.1-mini",
+                                   city="Nowhere", state="ZZ",
+                                   display_name="Nowhere, ZZ")
+        self.assertEqual(before, self._live_rows(),
+                         "a test just wrote to the configured usage database")
+
+    def _live_rows(self):
+        """Whatever the CONFIGURED path holds -- which the bootstrap has
+        pointed at a temp dir, so this should be inert."""
+        import os
+        path = Path(os.environ["OPENAI_USAGE_DB_PATH"])
+        if not path.exists():
+            return []
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            return sorted(tuple(r) for r in conn.execute(
+                "SELECT year_month, feature, calls FROM openai_usage"))
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            conn.close()
+
+    def test_int_of_a_magicmock_is_one_which_is_why_it_looked_plausible(self):
+        """Documenting the tell. Thirty-six calls that each added exactly
+        one token is not a usage pattern any real model produces, and
+        that is what identified the cause."""
+        from unittest.mock import MagicMock
+        self.assertEqual(int(MagicMock()), 1)
