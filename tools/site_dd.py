@@ -53,7 +53,9 @@ from tools import branding
 from tools import deal_dive_db
 from tools import site_dd_checklist as cl
 from tools import site_dd_conditions as cond
+from tools import site_dd_capture as cap
 from tools import site_dd_unit_checklist as uc
+from tools import upload_limits as ul
 from tools import site_dd_db as db
 from tools import site_dd_report as report
 from tools.form_utils import to_float, to_int
@@ -270,29 +272,123 @@ def upload_photo(assessment_id):
     if not _load(assessment_id):
         return _not_found()
 
-    upload = request.files.get("photo")
-    if not upload or not upload.filename:
+    back = _capture_redirect(assessment_id)
+
+    # One capture form serves every item on the page, so several empty
+    # "photo" parts arrive alongside the one the inspector actually filled.
+    # getlist and take the first with a filename; .get() would return the
+    # first EMPTY part and report "no file selected" every time.
+    upload = next((f for f in request.files.getlist("photo") if f and f.filename), None)
+    if upload is None:
         flash("No file selected.", "danger")
-        return redirect(url_for("site_dd.detail", assessment_id=assessment_id))
+        return redirect(back)
 
-    original_name = secure_filename(upload.filename)
-    ext = Path(original_name).suffix.lower()
-    if ext not in ALLOWED_PHOTO_EXT:
-        flash(f"Unsupported file type: {ext or 'unknown'}.", "danger")
-        return redirect(url_for("site_dd.detail", assessment_id=assessment_id))
+    try:
+        ul.check(request.content_length, ul.VIDEO_BYTES, "file")
+    except ul.UploadTooLarge as exc:
+        flash(str(exc), "danger")
+        return redirect(back)
 
-    item_key = (request.form.get("item_key") or "").strip() or None
-    if item_key and item_key not in cl.ITEM_LABELS:
+    item_key = _arg("item_key")
+    if item_key and item_key not in cl.ITEM_LABELS and not uc.is_known_item(item_key):
         item_key = None
+    area_id = to_int(request.args.get("area_id") or request.form.get("area_id"))
+    room_id = to_int(request.args.get("room_id") or request.form.get("room_id"))
+    finding_id = to_int(request.args.get("finding_id") or request.form.get("finding_id"))
 
-    stored_name = f"{secrets.token_urlsafe(8)}_{original_name}"
-    upload.save(str(_upload_dir(assessment_id) / stored_name))
+    # Saved before it can be identified: the content has to be on disk to
+    # be read, and the extension the client supplied is not trusted for
+    # anything. A rejected file is removed in the same request.
+    original_name = secure_filename(upload.filename) or "capture"
+    tmp_name = f"{secrets.token_urlsafe(8)}_{original_name}"
+    tmp_path = _upload_dir(assessment_id) / tmp_name
+    upload.save(str(tmp_path))
+    size_bytes = tmp_path.stat().st_size
+
+    try:
+        info = cap.sniff(tmp_path)
+    except cap.UnsupportedMedia as exc:
+        tmp_path.unlink(missing_ok=True)
+        flash(str(exc), "danger")
+        return redirect(back)
+
+    kind = info["kind"]
+    duration_s = None
+    try:
+        if kind == cap.KIND_VIDEO:
+            # One video per finding, enforced before the limits so the
+            # message is about the rule the user actually hit.
+            if _video_count(assessment_id, finding_id, item_key, area_id, room_id):
+                raise cap.MediaTooLarge(
+                    "There is already a video on this item. Photos are the "
+                    "default; video is for the one thing a still cannot show.")
+            probe = cap.check_video(tmp_path, size_bytes)
+            duration_s = probe.get("duration_s")
+        else:
+            cap.check_size(kind, size_bytes)
+    except cap.MediaTooLarge as exc:
+        tmp_path.unlink(missing_ok=True)
+        flash(str(exc), "danger")
+        return redirect(back)
+
+    # Renamed to the extension the CONTENT says it is, so a .jpg that is
+    # really a MOV is stored and served as a MOV.
+    stem = Path(original_name).stem or "capture"
+    stored_name = f"{secrets.token_urlsafe(8)}_{stem}{info['ext']}"
+    final_path = _upload_dir(assessment_id) / stored_name
+    tmp_path.rename(final_path)
+
     with db.get_connection() as conn:
         db.add_media(conn, assessment_id, item_key, original_name, stored_name,
-                     (request.form.get("caption") or "").strip() or None)
+                     (request.form.get("caption") or "").strip() or None,
+                     kind=kind, finding_id=finding_id,
+                     size_bytes=size_bytes, duration_s=duration_s,
+                     area_id=area_id, room_id=room_id)
 
-    flash("Photo uploaded.", "success")
-    return redirect(url_for("site_dd.detail", assessment_id=assessment_id))
+    flash(f"{kind.title()} uploaded ({cap.human_bytes(size_bytes)})."
+          + (f" {duration_s:.0f}s." if duration_s else ""), "success")
+    return redirect(back)
+
+
+def _arg(name):
+    """A field that may arrive in the query string or the body. The no-JS
+    capture buttons put the scope in formaction, so both are read."""
+    return ((request.args.get(name) or request.form.get(name) or "").strip() or None)
+
+
+def _capture_redirect(assessment_id):
+    """Back to wherever the capture was taken from -- a room, a unit, or
+    the property checklist -- so an upload never bounces the inspector out
+    of the walkthrough."""
+    area_id = to_int(request.args.get("area_id") or request.form.get("area_id"))
+    room_id = to_int(request.args.get("room_id") or request.form.get("room_id"))
+    if area_id and room_id:
+        return url_for("site_dd.room_detail", assessment_id=assessment_id,
+                       area_id=area_id, room_id=room_id)
+    if area_id:
+        return url_for("site_dd.area_detail", assessment_id=assessment_id,
+                       area_id=area_id)
+    return url_for("site_dd.detail", assessment_id=assessment_id)
+
+
+def _video_count(assessment_id, finding_id, item_key, area_id, room_id) -> int:
+    """Videos already attached to the same item, in the same scope.
+
+    Scoped by area and room as well as item_key, because `flooring` means
+    a different thing in the kitchen and in bedroom 2 -- counting by item
+    alone would let one kitchen video block every other room's.
+    """
+    with db.get_connection() as conn:
+        rows = db.list_media(conn, assessment_id, kind=db.MEDIA_VIDEO)
+    n = 0
+    for r in rows:
+        if finding_id and r.get("finding_id") == finding_id:
+            n += 1
+            continue
+        if not finding_id and r.get("item_key") == item_key \
+                and r.get("area_id") == area_id and r.get("room_id") == room_id:
+            n += 1
+    return n
 
 
 @site_dd_bp.route("/assessment/<int:assessment_id>/photo/<int:photo_id>")
@@ -305,7 +401,11 @@ def download_photo(assessment_id, photo_id):
     path = _upload_dir(assessment_id) / record["stored_name"]
     if not path.exists():
         abort(404)
-    return send_file(str(path), download_name=record["original_name"])
+    # Typed from the STORED name, which sniff() set from the content --
+    # not from original_name, which is whatever the client called it.
+    # Served inline rather than as an attachment so video plays in place.
+    return send_file(str(path), download_name=record["original_name"],
+                     mimetype=cap.mime_for_stored_name(record["stored_name"]))
 
 
 @site_dd_bp.route("/assessment/<int:assessment_id>/photo/<int:photo_id>/delete", methods=["POST"])
@@ -516,6 +616,11 @@ def room_detail(assessment_id, area_id, room_id):
             return _not_found()
         rooms = db.list_rooms(conn, area_id)
         rows = db.get_findings(conn, assessment_id, area_id, room_id)
+        shots = db.list_media_for_scope(conn, assessment_id, area_id, room_id)
+
+    media_by_item = {}
+    for m in shots:
+        media_by_item.setdefault(m.get("item_key") or "", []).append(m)
 
     order = [r["id"] for r in rooms]
     idx = order.index(room_id) if room_id in order else 0
@@ -526,6 +631,11 @@ def room_detail(assessment_id, area_id, room_id):
         room_type_labels=uc.ROOM_TYPE_LABELS,
         conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
         condition_colours=cond.CONDITION_COLOURS,
+        media_by_item=media_by_item,
+        max_photo_mb=cap.MAX_PHOTO_BYTES // 1024 // 1024,
+        max_video_mb=cap.MAX_VIDEO_BYTES // 1024 // 1024,
+        max_video_seconds=int(cap.MAX_VIDEO_SECONDS),
+        human_bytes=cap.human_bytes,
         position=idx + 1, room_count=len(rooms),
         prev_room=rooms[idx - 1] if idx > 0 else None,
         next_room=rooms[idx + 1] if idx + 1 < len(rooms) else None,

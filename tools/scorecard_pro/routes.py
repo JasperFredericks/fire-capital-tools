@@ -20,6 +20,7 @@ from matplotlib.patches import Polygon  # noqa: F401 (preserved from original mo
 from werkzeug.utils import secure_filename
 
 from tools.scorecard_pro.charts import LARGE_CHART_SCALE, _LARGE_CHART_BUILDERS
+from tools import upload_limits as ul
 from tools.scorecard_pro.constants import (
     ALLOWED_PNL_EXT,
     ALLOWED_SCORECARD_EXT,
@@ -60,6 +61,13 @@ def upload():
     pnl_file = request.files["pnl_file"]
     if not pnl_file or not pnl_file.filename:
         return jsonify({"error": "No P&L file selected."}), 400
+
+    # One check covers both files: content_length is the whole multipart
+    # body, which is what the endpoint actually receives.
+    try:
+        ul.check(request.content_length, ul.SPREADSHEET_BYTES, "upload")
+    except ul.UploadTooLarge as exc:
+        return jsonify({"error": str(exc)}), 413
 
     pnl_name = secure_filename(pnl_file.filename)
     pnl_ext = Path(pnl_name).suffix.lower()

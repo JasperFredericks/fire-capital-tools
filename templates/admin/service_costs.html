@@ -211,5 +211,63 @@
   </p>
 </div>
 
+{#
+  Storage, on a page otherwise made of API bills. Site DD video is the
+  first feature here with a fast-growing disk footprint, and the number
+  that matters is not "how much have we used" but "how many more clips
+  fit before this becomes a problem".
+#}
+<div class="card" id="storage">
+  <div class="scorecard-section-title">Site DD Media Storage</div>
+  {% if not storage.available %}
+    <p class="page-subtitle" style="margin:10px 0 0;">{{ storage.reason }}</p>
+  {% else %}
+    <div class="stats-grid" style="margin:14px 0 8px;">
+      <div class="stat-box">
+        <div class="stat-box-label">Media stored</div>
+        <div class="stat-box-value">{{ storage.human }}</div>
+        <div class="stat-box-sub">{{ storage.count }} file{{ '' if storage.count == 1 else 's' }}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Photos</div>
+        <div class="stat-box-value">{{ storage.photo_human }}</div>
+        <div class="stat-box-sub">{{ storage.photo_count }}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-box-label">Video</div>
+        <div class="stat-box-value">{{ storage.video_human }}</div>
+        <div class="stat-box-sub">{{ storage.video_count }} &middot; {{ storage.max_video_mb }} MB cap each</div>
+      </div>
+      {% if storage.volume_total %}
+        <div class="stat-box"{% if storage.level != 'ok' %} style="border-left:3px solid {{ '#b91c1c' if storage.level == 'critical' else '#ea580c' }};"{% endif %}>
+          <div class="stat-box-label">Volume used</div>
+          <div class="stat-box-value"
+               style="color:{{ '#b91c1c' if storage.level == 'critical' else '#ea580c' if storage.level == 'warn' else 'inherit' }};">
+            {{ '%.1f%%'|format(storage.volume_used_pct) }}
+          </div>
+          <div class="stat-box-sub">{{ storage.volume_free_human }} free of {{ storage.volume_total_human }}</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-label">Videos remaining</div>
+          <div class="stat-box-value">{{ '{:,}'.format(storage.videos_remaining) }}</div>
+          <div class="stat-box-sub">at the {{ storage.max_video_mb }} MB cap</div>
+        </div>
+      {% endif %}
+    </div>
+    <p class="page-subtitle" style="margin:0;">
+      {% if storage.level == 'critical' %}
+        <strong style="color:#b91c1c;">The volume is nearly full.</strong>
+        Delete media from closed assessments, or move storage off the volume, before the next inspection.
+      {% elif storage.level == 'warn' %}
+        <strong style="color:#ea580c;">Worth watching.</strong>
+        Video is capped at {{ storage.max_video_mb }} MB and one per item, but a large property still adds up quickly.
+      {% else %}
+        Video is capped at {{ storage.max_video_mb }} MB and one per item, and photos are the default.
+        This is the only feature in the app whose storage grows with use, so it is reported here rather than discovered later.
+      {% endif %}
+    </p>
+  {% endif %}
+</div>
+
 {% include "_feedback.html" %}
 {% endblock %}
