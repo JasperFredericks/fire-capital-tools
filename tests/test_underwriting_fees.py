@@ -27,6 +27,8 @@ getcontext().prec = 40
 FIXTURE = Path(__file__).parent / "fixtures" / "eagle_rock_scenario4.json"
 
 EAGLE_ROCK = {
+    "gpr_year1": 1343580.00,
+    "nri_year1": 1150551.30,
     "noi_year1": 384455.38,
     "opex_year1": 839216.14,
     "egi_year1": 1223671.52,
@@ -103,21 +105,71 @@ class TestZeroFeesChangeNothing(unittest.TestCase):
 
 
 class TestManagementFee(unittest.TestCase):
-    """3% of EGI, charged annually."""
+    """3% of NET RENTAL INCOME, charged annually.
+
+    The base is the rent the units actually bring in: gross potential rent
+    less loss to lease, vacancy, concessions and bad debt. Other income --
+    parking, laundry, pet fees -- is excluded entirely.
+
+    Three figures are easy to confuse, so on this fixture, in dollars:
+
+        gross potential rent                1,343,580.00
+        net rental income (the base)        1,150,551.30
+        effective gross income              1,223,671.52
+
+    The constants below are hard-coded deliberately. This field has been
+    specified more than once, and a future edit that quietly moves the
+    base to either of the other two figures has to change these numbers to
+    do it.
+    """
 
     def setUp(self):
         self.scenario, self.units, self.expenses = load_fixture()
         self.scenario = dict(self.scenario, management_fee_pct=3.0)
         self.result = um.analyze_scenario(self.scenario, self.units, self.expenses)
 
-    def test_year1_fee_is_three_percent_of_egi(self):
-        expected = float(Decimal(str(EAGLE_ROCK["egi_year1"])) * Decimal("0.03"))
+    def test_year1_fee_is_three_percent_of_net_rental_income(self):
+        expected = float(Decimal(str(EAGLE_ROCK["nri_year1"])) * Decimal("0.03"))
         self.assertAlmostEqual(self.result["management_fee_year1"], expected, places=6)
-        self.assertAlmostEqual(self.result["management_fee_year1"], 36710.1456, places=4)
+        self.assertAlmostEqual(self.result["management_fee_year1"], 34516.5390, places=4)
+
+    def test_the_fee_is_charged_on_none_of_the_other_two_bases(self):
+        """The specific regression. 36710.1456 is 3% of EGI and 40307.40 is
+        3% of gross potential rent; both were the answer at some point."""
+        fee = self.result["management_fee_year1"]
+        self.assertNotAlmostEqual(fee, EAGLE_ROCK["egi_year1"] * 0.03, places=2)
+        self.assertNotAlmostEqual(fee, EAGLE_ROCK["gpr_year1"] * 0.03, places=2)
+        self.assertAlmostEqual(fee, 34516.5390, places=4)
+
+    def test_other_income_is_excluded_from_the_base(self):
+        """The whole distinction: parking, laundry and pet fees are not
+        rent, and the manager is not paid on them."""
+        egi = um.build_egi(self.units, self.scenario)
+        self.assertAlmostEqual(
+            egi["effective_gross_income"] - egi["net_rental_income"],
+            egi["other_income"], places=9)
+        self.assertAlmostEqual(
+            self.result["management_fee_year1"],
+            (egi["effective_gross_income"] - egi["other_income"]) * 0.03,
+            places=6)
+
+    def test_the_base_is_reported_alongside_the_fee(self):
+        """A reader should not have to divide to find out which of the
+        three income figures the fee was charged on."""
+        y1 = self.result["projection"]["years"][0]
+        self.assertAlmostEqual(y1["management_fee_basis"],
+                               EAGLE_ROCK["nri_year1"], places=4)
+
+    def test_net_rental_income_is_the_subtraction_it_claims_to_be(self):
+        egi = um.build_egi(self.units, self.scenario)
+        self.assertAlmostEqual(
+            egi["net_rental_income"],
+            egi["gross_potential_rent"] - egi["loss_to_lease"] - egi["vacancy"]
+            - egi["concessions"] - egi["bad_debt"], places=9)
 
     def test_year1_noi_drops_by_exactly_the_fee(self):
         self.assertAlmostEqual(self.result["projection"]["years"][0]["noi"],
-                               347745.2344, places=4)
+                               349938.8410, places=4)
         base = um.analyze_scenario(
             dict(self.scenario, management_fee_pct=0.0), self.units, self.expenses)
         self.assertAlmostEqual(

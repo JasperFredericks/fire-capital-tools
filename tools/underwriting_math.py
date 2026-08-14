@@ -99,8 +99,21 @@ def build_egi(unit_lines: list[dict[str, Any]], assumptions: dict[str, Any]) -> 
       - Vacancy                   vacancy_pct of GPR
       - Concessions               concessions_pct of GPR
       - Bad debt                  bad_debt_pct of GPR
+      = Net Rental Income         what the units themselves bring in
       + Other income              annual, typically from the T12
       = Effective Gross Income
+
+    NET RENTAL INCOME IS A NAMED LINE, NOT AN INTERMEDIATE
+
+    It is the rental income the units produce after the normal deductions,
+    with nothing added back for parking, laundry, pet fees or any other
+    non-rent revenue. The management fee is charged on it, so it has to be
+    a figure someone can point at and check rather than something a reader
+    has to reconstruct by subtracting.
+
+    Same line, same meaning, as net_rental_income in
+    quick_analyzer_math.build_noi -- that build-up already draws this
+    distinction and this is the richer model's version of it.
 
     Loss to lease is occupied-only on purpose: a vacant unit's shortfall is
     vacancy, and charging it as loss-to-lease as well would deduct the same
@@ -135,7 +148,8 @@ def build_egi(unit_lines: list[dict[str, Any]], assumptions: dict[str, Any]) -> 
     concessions = gpr * concessions_pct
     bad_debt = gpr * bad_debt_pct
 
-    egi = gpr - ltl - vacancy - concessions - bad_debt + other_income
+    net_rental_income = gpr - ltl - vacancy - concessions - bad_debt
+    egi = net_rental_income + other_income
 
     return {
         "unit_count": total_units,
@@ -145,6 +159,7 @@ def build_egi(unit_lines: list[dict[str, Any]], assumptions: dict[str, Any]) -> 
         "vacancy": vacancy,
         "concessions": concessions,
         "bad_debt": bad_debt,
+        "net_rental_income": net_rental_income,
         "other_income": other_income,
         "effective_gross_income": egi,
     }
@@ -212,6 +227,14 @@ def build_egi_for_year(base_egi: dict[str, Any], scenario: dict[str, Any],
     else:
         egi_value = gpr - ltl - vacancy - concessions - bad_debt + other_income
 
+    # Derived from EGI rather than re-summed from the components above, so
+    # that net rental income + other income == EGI holds EXACTLY in both
+    # branches. In the uniform branch EGI is year 1 scaled (see the note
+    # above about preserving already-quoted numbers); re-summing here would
+    # disagree with it in the last bit, and the management fee is charged
+    # on this figure, so the two must not drift.
+    nri_value = egi_value - other_income
+
     return {
         "year": year,
         "unit_count": base_egi["unit_count"],
@@ -221,6 +244,7 @@ def build_egi_for_year(base_egi: dict[str, Any], scenario: dict[str, Any],
         "vacancy": vacancy,
         "concessions": concessions,
         "bad_debt": bad_debt,
+        "net_rental_income": nri_value,
         "other_income": other_income,
         "rent_growth_factor": factor,
         "rates": rates,
@@ -357,6 +381,7 @@ def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
                        hold_years: int, rent_growth_pct: float,
                        default_expense_growth_pct: float, *,
                        management_fee_pct: float | None = None,
+                       net_rental_income_year1: float | None = None,
                        scenario: dict[str, Any] | None = None,
                        schedule: dict[int, dict[str, float]] | None = None,
                        base_egi: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -377,15 +402,36 @@ def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
     two agree to the last bit.
 
     `management_fee_pct` is charged annually as a percentage of that
-    year's effective gross income, and is deducted with the other
-    operating expenses -- so it reduces NOI, and therefore also the exit
-    value, since the exit capitalizes NOI. It needs no growth rate of its
-    own: being a percentage of income it already grows with income, and
-    because it is charged on whatever income that year actually produced
-    it follows the per-year rebuild without knowing the rebuild exists.
+    year's NET RENTAL INCOME, and is deducted with the other operating
+    expenses -- so it reduces NOI, and therefore also the exit value,
+    since the exit capitalizes NOI.
+
+    ── What the fee is charged on ───────────────────────────────────────
+
+    Net rental income is what the units bring in after loss to lease,
+    vacancy, concessions and bad debt -- and BEFORE other income is added
+    back. Parking, laundry, pet fees and any other non-rent revenue are
+    excluded from the base entirely.
+
+    Three figures are easy to confuse here, so on Eagle Rock's real rent
+    roll, in dollars:
+
+        gross potential rent                    1,343,580.00
+        net rental income (the fee basis)       1,150,551.30
+        effective gross income                  1,223,671.52
+
+    The fee is charged on the middle one. It is lower than EGI by exactly
+    the other income (73,120.22) and lower than gross potential rent by
+    the deductions.
+
+    It needs no growth rate of its own: being a percentage of income it
+    already grows with income, and because it is charged on whatever
+    rental income that year actually produced it follows the per-year
+    rebuild without knowing the rebuild exists.
 
     None or 0 adds nothing at all, not a zero-valued term, so a scenario
-    without a fee is arithmetically untouched.
+    without a fee is arithmetically untouched -- which is every scenario
+    on production today, both of which leave management_fee_pct unset.
     """
     if hold_years < 1:
         raise ValidationError("Hold period must be at least 1 year.")
@@ -401,9 +447,17 @@ def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
         if per_year:
             egi_t = build_egi_for_year(base_egi, scenario, schedule, t)
             income = egi_t["effective_gross_income"]
+            fee_basis = egi_t["net_rental_income"]
         else:
             egi_t = None
             income = egi_year1 * (1 + rg) ** (t - 1)
+            # The flat path has no rent roll to read rental income from,
+            # only the finished EGI scalar it has always taken. A caller
+            # charging a fee must supply the basis rather than have EGI
+            # quietly stand in for it -- that substitution is the thing
+            # being corrected, and allowing it as a fallback would hide it.
+            fee_basis = (None if net_rental_income_year1 is None
+                         else net_rental_income_year1 * (1 + rg) ** (t - 1))
 
         expenses = 0.0
         for l in included:
@@ -415,15 +469,24 @@ def project_noi_series(egi_year1: float, expense_lines: list[dict[str, Any]],
                 g = default_eg if g is None else (float(g) / 100.0)
                 expenses += amt * (1 + g) ** (t - 1)
 
-        # Charged on THIS year's income, so it follows the per-year
+        # Charged on THIS year's rental income, so it follows the per-year
         # rebuild automatically: a year whose vacancy assumption changed
-        # pays its fee on the income that assumption actually produced.
-        management_fee = income * mgmt
+        # pays its fee on the rental income that assumption actually
+        # produced.
+        if mgmt and fee_basis is None:
+            raise ValidationError(
+                "A management fee is charged on rental income, which this "
+                "call did not supply. Pass base_egi (the normal path) or "
+                "net_rental_income_year1.")
+        management_fee = (fee_basis or 0.0) * mgmt
         if mgmt:
             expenses += management_fee
 
         row = {"year": t, "income": income, "expenses": expenses,
                "management_fee": management_fee,
+               # What the fee was charged on, so a reader never has to
+               # divide to find out which of the three income figures it is.
+               "management_fee_basis": fee_basis,
                "noi": income - expenses}
         if egi_t is not None:
             row["egi_detail"] = egi_t
