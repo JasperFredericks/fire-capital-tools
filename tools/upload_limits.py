@@ -48,6 +48,12 @@ VIDEO_BYTES = 40 * MB
 # FIRE Metrics' crime workbook already had its own limit; kept as it was.
 CRIME_WORKBOOK_BYTES = 10 * MB
 
+# A meeting transcript is plain text. An hour of conversation is around
+# 50 KB, so 5 MB is generous by two orders of magnitude while still being
+# small enough that a spreadsheet or a video uploaded here by mistake is
+# refused at the edge rather than read and found to be gibberish.
+TRANSCRIPT_BYTES = 5 * MB
+
 # Every upload endpoint in the app and the limit that applies to it.
 # Exhaustive on purpose: a test walks the routes and fails if an endpoint
 # accepting a file is missing from this table, so a new upload cannot
@@ -62,6 +68,7 @@ ENDPOINT_LIMITS = {
     "deal_dive.upload_document": DOCUMENT_BYTES,
     "site_dd.upload_photo": VIDEO_BYTES,      # the route accepts both kinds
     "fire_metrics.upload_crime_workbook": CRIME_WORKBOOK_BYTES,
+    "investor_notes.upload": TRANSCRIPT_BYTES,
 }
 
 
