@@ -60,15 +60,22 @@ class TestInvariantsRandomized(unittest.TestCase):
     def test_invariants_hold_across_randomized_waterfalls(self):
         rng = random.Random(20260810)
         checked = 0
-        shapes = {"no_cash": 0, "capital_unreturned": 0, "promote_reached": 0}
+        shapes = {"no_cash": 0, "capital_unreturned": 0, "promote_reached": 0,
+                  "negative_year": 0}
 
         for _ in range(self.CASES):
             n_lp = rng.randint(1, 5)
             amounts = [round(rng.uniform(10_000, 3_000_000), 2) for _ in range(n_lp)]
             n_years = rng.randint(1, 10)
-            # deliberately include zero and very large years so the cascade
-            # is exercised at both ends, not just in the comfortable middle
-            cash = [round(rng.choice([0.0, rng.uniform(0, 400_000)]), 2) for _ in range(n_years)]
+            # deliberately include zero, NEGATIVE and very large years so
+            # the cascade is exercised at both ends, not just in the
+            # comfortable middle. A negative year is the ordinary shape of
+            # a value-add deal that does not cover debt service at first,
+            # and it used to crash the cascade outright.
+            cash = [round(rng.choice([0.0,
+                                      -rng.uniform(0, 120_000),
+                                      rng.uniform(0, 400_000)]), 2)
+                    for _ in range(n_years)]
             sale = round(rng.choice([0.0, rng.uniform(0, 12_000_000)]), 2)
             pref = rng.choice([0.0, 6.0, 8.0, 10.0, 12.5])
             gp = rng.choice([0.0, 10.0, 20.0, 30.0, 50.0])
@@ -82,10 +89,23 @@ class TestInvariantsRandomized(unittest.TestCase):
             # 1 + 2, restated independently of the module's own checks
             self.assertEqual(sum(c["lp_received"]) + c["gp_received"],
                              c["total_distributed"], "money created or destroyed")
-            # every cent of available cash is either distributed or explicitly not
+            # every cent of available cash is either distributed, explicitly
+            # left over, or was never there (a shortfall the property did
+            # not cover). The shortfall term is zero on every deal that
+            # never goes negative, so this is the identity it always was.
             self.assertEqual(
-                c["total_distributed"] + sum(r["undistributed"] for r in c["period_rows"]),
+                c["total_distributed"]
+                + sum(r["undistributed"] for r in c["period_rows"])
+                - sum(r["shortfall"] for r in c["period_rows"]),
                 c["total_cash"])
+            # a period the property did not cover distributes nothing, and
+            # nobody is ever allocated a negative amount
+            for r in c["period_rows"]:
+                if r["cash_available"] < 0:
+                    self.assertEqual(sum(r["lp"]) + r["gp"], 0)
+                    self.assertEqual(r["shortfall"], -r["cash_available"])
+                else:
+                    self.assertEqual(r["shortfall"], 0)
             # 5 -- read exact cents; the dollar-rounded tier_totals is for
             # display only and round-tripping it re-rounds by a cent
             rt = c["tier_totals"][wm.TIER_RETURN_OF_CAPITAL]
@@ -104,6 +124,8 @@ class TestInvariantsRandomized(unittest.TestCase):
                 shapes["capital_unreturned"] += 1
             if res["tier_totals"][wm.TIER_PROMOTE]["total"] > 0:
                 shapes["promote_reached"] += 1
+            if any(r["cash_available"] < 0 for r in c["period_rows"]):
+                shapes["negative_year"] += 1
 
         self.assertEqual(checked, self.CASES)
         # the range actually exercised, not just the count
@@ -360,3 +382,154 @@ class TestValidation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestNegativeCashPeriods(unittest.TestCase):
+    """A period the property did not cover distributes nothing.
+
+    This replaces four tests that asserted the opposite -- that such a
+    period CRASHED with WaterfallInvariantError. It did, on every deal
+    shaped like an ordinary value-add: year 1 does not cover debt service,
+    and the Investor Report fell over instead of showing a year with no
+    distribution.
+
+    The cause was a sign error in invariant 4. The cascade itself was
+    already correct -- it pays nothing when cash is not positive -- but
+    the check read `paid > cash_available`, and zero is arithmetically
+    greater than a negative number, so it fired on exactly the cases it
+    should have passed.
+    """
+
+    def _run(self, *cash, sale=3_000_000.0, equity=2_586_300.0):
+        return wm.run_waterfall(contribs(equity), periods(*cash, sale_in_last=sale),
+                                terms(pref=8.0, gp=20.0))
+
+    # ── the four that used to assert a crash ─────────────────────────────
+
+    def test_a_small_negative_year_computes(self):
+        r = self._run(-468.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        self.assertEqual(r["periods"][0]["lp_total"], 0.0)
+        self.assertEqual(r["periods"][0]["gp"], 0.0)
+
+    def test_a_large_negative_year_computes(self):
+        r = self._run(-50_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        self.assertEqual(r["periods"][0]["lp_total"], 0.0)
+        self.assertEqual(r["periods"][0]["gp"], 0.0)
+
+    def test_a_positive_year_is_unaffected(self):
+        r = self._run(40_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        self.assertGreater(r["periods"][0]["lp_total"], 0.0)
+        self.assertEqual(r["periods"][0]["shortfall"], 0.0)
+
+    def test_a_zero_year_is_unaffected(self):
+        r = self._run(0.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        self.assertEqual(r["periods"][0]["lp_total"], 0.0)
+        self.assertEqual(r["periods"][0]["shortfall"], 0.0)
+
+    # ── the behaviour that replaces "it raises" ──────────────────────────
+
+    def test_every_tier_pays_zero_in_an_uncovered_period(self):
+        r = self._run(-50_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        for tier in r["periods"][0]["tiers"]:
+            self.assertEqual(tier["paid"], 0.0, tier["tier_type"])
+
+    def test_the_shortfall_is_recorded_not_allocated(self):
+        r = self._run(-50_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        self.assertEqual(r["periods"][0]["shortfall"], 50_000.0)
+        self.assertEqual(r["totals"]["shortfall"], 50_000.0)
+
+    def test_undistributed_never_goes_negative(self):
+        """It did: undistributed and shortfall were one signed number, so a
+        deal with an uncovered year reported negative cash left over, which
+        reads as money having gone missing."""
+        r = self._run(-50_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        self.assertEqual(r["periods"][0]["undistributed"], 0.0)
+        self.assertGreaterEqual(r["totals"]["undistributed"], 0.0)
+
+    def test_no_investor_is_allocated_a_negative_amount(self):
+        r = self._run(-250_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        for p in r["periods"]:
+            self.assertTrue(all(x >= 0 for x in p["lp"]))
+            self.assertGreaterEqual(p["gp"], 0.0)
+
+    def test_the_lp_still_gets_paid_in_the_years_that_do_cover(self):
+        r = self._run(-50_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        self.assertGreater(r["periods"][1]["lp_total"], 0.0)
+        self.assertGreater(r["investors"][0]["distributed"], 0.0)
+
+    def test_consecutive_uncovered_years(self):
+        r = self._run(-50_000.0, -30_000.0, -10_000.0, 40_000.0, 40_000.0)
+        self.assertEqual([p["shortfall"] for p in r["periods"][:3]],
+                         [50_000.0, 30_000.0, 10_000.0])
+        self.assertEqual(r["totals"]["shortfall"], 90_000.0)
+
+    def test_every_year_uncovered_and_no_sale(self):
+        r = self._run(-50_000.0, -30_000.0, sale=0.0)
+        self.assertEqual(r["totals"]["distributed"], 0.0)
+        self.assertEqual(r["totals"]["shortfall"], 80_000.0)
+        self.assertEqual(r["totals"]["undistributed"], 0.0)
+
+    # ── the invariants are honoured, not bypassed ────────────────────────
+
+    def test_all_invariants_still_run_and_pass(self):
+        r = self._run(-50_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        checks = wm.check_invariants(r)
+        self.assertTrue(checks)
+        self.assertFalse([c for c in checks if c["passed"] is False])
+        self.assertTrue([c for c in checks if c["n"] == 4 and c["passed"]])
+
+    def test_invariant_1_identity_holds_on_the_uncovered_period(self):
+        r = self._run(-50_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        row = r["_cents"]["period_rows"][0]
+        self.assertEqual(sum(row["lp"]) + row["gp"] + row["undistributed"]
+                         - row["shortfall"], row["cash_available"])
+
+    def test_invariant_4_still_catches_a_period_that_over_distributes(self):
+        """The fix must not have turned invariant 4 off."""
+        r = self._run(40_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        rows = [dict(x) for x in r["_cents"]["period_rows"]]
+        rows[0] = {**rows[0],
+                   "tiers": [{"tier_type": wm.TIER_PROMOTE, "lp": 10 ** 9,
+                              "gp": 0, "paid": 10 ** 9}]}
+        tampered = {**r, "_cents": {**r["_cents"], "period_rows": rows}}
+        with self.assertRaises(wm.WaterfallInvariantError):
+            wm.check_invariants(tampered)
+
+    def test_a_negative_period_that_paid_out_is_still_rejected(self):
+        """The new clause. max(available, 0) on its own would accept it."""
+        r = self._run(-50_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        rows = [dict(x) for x in r["_cents"]["period_rows"]]
+        rows[0] = {**rows[0], "lp": [100], "gp": 0,
+                   "tiers": [{"tier_type": wm.TIER_PROMOTE, "lp": 100,
+                              "gp": 0, "paid": 100}]}
+        tampered = {**r, "_cents": {**r["_cents"], "period_rows": rows}}
+        with self.assertRaises(wm.WaterfallInvariantError):
+            wm.check_invariants(tampered)
+
+    def test_invariant_9_pins_the_difference_to_the_shortfall(self):
+        """Not a widened tolerance: distributed - shortfall must equal the
+        source total to the same cent bound as before."""
+        r = self._run(-50_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        source_total = r["totals"]["distributed"] - r["totals"]["shortfall"]
+        checks = wm.verify_against_source(r, source_total)
+        self.assertTrue([c for c in checks if c["n"] == 9 and c["passed"]])
+        with self.assertRaises(wm.WaterfallInvariantError):
+            wm.verify_against_source(r, source_total + 100.0)
+
+    def test_invariant_10_is_not_applicable_rather_than_silently_skipped(self):
+        """An LP takes no negative distribution, so with a shortfall its
+        flows cannot match the property's. Reported as n/a with a reason,
+        the way invariant 8 already handles an unsettled pref."""
+        r = self._run(-50_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        source_total = r["totals"]["distributed"] - r["totals"]["shortfall"]
+        checks = wm.verify_against_source(r, source_total, source_levered_irr=0.09)
+        tenth = [c for c in checks if c["n"] == 10]
+        self.assertTrue(tenth)
+        self.assertIsNone(tenth[0]["passed"])
+        self.assertIn("not applicable", tenth[0]["detail"])
+
+    def test_invariant_10_still_enforced_when_there_is_no_shortfall(self):
+        r = self._run(40_000.0, 40_000.0, 40_000.0, 40_000.0, 40_000.0)
+        with self.assertRaises(wm.WaterfallInvariantError):
+            wm.verify_against_source(r, r["totals"]["distributed"],
+                                     source_levered_irr=0.99)
