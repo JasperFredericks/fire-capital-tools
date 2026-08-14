@@ -150,7 +150,8 @@
       <thead>
         <tr><th>Year</th><th>Cash Available</th><th>Pref Accrued</th>
           {% for i in result.investors %}<th>{{ i.name }}</th>{% endfor %}
-          <th>GP</th><th>Distributed</th><th>Undistributed</th></tr>
+          <th>GP</th><th>Distributed</th><th>Undistributed</th>
+          <th>Shortfall</th></tr>
       </thead>
       <tbody>
         {% for p in result.periods %}
@@ -162,11 +163,23 @@
             <td>{{ money(p.gp) }}</td>
             <td>{{ money(p.distributed) }}</td>
             <td{% if p.undistributed %} style="color:#b91c1c;"{% endif %}>{{ money(p.undistributed) }}</td>
+            {# A year the property did not cover. Shown as its own column
+               rather than a negative in Cash Available alone, so "$0 to
+               everyone" has a visible reason next to it. #}
+            <td{% if p.shortfall %} style="color:#b45309;"{% endif %}>{{ money(p.shortfall) }}</td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  {% if result.totals.shortfall %}
+    <p class="page-subtitle" style="margin-top:12px;">
+      <strong>{{ money(result.totals.shortfall) }}</strong> of operating shortfall:
+      in those years the property did not cover its debt service, so nothing was
+      distributed. A shortfall is funded from reserves or a capital call &mdash; it is
+      not a negative distribution, and no investor is charged for it here.
+    </p>
+  {% endif %}
   <p class="page-subtitle" style="margin-top:12px;">
     Preferred return accrues on unreturned capital <em>plus</em> unpaid pref, so the unpaid
     balance compounds &mdash; without that, settling the pref late would quietly cost the LP

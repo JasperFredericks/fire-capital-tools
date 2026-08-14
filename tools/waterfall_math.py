@@ -263,8 +263,19 @@ def run_waterfall(contributions: list[dict[str, Any]],
             tier_totals[ttype]["gp"] += gp_pay
             row["tiers"].append({"tier_type": ttype, "lp": sum(lp_pay), "gp": gp_pay, "paid": paid})
 
-        row["undistributed"] = cash
-        row["distributed"] = cash_in - cash
+        # A period can end with cash left over (undistributed) or with the
+        # property having failed to cover its debt service (a shortfall).
+        # They are opposite things and folding both into one signed number
+        # is what made "undistributed" go negative and invariant 1 read as
+        # if money had been conjured.
+        #
+        # An LP never receives a negative distribution: a year the property
+        # does not cover is funded from reserves or a capital call, not by
+        # taking money back. So the shortfall is recorded, not allocated.
+        row["shortfall"] = -cash if cash < 0 else 0
+        row["undistributed"] = cash if cash > 0 else 0
+        row["distributed"] = cash_in - cash if cash > 0 else (0 if cash_in <= 0
+                                                              else cash_in)
         period_rows.append(row)
         for i in range(n):
             lp_flows[i].append(row["lp"][i])
@@ -282,6 +293,7 @@ def _assemble(lps, contrib_cents, periods, period_rows, tier_totals, lp_received
               pref_rate, convention, tiers):
     total_cash = sum(r["cash_available"] for r in period_rows)
     total_distributed = sum(r["distributed"] for r in period_rows)
+    total_shortfall = sum(r["shortfall"] for r in period_rows)
 
     investors = []
     for i, c in enumerate(lps):
@@ -316,6 +328,10 @@ def _assemble(lps, contrib_cents, periods, period_rows, tier_totals, lp_received
             "accrued_pref": to_dollars(r["accrued_pref"]),
             "distributed": to_dollars(r["distributed"]),
             "undistributed": to_dollars(r["undistributed"]),
+            # What the property failed to cover this period. Reported so a
+            # reader sees WHY a year distributed nothing rather than being
+            # left to infer it from a zero.
+            "shortfall": to_dollars(r["shortfall"]),
             "lp": [to_dollars(x) for x in r["lp"]],
             "lp_total": to_dollars(sum(r["lp"])),
             "gp": to_dollars(r["gp"]),
@@ -336,7 +352,12 @@ def _assemble(lps, contrib_cents, periods, period_rows, tier_totals, lp_received
         "totals": {
             "cash_available": to_dollars(total_cash),
             "distributed": to_dollars(total_distributed),
-            "undistributed": to_dollars(total_cash - total_distributed),
+            # + shortfall, so this stays a genuine "left over" figure.
+            # Without it a deal with one uncovered year reports NEGATIVE
+            # undistributed cash, which reads as money having gone missing.
+            "undistributed": to_dollars(total_cash - total_distributed
+                                        + total_shortfall),
+            "shortfall": to_dollars(total_shortfall),
             "lp_distributed": to_dollars(sum(lp_received)),
             "gp_distributed": to_dollars(gp_received),
             "contributed": to_dollars(sum(contrib_cents)),
@@ -344,6 +365,7 @@ def _assemble(lps, contrib_cents, periods, period_rows, tier_totals, lp_received
         # cent-exact figures the invariant checks work on
         "_cents": {
             "total_cash": total_cash, "total_distributed": total_distributed,
+            "total_shortfall": total_shortfall,
             "lp_received": lp_received, "gp_received": gp_received,
             "contrib": contrib_cents,
             "period_rows": period_rows, "unreturned": unreturned,
@@ -377,10 +399,14 @@ def check_invariants(result: dict[str, Any]) -> list[dict[str, Any]]:
     # 1. every period, and cumulatively, to the cent
     for r in c["period_rows"]:
         allocated = sum(r["lp"]) + r["gp"]
-        if allocated + r["undistributed"] != r["cash_available"]:
+        # allocated + left over - shortfall == what came in. On a period
+        # with no shortfall this is the identity it always was; on a
+        # negative period it is 0 + 0 - shortfall == a negative inflow.
+        if allocated + r["undistributed"] - r["shortfall"] != r["cash_available"]:
             ok(1, "distributions equal cash available", False,
                f"year {r['year']}: allocated {allocated} + undistributed "
-               f"{r['undistributed']} != available {r['cash_available']}")
+               f"{r['undistributed']} - shortfall {r['shortfall']} "
+               f"!= available {r['cash_available']}")
     total_alloc = sum(c["lp_received"]) + c["gp_received"]
     ok(1, "distributions equal cash available", total_alloc == c["total_distributed"],
        f"allocated {total_alloc} != distributed {c['total_distributed']}")
@@ -398,10 +424,35 @@ def check_invariants(result: dict[str, Any]) -> list[dict[str, Any]]:
     ok(3, "tier outflows equal period cash in", True)
 
     # 4. no tier over-distributes (also enforced inline during the cascade)
+    #
+    # max(available, 0), not available. A period whose cash is NEGATIVE has
+    # nothing to distribute, and every tier correctly pays zero -- but zero
+    # is arithmetically "greater than" a negative number, so the bare
+    # comparison fired on exactly the deals it should have passed. A
+    # value-add year 1 that does not cover debt service is ordinary, and it
+    # crashed the Investor Report rather than showing a year with no
+    # distribution.
+    #
+    # The second clause is new and STRENGTHENS this invariant rather than
+    # excusing the case: a negative period must distribute exactly nothing.
+    # Without it, max() alone would also accept a negative period that
+    # somehow paid out.
     for r in c["period_rows"]:
-        if sum(t["paid"] for t in r["tiers"]) > r["cash_available"]:
-            ok(4, "no tier distributes more than remains", False, f"year {r['year']}")
+        paid = sum(t["paid"] for t in r["tiers"])
+        if paid > max(r["cash_available"], 0):
+            ok(4, "no tier distributes more than remains", False,
+               f"year {r['year']}: paid {paid} with {r['cash_available']} available")
+        if r["cash_available"] < 0 and paid != 0:
+            ok(4, "no tier distributes more than remains", False,
+               f"year {r['year']}: distributed {paid} in a period with negative cash")
     ok(4, "no tier distributes more than remains", True)
+
+    # 4b. the shortfall is exactly the negative cash, and nothing else.
+    for r in c["period_rows"]:
+        expected = -r["cash_available"] if r["cash_available"] < 0 else 0
+        if r["shortfall"] != expected:
+            ok(4, "no tier distributes more than remains", False,
+               f"year {r['year']}: shortfall {r['shortfall']} != {expected}")
 
     # 5. return of capital never exceeds contributions (exact cents)
     roc_t = c["tier_totals"].get(TIER_RETURN_OF_CAPITAL, {"lp": 0, "gp": 0})
@@ -454,10 +505,12 @@ def verify_against_source(result: dict[str, Any], source_total_distributions: fl
     """Invariants 9 and 10, which need the Underwriting scenario to compare
     against and so cannot live inside the cascade itself.
 
-    9  waterfall total == the source scenario's total distributions
+    9  waterfall total == the source scenario's total distributions,
+       plus any shortfall the property failed to cover (see below)
     10 with a 100% LP / 0% GP promote and a single LP funding all the
        equity, every dollar follows the property, so the LP's IRR must
-       equal the property's levered IRR exactly.
+       equal the property's levered IRR exactly. Not applicable when the
+       property has a shortfall -- see the note at the check itself.
 
     Invariant 9 carries a stated precision bound rather than an arbitrary
     tolerance. The source total is a sum of unrounded floats; the waterfall
@@ -476,7 +529,19 @@ def verify_against_source(result: dict[str, Any], source_total_distributions: fl
     n_periods = max(1, len(result.get("periods") or []))
     if tolerance_cents is None:
         tolerance_cents = n_periods
-    diff = abs(to_cents(result["totals"]["distributed"]) - to_cents(source_total_distributions))
+    # The source total sums the property's cash flows INCLUDING any year
+    # that went negative; the waterfall distributes zero in such a year and
+    # records the gap as a shortfall. So the conservation statement is
+    #
+    #     distributed == source total + shortfall
+    #
+    # which is the same identity as before whenever no year is negative,
+    # and is stricter than a widened tolerance would be -- it pins the
+    # difference to the shortfall exactly rather than allowing it to be
+    # anything small.
+    shortfall_cents = result.get("_cents", {}).get("total_shortfall", 0)
+    diff = abs(to_cents(result["totals"]["distributed"]) - shortfall_cents
+               - to_cents(source_total_distributions))
     passed = diff <= tolerance_cents
     checks.append({"n": 9, "name": "waterfall total matches source scenario",
                    "passed": passed,
@@ -485,10 +550,33 @@ def verify_against_source(result: dict[str, Any], source_total_distributions: fl
     if not passed:
         raise WaterfallInvariantError(
             f"Invariant 9 failed: waterfall distributed "
-            f"{result['totals']['distributed']} against source total "
+            f"{result['totals']['distributed']} (less a shortfall of "
+            f"{to_dollars(shortfall_cents)}) against source total "
             f"{source_total_distributions} ({diff} cents apart, bound {tolerance_cents})")
 
-    if source_levered_irr is not None:
+    # Invariant 10 asserts that a degenerate 100/0 cascade reproduces the
+    # property's own cash flows and IRR exactly. That claim is TRUE ONLY
+    # WHEN THE PROPERTY NEVER GOES NEGATIVE.
+    #
+    # An LP does not receive a negative distribution. If year 1 fails to
+    # cover debt service the property's flow is -13,178 and the LP's is 0
+    # -- the shortfall is funded by reserves or a capital call, which is a
+    # contribution, not a distribution. So the two vectors legitimately
+    # differ, and so do the IRRs.
+    #
+    # This is reported as NOT APPLICABLE with the reason stated, exactly as
+    # invariant 8 already does while capital is outstanding. It is not
+    # weakened and not skipped silently: on a deal with no shortfall it
+    # still runs, and still raises.
+    shortfall_cents = result.get("_cents", {}).get("total_shortfall", 0)
+    if source_levered_irr is not None and shortfall_cents:
+        checks.append({
+            "n": 10, "name": "degenerate 100/0 reproduces the property cash flows",
+            "passed": None,
+            "detail": f"not applicable — the property failed to cover "
+                      f"{to_dollars(shortfall_cents)} and the LP took no negative "
+                      f"distribution, so the two vectors cannot match by design"})
+    elif source_levered_irr is not None:
         lp_irr = result["lp_aggregate"]["irr"]
         # Stated as flow-vector equality rather than IRR equality, which is
         # the stronger claim and the one that is exactly true. With a 100/0
