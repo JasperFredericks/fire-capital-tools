@@ -166,6 +166,20 @@ def custom_key(label: str) -> str:
     return CUSTOM_PREFIX + (slug[:48].strip("_") or "item")
 
 
+def label_from_key(key: str) -> str:
+    """Reconstruct a readable name from a freeform key.
+
+    The key is derived from what was typed, so the words are still in it:
+    custom_koi_pond -> "Koi pond". A fallback, not the primary source --
+    instance_label is -- but it means an item whose name field is cleared
+    degrades to "Koi pond" rather than to "Item", which would leave the
+    inspector looking at a row they can no longer identify.
+    """
+    stem = key[len(CUSTOM_PREFIX):] if is_custom_key(key) else key
+    words = stem.replace("_", " ").strip()
+    return (words[:1].upper() + words[1:]) if words else "Item"
+
+
 def clean_label(label: str) -> str:
     return " ".join((label or "").split())[:MAX_CUSTOM_LABEL]
 
@@ -186,7 +200,8 @@ def as_item(key: str, label: str | None = None) -> dict[str, Any]:
         item["bank_item_key"] = entry["key"]
         item["category"] = entry["category"]
     else:
-        item = uc.make_item(key, clean_label(label) or "Item", uc.KIND_CONDITION)
+        item = uc.make_item(key, clean_label(label) or label_from_key(key),
+                            uc.KIND_CONDITION)
         item["bank_item_key"] = None
         item["category"] = None
     item["added"] = True

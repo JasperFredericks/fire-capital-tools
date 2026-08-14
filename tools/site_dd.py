@@ -240,7 +240,8 @@ def save(assessment_id):
                 "category_key": cl.ITEM_CATEGORY[key],
                 "item_key": key,
                 "instance_no": n,
-                "instance_label": (request.form.get(f"label_{key}{suffix}") or "").strip() or None,
+                "instance_label": _kept_label(request.form, key, suffix,
+                                              existing.get(key), n),
                 "condition": raw if cond.is_valid(raw) else None,
                 "note": (request.form.get(f"note_{key}{suffix}") or "").strip() or None,
             })
@@ -799,7 +800,8 @@ def _collect(form, items, *, scope, area_id, room_id, existing=None):
                 # Set only for a curated pick. COALESCEd in the upsert, so
                 # a form that does not know the link cannot break it.
                 "bank_item_key": item.get("bank_item_key"),
-                "instance_label": (form.get(f"label_{key}{suffix}") or "").strip() or None,
+                "instance_label": _kept_label(form, key, suffix,
+                                              existing.get(key), n),
                 "condition": raw_condition if cond.is_valid(raw_condition) else None,
                 "detail": raw_detail if uc.is_valid_option(item, raw_detail) else None,
                 "quantity": quantity if item["kind"] == uc.KIND_NUMBER else None,
@@ -807,6 +809,25 @@ def _collect(form, items, *, scope, area_id, room_id, existing=None):
                 "note": (form.get(f"note_{key}{suffix}") or "").strip() or None,
             })
     return out
+
+
+def _kept_label(form, key, suffix, existing_rows, n):
+    """The instance label after this save.
+
+    A field that was NOT POSTED means "leave it alone"; a field posted
+    empty means "clear it". The distinction is the whole fix: no template
+    renders label_* for a checklist item, so treating absent as empty
+    made every save null the label -- and for a freeform item, whose
+    typed name is its only identity, the first save turned "Koi pond"
+    into "Item".
+    """
+    field = f"label_{key}{suffix}"
+    if field in form:
+        return (form.get(field) or "").strip() or None
+    for row in existing_rows or ():
+        if int(row.get("instance_no") or 1) == n:
+            return row.get("instance_label")
+    return None
 
 
 def _posted_instances(form, key, existing_rows):

@@ -98,6 +98,17 @@
           {{ condition_row(item, row.condition if row else none, sfx) }}
         {% endif %}
 
+        {#
+          An added item's name IS its identity -- especially a freeform
+          one, where nothing else describes it. Editable, and posted back
+          on every save so it round-trips rather than being reconstructed.
+        #}
+        {% if item.added %}
+          <input class="sdd-note" type="text" name="label_{{ item.key }}{{ sfx }}"
+                 value="{{ row.instance_label if row and row.instance_label else '' }}"
+                 maxlength="80" placeholder="Name (optional)"
+                 aria-label="{{ item.label }} name">
+        {% endif %}
         <input class="sdd-note" type="text" name="note_{{ item.key }}{{ sfx }}"
                value="{{ row.note if row and row.note else '' }}"
                placeholder="Note (optional)" aria-label="{{ item.label }} note">
