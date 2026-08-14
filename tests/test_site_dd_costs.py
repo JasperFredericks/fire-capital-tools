@@ -24,6 +24,7 @@ from tools import site_dd_bank as bank
 from tools import site_dd_checklist as cl
 from tools import site_dd_costs as costs
 from tools import site_dd_db as db
+from tools import site_dd_unit_checklist as uc
 from tools import underwriting_capex as ucx
 from tools import underwriting_db as udb
 
@@ -225,12 +226,21 @@ class CapexMappingTests(unittest.TestCase):
             [self._finding(item_key="fireplace", category_key="interior_units")])[0]
         self.assertEqual(line["category"], "interior_units")
 
-    def test_a_room_checklist_item_is_uncategorised_not_condition(self):
-        """category_key holds the item KIND for room/unit checklist rows.
-        Emitting 'condition' as a capex category would look like a real
-        grouping while meaning nothing."""
+    def test_a_legacy_kind_value_is_still_refused(self):
+        """Room and unit rows used to carry the input KIND here. They are
+        rewritten on connect now, but a database restored from an older
+        backup can still present one, and emitting 'condition' as a budget
+        heading would look like a real grouping while meaning nothing."""
         line = costs.to_capex_lines([self._finding(category_key="condition")])[0]
         self.assertIsNone(line["category"])
+
+    def test_a_room_checklist_item_now_carries_a_real_category(self):
+        """The fix: a toilet is plumbing work, and the export says so."""
+        line = costs.to_capex_lines(
+            [self._finding(item_key="toilet",
+                           category_key=uc.category_for("toilet"))])[0]
+        self.assertEqual(line["category"], "mep")
+        self.assertIn(line["category"], cl.CATEGORY_NAMES)
 
     def test_every_emitted_category_is_a_real_capex_category(self):
         for key in ("condition", "choice", "number", "interior_units", "mep", None):
