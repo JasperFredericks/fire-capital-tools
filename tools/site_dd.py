@@ -169,7 +169,7 @@ def detail(assessment_id):
         # the property checklist's completion figure.
         items = db.get_findings(conn, assessment_id, None, None)
         photos = db.list_media(conn, assessment_id, kind=db.MEDIA_PHOTO)
-        summary = cond.summarize({k: v["condition"] for k, v in items.items()},
+        summary = cond.summarize({k: [r["condition"] for r in rows] for k, rows in items.items()},
                                  cl.CATEGORIES)
         areas = db.list_areas(conn, assessment_id)
         area_rollups = []
@@ -224,18 +224,25 @@ def save(assessment_id):
     if not _load(assessment_id):
         return _not_found()
 
+    with db.get_connection() as conn:
+        existing = db.get_findings(conn, assessment_id, None, None)
+
     responses = []
     for key in cl.ITEM_KEYS:
-        raw = (request.form.get(f"condition_{key}") or "").strip()
-        responses.append({
-            "scope": cl.SCOPE,
-            "area_id": None,
-            "room_id": None,
-            "category_key": cl.ITEM_CATEGORY[key],
-            "item_key": key,
-            "condition": raw if cond.is_valid(raw) else None,
-            "note": (request.form.get(f"note_{key}") or "").strip() or None,
-        })
+        for n in _posted_instances(request.form, key, existing.get(key, [])):
+            suffix = "" if n == 1 else f"__{n}"
+            raw = (request.form.get(f"condition_{key}{suffix}") or "").strip()
+            responses.append({
+                "scope": cl.SCOPE,
+                "area_id": None,
+                "room_id": None,
+                "category_key": cl.ITEM_CATEGORY[key],
+                "item_key": key,
+                "instance_no": n,
+                "instance_label": (request.form.get(f"label_{key}{suffix}") or "").strip() or None,
+                "condition": raw if cond.is_valid(raw) else None,
+                "note": (request.form.get(f"note_{key}{suffix}") or "").strip() or None,
+            })
 
     status = (request.form.get("status") or "").strip()
     with db.get_connection() as conn:
@@ -311,6 +318,24 @@ def upload_photo(assessment_id):
         tmp_path.unlink(missing_ok=True)
         flash(str(exc), "danger")
         return redirect(back)
+
+    # A capture usually comes BEFORE the judgement -- you photograph the
+    # crack, then decide it is a Replace. So if no finding row exists yet
+    # for this item, create the empty instance 1 now and attach to it.
+    # Without this the photo lands with a NULL finding_id and does not
+    # appear against the item at all.
+    if finding_id is None and item_key:
+        with db.get_connection() as conn:
+            existing = db.get_findings(conn, assessment_id, area_id, room_id)
+            rows_for_item = existing.get(item_key) or []
+            if rows_for_item:
+                finding_id = rows_for_item[0]["id"]
+            else:
+                finding_id = db.add_first_instance(
+                    conn, assessment_id, item_key, area_id, room_id,
+                    scope=(cond.SCOPE_ROOM if room_id else
+                           cond.SCOPE_UNIT if area_id else cond.SCOPE_PROPERTY),
+                    category_key=cl.ITEM_CATEGORY.get(item_key))
 
     kind = info["kind"]
     duration_s = None
@@ -477,7 +502,7 @@ def area_detail(assessment_id, area_id):
         finding_count = db.area_finding_count(conn, area_id)
 
     summary = uc.summarize_unit(by_room, rooms,
-                                {k: v["condition"] for k, v in unit_rows.items()})
+                                {k: [r["condition"] for r in rows] for k, rows in unit_rows.items()})
     return render_template(
         "tools/site_dd_area.html",
         assessment=_load(assessment_id), area=area, rooms=rooms,
@@ -508,7 +533,9 @@ def save_area(assessment_id, area_id):
         })
         db.upsert_findings(conn, assessment_id,
                            _collect(request.form, uc.items_for_unit(),
-                                    scope=cond.SCOPE_UNIT, area_id=area_id, room_id=None))
+                                    scope=cond.SCOPE_UNIT, area_id=area_id, room_id=None,
+                                    existing=db.get_findings(conn, assessment_id,
+                                                             area_id, None)))
     flash("Unit saved.", "success")
     return redirect(url_for("site_dd.area_detail",
                             assessment_id=assessment_id, area_id=area_id))
@@ -618,8 +645,13 @@ def room_detail(assessment_id, area_id, room_id):
         rows = db.get_findings(conn, assessment_id, area_id, room_id)
         shots = db.list_media_for_scope(conn, assessment_id, area_id, room_id)
 
+    # Keyed by FINDING, not by item: with two sinks in a room, "which one
+    # is this photo of" is only answerable through finding_id.
+    media_by_finding = {}
     media_by_item = {}
     for m in shots:
+        if m.get("finding_id"):
+            media_by_finding.setdefault(m["finding_id"], []).append(m)
         media_by_item.setdefault(m.get("item_key") or "", []).append(m)
 
     order = [r["id"] for r in rooms]
@@ -632,6 +664,7 @@ def room_detail(assessment_id, area_id, room_id):
         conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
         condition_colours=cond.CONDITION_COLOURS,
         media_by_item=media_by_item,
+        media_by_finding=media_by_finding,
         max_photo_mb=cap.MAX_PHOTO_BYTES // 1024 // 1024,
         max_video_mb=cap.MAX_VIDEO_BYTES // 1024 // 1024,
         max_video_seconds=int(cap.MAX_VIDEO_SECONDS),
@@ -656,7 +689,9 @@ def save_room(assessment_id, area_id, room_id):
             return _not_found()
         db.upsert_findings(conn, assessment_id,
                            _collect(request.form, uc.items_for_room(room["room_type"]),
-                                    scope=cond.SCOPE_ROOM, area_id=area_id, room_id=room_id))
+                                    scope=cond.SCOPE_ROOM, area_id=area_id, room_id=room_id,
+                                    existing=db.get_findings(conn, assessment_id,
+                                                             area_id, room_id)))
         rooms = db.list_rooms(conn, area_id)
 
     # "Save & next room" keeps the walkthrough moving without a detour
@@ -676,7 +711,7 @@ def save_room(assessment_id, area_id, room_id):
                             area_id=area_id, room_id=room_id))
 
 
-def _collect(form, items, *, scope, area_id, room_id):
+def _collect(form, items, *, scope, area_id, room_id, existing=None):
     """Turn a posted room or unit form into finding rows.
 
     Only keys in the checklist are read, and a value that is not one of
@@ -684,23 +719,99 @@ def _collect(form, items, *, scope, area_id, room_id):
     rule the property scope uses, so a hand-crafted POST cannot invent an
     answer to a question that was not asked.
     """
+    existing = existing or {}
     out = []
     for item in items:
         key = item["key"]
-        raw_condition = (form.get(f"condition_{key}") or "").strip()
-        raw_detail = (form.get(f"detail_{key}") or "").strip()
-        quantity = to_float(form.get(f"quantity_{key}"))
-        out.append({
-            "scope": scope, "area_id": area_id, "room_id": room_id,
-            "category_key": item["kind"],
-            "item_key": key,
-            "condition": raw_condition if cond.is_valid(raw_condition) else None,
-            "detail": raw_detail if uc.is_valid_option(item, raw_detail) else None,
-            "quantity": quantity if item["kind"] == uc.KIND_NUMBER else None,
-            "measure": item["measure"] if item["kind"] == uc.KIND_NUMBER else None,
-            "note": (form.get(f"note_{key}") or "").strip() or None,
-        })
+        # Field names carry the instance number, so two sinks post two sets
+        # of answers rather than the second overwriting the first. Instance
+        # 1 keeps the unsuffixed names an older form would have sent.
+        for n in _posted_instances(form, key, existing.get(key, [])):
+            suffix = "" if n == 1 else f"__{n}"
+            raw_condition = (form.get(f"condition_{key}{suffix}") or "").strip()
+            raw_detail = (form.get(f"detail_{key}{suffix}") or "").strip()
+            quantity = to_float(form.get(f"quantity_{key}{suffix}"))
+            out.append({
+                "scope": scope, "area_id": area_id, "room_id": room_id,
+                "category_key": item["kind"],
+                "item_key": key,
+                "instance_no": n,
+                "instance_label": (form.get(f"label_{key}{suffix}") or "").strip() or None,
+                "condition": raw_condition if cond.is_valid(raw_condition) else None,
+                "detail": raw_detail if uc.is_valid_option(item, raw_detail) else None,
+                "quantity": quantity if item["kind"] == uc.KIND_NUMBER else None,
+                "measure": item["measure"] if item["kind"] == uc.KIND_NUMBER else None,
+                "note": (form.get(f"note_{key}{suffix}") or "").strip() or None,
+            })
     return out
+
+
+def _posted_instances(form, key, existing_rows):
+    """Which instance numbers this form is answering for.
+
+    Read from what was actually posted, unioned with what already exists,
+    so a save never silently drops an instance the page did not happen to
+    render -- and always includes 1, because every item has a first one.
+    """
+    numbers = {1}
+    numbers.update(int(r["instance_no"] or 1) for r in existing_rows)
+    prefix = f"condition_{key}__"
+    for field in form:
+        if field.startswith(prefix):
+            tail = field[len(prefix):]
+            if tail.isdigit():
+                numbers.add(int(tail))
+    return sorted(numbers)
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/instance", methods=["POST"])
+@login_required
+def add_instance(assessment_id):
+    """Another one of the same item -- a second smoke alarm, a second sink.
+
+    One POST, no form to fill in: the new instance appears empty and is
+    filled in like any other. Works at every scope, so the property
+    checklist, a unit and a room all use this same route.
+    """
+    if not _load(assessment_id):
+        return _not_found()
+    item_key = (request.form.get("item_key") or "").strip()
+    area_id = to_int(request.form.get("area_id"))
+    room_id = to_int(request.form.get("room_id"))
+    scope = (request.form.get("scope") or cond.SCOPE_ROOM).strip()
+
+    known = item_key in cl.ITEM_LABELS or uc.is_known_item(item_key)
+    if not known:
+        flash("Unknown item.", "danger")
+        return redirect(_capture_redirect(assessment_id))
+
+    with db.get_connection() as conn:
+        db.add_instance(conn, assessment_id, item_key, area_id, room_id,
+                        scope=scope if scope in cond.SCOPES else cond.SCOPE_ROOM,
+                        category_key=cl.ITEM_CATEGORY.get(item_key))
+    flash("Added another.", "success")
+    return redirect(_capture_redirect(assessment_id) + f"#item-{item_key}")
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/instance/<int:finding_id>/delete",
+                  methods=["POST"])
+@login_required
+def delete_instance(assessment_id, finding_id):
+    """Remove an extra instance. The first instance of an item is part of
+    the checklist and is never removable -- only the extras are."""
+    if not _load(assessment_id):
+        return _not_found()
+    with db.get_connection() as conn:
+        row = db.get_finding(conn, finding_id)
+        if not row or row["assessment_id"] != assessment_id:
+            return _not_found()
+        if int(row["instance_no"] or 1) <= 1:
+            flash("The first one is part of the checklist and can't be removed.",
+                  "warning")
+            return redirect(_capture_redirect(assessment_id))
+        db.delete_instance(conn, finding_id)
+    flash("Removed.", "success")
+    return redirect(_capture_redirect(assessment_id))
 
 
 # ── Report ───────────────────────────────────────────────────────────────
@@ -721,7 +832,7 @@ def download_report(assessment_id):
         # the property checklist's completion figure.
         items = db.get_findings(conn, assessment_id, None, None)
         photos = db.list_media(conn, assessment_id, kind=db.MEDIA_PHOTO)
-        summary = cond.summarize({k: v["condition"] for k, v in items.items()},
+        summary = cond.summarize({k: [r["condition"] for r in rows] for k, rows in items.items()},
                                  cl.CATEGORIES)
         areas = db.list_areas(conn, assessment_id)
         area_rollups = []

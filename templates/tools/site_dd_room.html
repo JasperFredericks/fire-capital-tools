@@ -66,28 +66,28 @@
   working form.
 #}
 
-{% macro condition_row(item, current) %}
+{% macro condition_row(item, current, sfx='') %}
   <div class="sdd-cond-row" role="radiogroup" aria-label="{{ item.label }} condition">
-    <input class="sdd-cond-input" type="radio" id="c_{{ item.key }}_none"
-           name="condition_{{ item.key }}" value="" {% if not current %}checked{% endif %}>
-    <label class="sdd-cond-btn" for="c_{{ item.key }}_none">&ndash;</label>
+    <input class="sdd-cond-input" type="radio" id="c_{{ item.key }}{{ sfx }}_none"
+           name="condition_{{ item.key }}{{ sfx }}" value="" {% if not current %}checked{% endif %}>
+    <label class="sdd-cond-btn" for="c_{{ item.key }}{{ sfx }}_none">&ndash;</label>
     {% for c in conditions %}
-      <input class="sdd-cond-input" type="radio" id="c_{{ item.key }}_{{ c }}"
-             name="condition_{{ item.key }}" value="{{ c }}" {% if current == c %}checked{% endif %}>
-      <label class="sdd-cond-btn" for="c_{{ item.key }}_{{ c }}">{{ condition_labels[c] }}</label>
+      <input class="sdd-cond-input" type="radio" id="c_{{ item.key }}{{ sfx }}_{{ c }}"
+             name="condition_{{ item.key }}{{ sfx }}" value="{{ c }}" {% if current == c %}checked{% endif %}>
+      <label class="sdd-cond-btn" for="c_{{ item.key }}{{ sfx }}_{{ c }}">{{ condition_labels[c] }}</label>
     {% endfor %}
   </div>
 {% endmacro %}
 
-{% macro choice_row(item, current) %}
+{% macro choice_row(item, current, sfx='') %}
   <div class="sdd-cond-row" role="radiogroup" aria-label="{{ item.label }}">
-    <input class="sdd-cond-input sdd-choice-input" type="radio" id="d_{{ item.key }}_none"
-           name="detail_{{ item.key }}" value="" {% if not current %}checked{% endif %}>
-    <label class="sdd-cond-btn" for="d_{{ item.key }}_none">&ndash;</label>
+    <input class="sdd-cond-input sdd-choice-input" type="radio" id="d_{{ item.key }}{{ sfx }}_none"
+           name="detail_{{ item.key }}{{ sfx }}" value="" {% if not current %}checked{% endif %}>
+    <label class="sdd-cond-btn" for="d_{{ item.key }}{{ sfx }}_none">&ndash;</label>
     {% for value, label in item.options %}
-      <input class="sdd-cond-input sdd-choice-input" type="radio" id="d_{{ item.key }}_{{ value }}"
-             name="detail_{{ item.key }}" value="{{ value }}" {% if current == value %}checked{% endif %}>
-      <label class="sdd-cond-btn" for="d_{{ item.key }}_{{ value }}">{{ label }}</label>
+      <input class="sdd-cond-input sdd-choice-input" type="radio" id="d_{{ item.key }}{{ sfx }}_{{ value }}"
+             name="detail_{{ item.key }}{{ sfx }}" value="{{ value }}" {% if current == value %}checked{% endif %}>
+      <label class="sdd-cond-btn" for="d_{{ item.key }}{{ sfx }}_{{ value }}">{{ label }}</label>
     {% endfor %}
   </div>
 {% endmacro %}
@@ -110,13 +110,27 @@
 
   <div class="card" style="padding:14px 16px;">
     {% for item in items %}
-      {% set row = rows.get(item.key) %}
-      <div class="sdd-item">
-        <div class="sdd-item-label">{{ item.label }}</div>
+      {#
+        One block per INSTANCE. An item usually has exactly one, and then
+        this renders identically to before -- the loop is invisible in the
+        common case, which is the point: most units never need a second
+        smoke alarm and the form should not look like they might.
+      #}
+      {% set instances = rows.get(item.key) or [none] %}
+      {% for row in instances %}
+      {% set n = (row.instance_no if row else 1) or 1 %}
+      {% set sfx = '' if n == 1 else '__' ~ n %}
+      <div class="sdd-item" id="item-{{ item.key }}{{ sfx }}">
+        <div class="sdd-item-label">
+          {{ item.label }}
+          {%- if instances|length > 1 %}
+            <span class="sdd-instance-tag">{{ row.instance_label if row and row.instance_label else '#' ~ n }}</span>
+          {% endif %}
+        </div>
         {% if item.hint %}<div class="sdd-item-hint">{{ item.hint }}</div>{% endif %}
 
         {% if item.kind == 'choice' %}
-          {{ choice_row(item, row.detail if row else none) }}
+          {{ choice_row(item, row.detail if row else none, sfx) }}
           {#
             A condition is only offered where one can exist. An appliance
             that is present can still be Good or Replace; an appliance
@@ -125,18 +139,18 @@
           #}
           {% if item.with_condition %}
             <div class="sdd-item-hint" style="margin:10px 0 6px;">Condition, if present</div>
-            {{ condition_row(item, row.condition if row else none) }}
+            {{ condition_row(item, row.condition if row else none, sfx) }}
           {% endif %}
         {% elif item.kind == 'number' %}
           <input class="sdd-note" type="number" inputmode="decimal" step="any"
-                 name="quantity_{{ item.key }}"
+                 name="quantity_{{ item.key }}{{ sfx }}"
                  value="{{ row.quantity if row and row.quantity is not none else '' }}"
                  placeholder="{{ item.measure }}" aria-label="{{ item.label }} in {{ item.measure }}">
         {% else %}
-          {{ condition_row(item, row.condition if row else none) }}
+          {{ condition_row(item, row.condition if row else none, sfx) }}
         {% endif %}
 
-        <input class="sdd-note" type="text" name="note_{{ item.key }}"
+        <input class="sdd-note" type="text" name="note_{{ item.key }}{{ sfx }}"
                value="{{ row.note if row and row.note else '' }}"
                placeholder="Note (optional)" aria-label="{{ item.label }} note">
 
@@ -152,7 +166,7 @@
           forms. Each button carries its item and scope in formaction, so
           the whole thing works with JavaScript off.
         #}
-        {% set shots = media_by_item.get(item.key, []) %}
+        {% set shots = media_by_finding.get(row.id, []) if row else [] %}
         {% set has_video = shots | selectattr('kind', 'equalto', 'video') | list | length %}
         <div class="sdd-capture">
           <label class="sdd-capture-btn">
@@ -177,7 +191,8 @@
           <button type="submit" form="captureForm" class="sdd-capture-btn sdd-capture-btn--go"
                   formenctype="multipart/form-data"
                   formaction="{{ url_for('site_dd.upload_photo', assessment_id=assessment.id,
-                                         item_key=item.key, area_id=area.id, room_id=room.id) }}">
+                                         item_key=item.key, area_id=area.id, room_id=room.id,
+                                         finding_id=(row.id if row else none)) }}">
             Upload
           </button>
         </div>
@@ -193,6 +208,27 @@
             {% endfor %}
           </div>
         {% endif %}
+
+        {% if row and n > 1 %}
+          <button type="submit" form="instanceForm" class="sdd-instance-remove"
+                  formaction="{{ url_for('site_dd.delete_instance', assessment_id=assessment.id, finding_id=row.id) }}">
+            Remove this one
+          </button>
+        {% endif %}
+      </div>
+      {% endfor %}
+
+      {#
+        Quiet by design. Most units need exactly one of everything, so
+        this sits under the last instance as a low-contrast affordance
+        rather than an instruction.
+      #}
+      <div class="sdd-add-another">
+        <button type="submit" form="instanceForm" class="sdd-add-btn"
+                formaction="{{ url_for('site_dd.add_instance', assessment_id=assessment.id) }}"
+                name="item_key" value="{{ item.key }}">
+          + Add another {{ item.label|lower }}
+        </button>
       </div>
     {% endfor %}
   </div>
@@ -219,6 +255,15 @@
 
 {# Declared once, outside the room form. Every capture input above
    belongs to it by id, and each Upload button supplies its own action. #}
+{# Additive actions post here, so they never submit the room's answers. #}
+<form id="instanceForm" method="POST"
+      action="{{ url_for('site_dd.add_instance', assessment_id=assessment.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="area_id" value="{{ area.id }}">
+  <input type="hidden" name="room_id" value="{{ room.id }}">
+  <input type="hidden" name="scope" value="room">
+</form>
+
 <form id="captureForm" method="POST" enctype="multipart/form-data"
       action="{{ url_for('site_dd.upload_photo', assessment_id=assessment.id) }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -118,12 +118,37 @@ def needs_work(value: Any) -> bool:
     return value in WORK_CONDITIONS
 
 
+def as_instances(value: Any) -> list[Any]:
+    """Normalise a findings value to a list of instance conditions.
+
+    Callers pass {item_key: [condition, ...]} since instances landed. A
+    bare scalar is still accepted and treated as a single instance, so a
+    caller that has only one value does not have to wrap it -- and so
+    this cannot silently return zero instances for a legitimate answer.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
 def summarize(findings: dict[str, Any], catalogue: Any) -> dict[str, Any]:
     """Roll condition responses up into counts.
 
-    `findings` maps item_key -> condition string (or None / absent for not
-    assessed). `catalogue` is the checklist module's CATEGORIES tuple, so
-    this module holds the scale and the checklist holds the content.
+    `findings` maps item_key -> LIST of conditions, one per instance. Two
+    sinks needing replacement count TWICE: they are two objects, two work
+    orders and, in Branch 4, two lines in a budget. Collapsing them would
+    understate the job.
+
+    THE DENOMINATOR IS INSTANCE-AWARE
+
+    Completion used to divide by the size of the catalogue, which is
+    correct only while every item occurs exactly once. With instances, a
+    bathroom with two sinks has 33 things to assess against a 32-item
+    list, and dividing by 32 would report 103% complete. So the
+    denominator counts instances where they exist and one where they do
+    not: a second sink raises the numerator AND the denominator.
 
     Unknown keys are ignored rather than raising, so a stale key left over
     from a future checklist revision can never break the summary of an
@@ -133,30 +158,40 @@ def summarize(findings: dict[str, Any], catalogue: Any) -> dict[str, Any]:
     valid_keys = [k for cat in catalogue for k, _ in cat["items"]]
     valid_set = set(valid_keys)
 
-    assessed = {
-        k: v for k, v in (findings or {}).items()
-        if k in valid_set and is_valid(v)
-    }
+    # item_key -> [conditions that are real answers], instances preserved.
+    assessed: dict[str, list[str]] = {}
+    # item_key -> how many instances exist at all, answered or not.
+    instance_counts: dict[str, int] = {}
+    for k, raw in (findings or {}).items():
+        if k not in valid_set:
+            continue
+        values = as_instances(raw)
+        instance_counts[k] = max(len(values), 1)
+        good = [v for v in values if is_valid(v)]
+        if good:
+            assessed[k] = good
 
     counts = {c: 0 for c in CONDITIONS}
-    for v in assessed.values():
-        counts[v] += 1
+    for values in assessed.values():
+        for v in values:
+            counts[v] += 1
 
-    work_items = sorted(
-        (k for k, v in assessed.items() if needs_work(v)),
-        key=lambda k: (CONDITIONS.index(assessed[k]), valid_keys.index(k)),
-        reverse=False,
-    )
     # Worst first: Replace above Repair, then checklist order within each.
-    work_items.sort(key=lambda k: (-CONDITIONS.index(assessed[k]), valid_keys.index(k)))
+    work_items = []
+    for k, values in assessed.items():
+        for v in values:
+            if needs_work(v):
+                work_items.append((k, v))
+    work_items.sort(key=lambda kv: (-CONDITIONS.index(kv[1]), valid_keys.index(kv[0])))
+    work_items = [k for k, _ in work_items]
 
     categories = []
     for cat in catalogue:
         keys = [k for k, _ in cat["items"]]
         cat_counts = {c: 0 for c in CONDITIONS}
         for k in keys:
-            if k in assessed:
-                cat_counts[assessed[k]] += 1
+            for v in assessed.get(k, []):
+                cat_counts[v] += 1
         cat_assessed = sum(cat_counts.values())
         worst = None
         for c in reversed(CONDITIONS):
@@ -168,14 +203,14 @@ def summarize(findings: dict[str, Any], catalogue: Any) -> dict[str, Any]:
             "name": cat["name"],
             "counts": cat_counts,
             "assessed_count": cat_assessed,
-            "item_count": len(keys),
+            "item_count": sum(max(instance_counts.get(k, 1), 1) for k in keys),
             "work_count": sum(cat_counts[c] for c in WORK_CONDITIONS),
             "worst": worst,
             "worst_label": label(worst) if worst else None,
         })
 
-    total_items = len(valid_keys)
-    assessed_count = len(assessed)
+    total_items = sum(max(instance_counts.get(k, 1), 1) for k in valid_keys)
+    assessed_count = sum(len(v) for v in assessed.values())
 
     worst_overall = None
     for c in reversed(CONDITIONS):

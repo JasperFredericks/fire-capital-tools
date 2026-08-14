@@ -241,9 +241,13 @@ def summarize_unit(findings_by_room: dict[Any, dict[str, Any]],
                    unit_findings: dict[str, Any] | None = None) -> dict[str, Any]:
     """Roll a whole unit up: every room plus the unit-wide items.
 
-    `findings_by_room` maps room_id -> {item_key: condition}. Counts come
-    from tools/site_dd_conditions, so a unit summary and the property
-    summary are produced by the same code and cannot drift apart.
+    `findings_by_room` maps room_id -> {item_key: [condition per instance]}.
+    Counts come from tools/site_dd_conditions, so a unit summary and the
+    property summary are produced by the same code and cannot drift apart.
+
+    Instances count independently, and the denominator counts them too --
+    see site_dd_conditions.summarize for why dividing by the catalogue
+    size stops being right once an item can occur twice.
 
     Only conditions are counted. A choice like "Hookup only" is a fact
     about the unit, not a rating, and totalling it alongside wear states
@@ -259,13 +263,16 @@ def summarize_unit(findings_by_room: dict[Any, dict[str, Any]],
         condition_keys = [i["key"] for i in items if i["with_condition"]]
         answers = findings_by_room.get(room["id"], {}) or {}
         room_counts = {c: 0 for c in cond.CONDITIONS}
+        room_total = 0
         for key in condition_keys:
-            total += 1
-            value = answers.get(key)
-            if cond.is_valid(value):
-                assessed += 1
-                counts[value] += 1
-                room_counts[value] += 1
+            values = cond.as_instances(answers.get(key))
+            room_total += max(len(values), 1)
+            total += max(len(values), 1)
+            for value in values:
+                if cond.is_valid(value):
+                    assessed += 1
+                    counts[value] += 1
+                    room_counts[value] += 1
         worst = None
         for c in reversed(cond.CONDITIONS):
             if room_counts[c]:
@@ -275,7 +282,7 @@ def summarize_unit(findings_by_room: dict[Any, dict[str, Any]],
             "room": room,
             "counts": room_counts,
             "assessed_count": sum(room_counts.values()),
-            "item_count": len(condition_keys),
+            "item_count": room_total,
             "work_count": sum(room_counts[c] for c in cond.WORK_CONDITIONS),
             "worst": worst,
             "worst_label": cond.label(worst) if worst else None,
@@ -285,11 +292,12 @@ def summarize_unit(findings_by_room: dict[Any, dict[str, Any]],
     for item in UNIT_WIDE:
         if not item["with_condition"]:
             continue
-        total += 1
-        value = unit_answers.get(item["key"])
-        if cond.is_valid(value):
-            assessed += 1
-            counts[value] += 1
+        values = cond.as_instances(unit_answers.get(item["key"]))
+        total += max(len(values), 1)
+        for value in values:
+            if cond.is_valid(value):
+                assessed += 1
+                counts[value] += 1
 
     worst_overall = None
     for c in reversed(cond.CONDITIONS):

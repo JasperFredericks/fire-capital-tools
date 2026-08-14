@@ -47,6 +47,39 @@ STATUSES = (STATUS_DRAFT, STATUS_COMPLETE)
 MAX_LABEL_LEN = 255
 MAX_NOTE_LEN = 4000
 
+_FINDINGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS site_dd_findings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assessment_id INTEGER NOT NULL,
+    area_id INTEGER,
+    room_id INTEGER,
+    scope TEXT NOT NULL DEFAULT 'property',
+    category_key TEXT,
+    item_key TEXT NOT NULL,
+    -- Which one of this item. A unit can have two smoke alarms and a
+    -- bathroom two sinks, each with its own condition, note and photos.
+    -- Numbered from 1 and assigned automatically; instance_label is the
+    -- optional free text that replaces the number on screen ("hallway"
+    -- reads better than "#2" six weeks later).
+    instance_no INTEGER NOT NULL DEFAULT 1,
+    instance_label TEXT,
+    condition TEXT,
+    -- A categorical fact about the item that is NOT a condition: the
+    -- flooring is vinyl, the dishwasher is a hookup with no machine in
+    -- it, the smoke alarm is missing. Branch 1 assumed the condition
+    -- column would carry the room checklists unchanged, and for genuine
+    -- conditions it does -- but "hookup only" and "missing" are presence
+    -- facts, and forcing them onto a wear scale would mean recording
+    -- "Replace" for an appliance that was never there.
+    detail TEXT,
+    note TEXT,
+    quantity REAL,
+    measure TEXT,                              -- 'ea' | 'sqft' | 'lf' ...
+    created_at TEXT NOT NULL
+);
+
+"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS site_dd_assessments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -132,29 +165,7 @@ CREATE TABLE IF NOT EXISTS site_dd_rooms (
 -- rejects integers outright rather than translating them, because a
 -- stored 2 meant "Poor" on a scale that no longer exists and reading it
 -- as "Repair" would be inventing an inspector's opinion.
-CREATE TABLE IF NOT EXISTS site_dd_findings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    assessment_id INTEGER NOT NULL,
-    area_id INTEGER,
-    room_id INTEGER,
-    scope TEXT NOT NULL DEFAULT 'property',
-    category_key TEXT,
-    item_key TEXT NOT NULL,
-    condition TEXT,
-    -- A categorical fact about the item that is NOT a condition: the
-    -- flooring is vinyl, the dishwasher is a hookup with no machine in
-    -- it, the smoke alarm is missing. Branch 1 assumed the condition
-    -- column would carry the room checklists unchanged, and for genuine
-    -- conditions it does -- but "hookup only" and "missing" are presence
-    -- facts, and forcing them onto a wear scale would mean recording
-    -- "Replace" for an appliance that was never there.
-    detail TEXT,
-    note TEXT,
-    quantity REAL,
-    measure TEXT,                              -- 'ea' | 'sqft' | 'lf' ...
-    created_at TEXT NOT NULL,
-    UNIQUE (assessment_id, area_id, room_id, item_key)
-);
+""" + _FINDINGS_SCHEMA + """
 
 -- Built now, written in Branch 3. bytes and duration_s exist so the
 -- storage question has numbers to answer it: video is the reason the
@@ -205,6 +216,79 @@ _FINDING_ADDED_COLUMNS = (
     ("detail", "TEXT"),
 )
 
+# The unique key widened from (assessment, area, room, item) to include
+# instance_no. SQLite cannot alter a table's constraints, and the old one
+# is inline in CREATE TABLE, so an existing database has to be rebuilt --
+# an ALTER adding the column alone would leave the OLD unique key in
+# place and a second instance would still be refused.
+#
+# Guarded by inspecting the real index rather than a version flag: the
+# rebuild runs once, on a database that still has the four-column key,
+# and is a no-op forever after.
+_FINDINGS_IDENTITY_INDEX = """
+-- Identity is enforced by an expression index, NOT an inline UNIQUE.
+--
+-- SQLite treats NULLs as DISTINCT in a unique constraint, so the previous
+-- UNIQUE(assessment_id, area_id, room_id, item_key) never fired for
+-- property-scope rows, where area_id and room_id are both NULL. Every
+-- save of the property checklist therefore INSERTED another 32 rows
+-- instead of updating them -- measured on master: 32, then 64, then 96.
+-- It went unseen because the old {item_key: row} read collapsed the
+-- duplicates on the way out.
+--
+-- COALESCE gives the nullable columns a real value to compare, so the
+-- property scope gets the same identity guarantee every other scope had.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_sitedd_finding_identity
+    ON site_dd_findings (assessment_id, COALESCE(area_id, -1),
+                         COALESCE(room_id, -1), item_key, instance_no);
+"""
+
+_FINDINGS_REBUILD_COLUMNS = (
+    "assessment_id", "area_id", "room_id", "scope", "category_key",
+    "item_key", "condition", "detail", "note", "quantity", "measure",
+    "created_at",
+)
+
+
+def _needs_findings_rebuild(conn: sqlite3.Connection) -> bool:
+    """True while the table still carries the old inline UNIQUE.
+
+    Detected by looking for an auto-created unique index over item_key --
+    sqlite_autoindex_* exists only for an inline constraint, and the
+    replacement is a named expression index, so the two cannot be
+    confused.
+    """
+    for idx in conn.execute("PRAGMA index_list('site_dd_findings')"):
+        name, unique = idx[1], idx[2]
+        if not unique or not name.startswith("sqlite_autoindex"):
+            continue
+        cols = [r[2] for r in conn.execute(f"PRAGMA index_info('{name}')")]
+        if "item_key" in cols:
+            return True
+    return False
+
+
+def _rebuild_findings(conn: sqlite3.Connection) -> None:
+    """Recreate site_dd_findings with the wider unique key, carrying every
+    existing row across as instance 1."""
+    have = {row[1] for row in conn.execute("PRAGMA table_info(site_dd_findings)")}
+    carried = [c for c in _FINDINGS_REBUILD_COLUMNS if c in have]
+    cols = ", ".join(carried)
+    # The rename carries the old auto-index with it, so it is dropped
+    # along with the old table below.
+    conn.execute("ALTER TABLE site_dd_findings RENAME TO site_dd_findings_old")
+    conn.executescript(_FINDINGS_SCHEMA)
+    # Any duplicates the NULL-scope bug already wrote are collapsed to the
+    # newest row per identity -- keeping the most recent save is what the
+    # upsert would have done had the constraint worked.
+    conn.execute(
+        f"INSERT INTO site_dd_findings ({cols}, instance_no) "
+        f"SELECT {cols}, 1 FROM site_dd_findings_old WHERE id IN ("
+        f"  SELECT MAX(id) FROM site_dd_findings_old "
+        f"  GROUP BY assessment_id, COALESCE(area_id, -1), COALESCE(room_id, -1), item_key)")
+    conn.execute("DROP TABLE site_dd_findings_old")
+
+
 _MEDIA_ADDED_COLUMNS = (
     ("item_key", "TEXT"),
     ("area_id", "INTEGER"),
@@ -214,6 +298,11 @@ _MEDIA_ADDED_COLUMNS = (
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # Order matters: the identity index names instance_no, which a legacy
+    # table does not have until it has been rebuilt.
+    if _needs_findings_rebuild(conn):
+        _rebuild_findings(conn)
+    conn.executescript(_FINDINGS_IDENTITY_INDEX)
     existing = {row[1] for row in conn.execute("PRAGMA table_info(site_dd_findings)")}
     for name, coltype in _FINDING_ADDED_COLUMNS:
         if name not in existing:
@@ -401,10 +490,14 @@ def upsert_findings(conn: sqlite3.Connection, assessment_id: int,
         """
         INSERT INTO site_dd_findings
             (assessment_id, area_id, room_id, scope, category_key, item_key,
-             condition, detail, note, quantity, measure, created_at)
+             instance_no, instance_label, condition, detail, note, quantity,
+             measure, created_at)
         VALUES (:assessment_id, :area_id, :room_id, :scope, :category_key,
-                :item_key, :condition, :detail, :note, :quantity, :measure, :created_at)
-        ON CONFLICT(assessment_id, area_id, room_id, item_key) DO UPDATE SET
+                :item_key, :instance_no, :instance_label, :condition, :detail,
+                :note, :quantity, :measure, :created_at)
+        ON CONFLICT(assessment_id, COALESCE(area_id, -1), COALESCE(room_id, -1),
+                    item_key, instance_no) DO UPDATE SET
+            instance_label = excluded.instance_label,
             condition = excluded.condition,
             detail = excluded.detail,
             note = excluded.note,
@@ -419,6 +512,8 @@ def upsert_findings(conn: sqlite3.Connection, assessment_id: int,
                 "scope": r.get("scope") or "property",
                 "category_key": r.get("category_key"),
                 "item_key": r["item_key"],
+                "instance_no": int(r.get("instance_no") or 1),
+                "instance_label": (r.get("instance_label") or None),
                 "condition": r.get("condition"),
                 "detail": r.get("detail"),
                 "note": (r.get("note") or None) and r["note"][:MAX_NOTE_LEN],
@@ -434,8 +529,14 @@ def upsert_findings(conn: sqlite3.Connection, assessment_id: int,
 
 def get_findings(conn: sqlite3.Connection, assessment_id: int,
                  area_id: int | None = None,
-                 room_id: int | None = None) -> dict[str, dict[str, Any]]:
-    """item_key -> row, for one scope.
+                 room_id: int | None = None) -> dict[str, list[dict[str, Any]]]:
+    """item_key -> LIST of instances, in instance order, for one scope.
+
+    A list rather than a single row because an item can occur more than
+    once: two smoke alarms, two sinks. This shape changed when instances
+    landed -- the previous {item_key: row} dict silently discarded every
+    instance after the first, which is a data-loss bug rather than a
+    display one.
 
     area_id/room_id are matched with IS rather than = so that NULL (the
     property scope) selects the property rows instead of matching nothing,
@@ -443,17 +544,24 @@ def get_findings(conn: sqlite3.Connection, assessment_id: int,
     """
     rows = conn.execute(
         "SELECT * FROM site_dd_findings WHERE assessment_id = ? "
-        "AND area_id IS ? AND room_id IS ?",
+        "AND area_id IS ? AND room_id IS ? ORDER BY item_key, instance_no",
         (assessment_id, area_id, room_id)).fetchall()
-    return {r["item_key"]: dict(r) for r in rows}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        out.setdefault(r["item_key"], []).append(dict(r))
+    return out
 
 
 def get_conditions_map(conn: sqlite3.Connection, assessment_id: int,
                        area_id: int | None = None,
-                       room_id: int | None = None) -> dict[str, Any]:
-    """item_key -> condition, the exact shape summarize() expects."""
-    return {k: v["condition"]
-            for k, v in get_findings(conn, assessment_id, area_id, room_id).items()}
+                       room_id: int | None = None) -> dict[str, list[Any]]:
+    """item_key -> LIST of conditions, the shape summarize() expects.
+
+    One entry per instance, so two sinks needing replacement count twice
+    rather than collapsing into one.
+    """
+    return {k: [row["condition"] for row in rows]
+            for k, rows in get_findings(conn, assessment_id, area_id, room_id).items()}
 
 
 def list_all_findings(conn: sqlite3.Connection, assessment_id: int) -> list[dict[str, Any]]:
@@ -463,6 +571,87 @@ def list_all_findings(conn: sqlite3.Connection, assessment_id: int) -> list[dict
         "SELECT * FROM site_dd_findings WHERE assessment_id = ? ORDER BY id",
         (assessment_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def next_instance_no(conn: sqlite3.Connection, assessment_id: int, item_key: str,
+                     area_id: int | None, room_id: int | None) -> int:
+    row = conn.execute(
+        "SELECT COALESCE(MAX(instance_no), 0) + 1 AS n FROM site_dd_findings "
+        "WHERE assessment_id = ? AND area_id IS ? AND room_id IS ? AND item_key = ?",
+        (assessment_id, area_id, room_id, item_key)).fetchone()
+    return int(row["n"] or 1)
+
+
+def add_instance(conn: sqlite3.Connection, assessment_id: int, item_key: str,
+                 area_id: int | None, room_id: int | None,
+                 scope: str = "room", category_key: str | None = None,
+                 instance_label: str | None = None) -> int:
+    """Append another instance of an item, with nothing recorded on it yet.
+
+    Instance 1 is backfilled if it does not exist. The checklist always
+    renders a first instance whether or not a row has been saved for it,
+    so without this "Add another" on an untouched item would create
+    instance 1 -- and the inspector would tap the button and watch
+    nothing happen, because the row they just made is the one already on
+    screen.
+    """
+    n = next_instance_no(conn, assessment_id, item_key, area_id, room_id)
+    if n == 1:
+        conn.execute(
+            """INSERT INTO site_dd_findings
+               (assessment_id, area_id, room_id, scope, category_key, item_key,
+                instance_no, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 1, ?)""",
+            (assessment_id, area_id, room_id, scope, category_key, item_key, _now()))
+        n = 2
+    cur = conn.execute(
+        """INSERT INTO site_dd_findings
+           (assessment_id, area_id, room_id, scope, category_key, item_key,
+            instance_no, instance_label, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (assessment_id, area_id, room_id, scope, category_key, item_key,
+         n, instance_label, _now()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def add_first_instance(conn: sqlite3.Connection, assessment_id: int, item_key: str,
+                       area_id: int | None, room_id: int | None,
+                       scope: str = "room",
+                       category_key: str | None = None) -> int:
+    """Create the empty instance 1 for an item that has none yet.
+
+    Used when a photo arrives before any condition has been recorded, so
+    the media has a real finding to attach to.
+    """
+    cur = conn.execute(
+        """INSERT INTO site_dd_findings
+           (assessment_id, area_id, room_id, scope, category_key, item_key,
+            instance_no, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 1, ?)""",
+        (assessment_id, area_id, room_id, scope, category_key, item_key, _now()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def delete_instance(conn: sqlite3.Connection, finding_id: int) -> None:
+    """Remove one instance and detach any media pointing at it.
+
+    Media is detached rather than deleted: a photo is evidence somebody
+    took, and silently destroying it because a row was removed is a
+    bigger loss than an orphaned thumbnail. It stays on the assessment
+    with its finding_id cleared.
+    """
+    conn.execute("UPDATE site_dd_media SET finding_id = NULL WHERE finding_id = ?",
+                 (finding_id,))
+    conn.execute("DELETE FROM site_dd_findings WHERE id = ?", (finding_id,))
+    conn.commit()
+
+
+def get_finding(conn: sqlite3.Connection, finding_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM site_dd_findings WHERE id = ?",
+                       (finding_id,)).fetchone()
+    return dict(row) if row else None
 
 
 # ── Areas and rooms (written from Branch 2; readable now) ────────────────

@@ -184,7 +184,7 @@
           <thead><tr><th style="width:26%;">Item</th><th style="width:22%;">Condition</th><th>Note</th><th style="width:14%;">Photos</th></tr></thead>
           <tbody>
             {% for key, label in cat['items'] %}
-              {% set row = items.get(key) %}
+              {% set row = (items.get(key) or [none])[0] %}
               {% set current = row.condition if row else none %}
               <tr>
                 <td>{{ label }}</td>
