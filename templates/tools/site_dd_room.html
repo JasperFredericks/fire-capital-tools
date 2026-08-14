@@ -1,59 +1,6 @@
 {% extends "base.html" %}
-{% block title %}{{ room.label or room_type_labels[room.room_type] }} - {{ area.label }} - Site DD
-<script>
-/*
-  Pre-upload checks. Purely to save an inspector uploading 80 MB over a
-  site's mobile signal before being told no -- the server enforces the
-  same limits and trusts none of this. A browser without these APIs
-  simply uploads and gets the server's answer.
-*/
-(function () {
-  function mb(bytes) { return (bytes / 1048576).toFixed(1); }
-
-  document.querySelectorAll(".sdd-file").forEach(function (input) {
-    input.addEventListener("change", function () {
-      var file = input.files && input.files[0];
-      if (!file) return;
-      var maxMb = parseFloat(input.dataset.maxmb || "0");
-      var label = input.closest(".sdd-capture-btn");
-
-      function reject(message) {
-        input.value = "";
-        if (label) { label.classList.remove("sdd-capture-btn--ready"); }
-        alert(message);
-      }
-
-      if (maxMb && file.size > maxMb * 1048576) {
-        reject("That file is " + mb(file.size) + " MB — the limit is " + maxMb +
-               " MB. Record a shorter clip, or set the camera to 720p.");
-        return;
-      }
-
-      var isVideo = (file.type || "").indexOf("video") === 0
-                    || input.dataset.kind === "video";
-      var maxSec = parseFloat(input.dataset.maxsec || "0");
-      if (isVideo && maxSec && window.URL && window.URL.createObjectURL) {
-        // Read duration before uploading. Metadata only -- the file is
-        // never fully decoded here.
-        var probe = document.createElement("video");
-        probe.preload = "metadata";
-        probe.onloadedmetadata = function () {
-          window.URL.revokeObjectURL(probe.src);
-          if (probe.duration && probe.duration > maxSec + 2) {
-            reject("That clip is " + Math.round(probe.duration) +
-                   " seconds — the limit is " + maxSec + ".");
-          }
-        };
-        probe.onerror = function () { window.URL.revokeObjectURL(probe.src); };
-        probe.src = window.URL.createObjectURL(file);
-      }
-
-      if (label) { label.classList.add("sdd-capture-btn--ready"); }
-    });
-  });
-})();
-</script>
-{% endblock %}
+{% from "tools/_site_dd_picker.html" import item_picker, picker_form %}
+{% block title %}{{ room.label or room_type_labels[room.room_type] }} - {{ area.label }} - Site DD{% endblock %}
 
 {#
   One room in the walkthrough.
@@ -109,7 +56,7 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
   <div class="card" style="padding:14px 16px;">
-    {% for item in items %}
+    {% for item in items + added_items %}
       {#
         One block per INSTANCE. An item usually has exactly one, and then
         this renders identically to before -- the loop is invisible in the
@@ -123,6 +70,7 @@
       <div class="sdd-item" id="item-{{ item.key }}{{ sfx }}">
         <div class="sdd-item-label">
           {{ item.label }}
+          {%- if item.added %}<span class="sdd-added-tag">Added</span>{% endif %}
           {%- if instances|length > 1 %}
             <span class="sdd-instance-tag">{{ row.instance_label if row and row.instance_label else '#' ~ n }}</span>
           {% endif %}
@@ -229,8 +177,22 @@
                 name="item_key" value="{{ item.key }}">
           + Add another {{ item.label|lower }}
         </button>
+        {% if item.added %}
+          <button type="submit" form="instanceForm" class="sdd-instance-remove"
+                  formaction="{{ url_for('site_dd.remove_item', assessment_id=assessment.id) }}"
+                  name="item_key" value="{{ item.key }}">
+            Remove {{ item.label|lower }} from this room
+          </button>
+        {% endif %}
       </div>
     {% endfor %}
+
+    {#
+      ONE picker for the whole room, sitting after the last item -- not
+      one per item. The inspector adds a thing to the room, not to the
+      flooring.
+    #}
+    {{ item_picker(add_scope, bank_groups, 'pickerForm') }}
   </div>
 
   {#
@@ -255,6 +217,8 @@
 
 {# Declared once, outside the room form. Every capture input above
    belongs to it by id, and each Upload button supplies its own action. #}
+{{ picker_form(assessment, add_scope, area.id, room.id, 'pickerForm') }}
+
 {# Additive actions post here, so they never submit the room's answers. #}
 <form id="instanceForm" method="POST"
       action="{{ url_for('site_dd.add_instance', assessment_id=assessment.id) }}">

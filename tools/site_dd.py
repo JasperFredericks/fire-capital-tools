@@ -51,6 +51,7 @@ from werkzeug.utils import secure_filename
 
 from tools import branding
 from tools import deal_dive_db
+from tools import site_dd_bank as bank
 from tools import site_dd_checklist as cl
 from tools import site_dd_conditions as cond
 from tools import site_dd_capture as cap
@@ -297,7 +298,9 @@ def upload_photo(assessment_id):
         return redirect(back)
 
     item_key = _arg("item_key")
-    if item_key and item_key not in cl.ITEM_LABELS and not uc.is_known_item(item_key):
+    if item_key and not (item_key in cl.ITEM_LABELS or uc.is_known_item(item_key)
+                         or bank.is_bank_item(item_key)
+                         or bank.is_custom_key(item_key)):
         item_key = None
     area_id = to_int(request.args.get("area_id") or request.form.get("area_id"))
     room_id = to_int(request.args.get("room_id") or request.form.get("room_id"))
@@ -494,6 +497,15 @@ def area_detail(assessment_id, area_id):
         by_room = {r["id"]: db.get_conditions_map(conn, assessment_id, area_id, r["id"])
                    for r in rooms}
         unit_rows = db.get_findings(conn, assessment_id, area_id, None)
+        unit_catalogue = list(uc.items_for_unit())
+        unit_added = _added_items(conn, assessment_id, area_id, None, unit_catalogue)
+        # Every room's added items, so the unit roll-up counts a fireplace
+        # in the living room rather than quietly ignoring it.
+        added_by_room = {}
+        for r in rooms:
+            room_catalogue = uc.items_for_room(r["room_type"])
+            added_by_room[r["id"]] = _added_items(conn, assessment_id, area_id,
+                                                  r["id"], room_catalogue)
         # Only units with no findings yet can be overwritten by a copy, so
         # the list offered is restricted to sources that actually have a
         # layout to give.
@@ -501,13 +513,17 @@ def area_detail(assessment_id, area_id):
                   if a["id"] != area_id and db.list_rooms(conn, a["id"])]
         finding_count = db.area_finding_count(conn, area_id)
 
-    summary = uc.summarize_unit(by_room, rooms,
-                                {k: [r["condition"] for r in rows] for k, rows in unit_rows.items()})
+    summary = uc.summarize_unit(
+        by_room, rooms,
+        {k: [r["condition"] for r in rows] for k, rows in unit_rows.items()},
+        added_by_room=added_by_room, added_unit=unit_added)
     return render_template(
         "tools/site_dd_area.html",
         assessment=_load(assessment_id), area=area, rooms=rooms,
         room_types=uc.ROOM_TYPES, room_type_labels=uc.ROOM_TYPE_LABELS,
-        unit_items=uc.items_for_unit(), unit_rows=unit_rows,
+        unit_items=unit_catalogue, added_items=unit_added, unit_rows=unit_rows,
+        bank_groups=_bank_picker(bank.SCOPE_UNIT, None, unit_catalogue, unit_added),
+        add_scope="unit",
         summary=summary, room_summaries={r["room"]["id"]: r for r in summary["rooms"]},
         conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
         condition_colours=cond.CONDITION_COLOURS,
@@ -531,8 +547,11 @@ def save_area(assessment_id, area_id):
             "status": request.form.get("status"),
             "notes": (request.form.get("notes") or "").strip() or None,
         })
+        unit_catalogue = list(uc.items_for_unit())
+        items = unit_catalogue + _added_items(conn, assessment_id, area_id,
+                                              None, unit_catalogue)
         db.upsert_findings(conn, assessment_id,
-                           _collect(request.form, uc.items_for_unit(),
+                           _collect(request.form, items,
                                     scope=cond.SCOPE_UNIT, area_id=area_id, room_id=None,
                                     existing=db.get_findings(conn, assessment_id,
                                                              area_id, None)))
@@ -644,6 +663,8 @@ def room_detail(assessment_id, area_id, room_id):
         rooms = db.list_rooms(conn, area_id)
         rows = db.get_findings(conn, assessment_id, area_id, room_id)
         shots = db.list_media_for_scope(conn, assessment_id, area_id, room_id)
+        catalogue = list(uc.items_for_room(room["room_type"]))
+        added = _added_items(conn, assessment_id, area_id, room_id, catalogue)
 
     # Keyed by FINDING, not by item: with two sinks in a room, "which one
     # is this photo of" is only answerable through finding_id.
@@ -659,7 +680,10 @@ def room_detail(assessment_id, area_id, room_id):
     return render_template(
         "tools/site_dd_room.html",
         assessment=_load(assessment_id), area=area, room=room, rooms=rooms,
-        items=uc.items_for_room(room["room_type"]), rows=rows,
+        items=catalogue, added_items=added, rows=rows,
+        bank_groups=_bank_picker(bank.SCOPE_ROOM, room["room_type"],
+                                 catalogue, added),
+        add_scope="room",
         room_type_labels=uc.ROOM_TYPE_LABELS,
         conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
         condition_colours=cond.CONDITION_COLOURS,
@@ -687,8 +711,11 @@ def save_room(assessment_id, area_id, room_id):
         room = db.get_room(conn, room_id)
         if not area or not room or room["area_id"] != area_id:
             return _not_found()
+        catalogue = list(uc.items_for_room(room["room_type"]))
+        items = catalogue + _added_items(conn, assessment_id, area_id,
+                                         room_id, catalogue)
         db.upsert_findings(conn, assessment_id,
-                           _collect(request.form, uc.items_for_room(room["room_type"]),
+                           _collect(request.form, items,
                                     scope=cond.SCOPE_ROOM, area_id=area_id, room_id=room_id,
                                     existing=db.get_findings(conn, assessment_id,
                                                              area_id, room_id)))
@@ -709,6 +736,39 @@ def save_room(assessment_id, area_id, room_id):
     flash("Room saved.", "success")
     return redirect(url_for("site_dd.room_detail", assessment_id=assessment_id,
                             area_id=area_id, room_id=room_id))
+
+
+def _added_items(conn, assessment_id, area_id, room_id, catalogue):
+    """The bank picks and freeform items recorded on one scope.
+
+    Shaped exactly like checklist items, and appended to the catalogue by
+    the caller, so the form loop, _collect() and the roll-up treat them
+    identically to a fixed item. That is the whole design: an added
+    fireplace is not a special case anywhere downstream, it is the 33rd
+    item on a 32-item list.
+    """
+    known = {i["key"] for i in catalogue}
+    out = []
+    for row in db.added_item_keys(conn, assessment_id, area_id, room_id, known):
+        key = row["item_key"]
+        # A bank pick is described by the catalogue; a freeform item is
+        # described only by what somebody typed into instance_label.
+        out.append(bank.as_item(row["bank_item_key"] or key, row["instance_label"]))
+    return out
+
+
+def _bank_picker(scope, room_type, catalogue, added=()):
+    """What the picker offers here: the bank, minus anything already on
+    the page.
+
+    Two exclusions, one reason. An item the checklist already asks about
+    would become a second question about one object; an item somebody
+    already added would give two ways to reach the same row -- and the
+    right way to record a SECOND fireplace is the "Add another" control
+    under the first one, which knows it is making instance 2.
+    """
+    on_page = {i["label"] for i in catalogue} | {i["label"] for i in added}
+    return bank.grouped_for_scope(scope, room_type, on_page)
 
 
 def _collect(form, items, *, scope, area_id, room_id, existing=None):
@@ -736,6 +796,9 @@ def _collect(form, items, *, scope, area_id, room_id, existing=None):
                 "category_key": item["kind"],
                 "item_key": key,
                 "instance_no": n,
+                # Set only for a curated pick. COALESCEd in the upsert, so
+                # a form that does not know the link cannot break it.
+                "bank_item_key": item.get("bank_item_key"),
                 "instance_label": (form.get(f"label_{key}{suffix}") or "").strip() or None,
                 "condition": raw_condition if cond.is_valid(raw_condition) else None,
                 "detail": raw_detail if uc.is_valid_option(item, raw_detail) else None,
@@ -780,7 +843,8 @@ def add_instance(assessment_id):
     room_id = to_int(request.form.get("room_id"))
     scope = (request.form.get("scope") or cond.SCOPE_ROOM).strip()
 
-    known = item_key in cl.ITEM_LABELS or uc.is_known_item(item_key)
+    known = (item_key in cl.ITEM_LABELS or uc.is_known_item(item_key)
+             or bank.is_bank_item(item_key) or bank.is_custom_key(item_key))
     if not known:
         flash("Unknown item.", "danger")
         return redirect(_capture_redirect(assessment_id))
@@ -805,12 +869,88 @@ def delete_instance(assessment_id, finding_id):
         row = db.get_finding(conn, finding_id)
         if not row or row["assessment_id"] != assessment_id:
             return _not_found()
-        if int(row["instance_no"] or 1) <= 1:
+        # The first instance of a CHECKLIST item is not removable -- the
+        # question is asked of every unit whether or not it has one. An
+        # added item is different: nothing obliges it to be here, so its
+        # last instance takes the whole item away with it.
+        fixed = (row["item_key"] in cl.ITEM_LABELS or uc.is_known_item(row["item_key"]))
+        if int(row["instance_no"] or 1) <= 1 and fixed:
             flash("The first one is part of the checklist and can't be removed.",
                   "warning")
             return redirect(_capture_redirect(assessment_id))
         db.delete_instance(conn, finding_id)
     flash("Removed.", "success")
+    return redirect(_capture_redirect(assessment_id))
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/item", methods=["POST"])
+@login_required
+def add_item(assessment_id):
+    """Put something on this room or unit that the checklist does not ask
+    about -- from the bank, or typed.
+
+    One route for both, because they produce the same record. A curated
+    pick carries bank_item_key, which is what lets Branch 4 price it
+    automatically; a typed one does not, and is otherwise identical. The
+    freeform box is not a lesser path, it is the same path without a
+    reference.
+    """
+    if not _load(assessment_id):
+        return _not_found()
+    area_id = to_int(request.form.get("area_id"))
+    room_id = to_int(request.form.get("room_id"))
+    scope = (request.form.get("scope") or cond.SCOPE_ROOM).strip()
+    if scope not in cond.SCOPES:
+        scope = cond.SCOPE_ROOM
+
+    picked = (request.form.get("bank_item_key") or "").strip()
+    typed = bank.clean_label(request.form.get("custom_label") or "")
+
+    if picked:
+        entry = bank.get(picked)
+        if not entry:
+            flash("That item is not in the bank.", "danger")
+            return redirect(_capture_redirect(assessment_id))
+        item_key, bank_key, label = entry["key"], entry["key"], entry["label"]
+        category = entry["category"]
+    elif typed:
+        item_key, bank_key, label = bank.custom_key(typed), None, typed
+        category = None
+    else:
+        flash("Pick an item or type what it is.", "warning")
+        return redirect(_capture_redirect(assessment_id))
+
+    with db.get_connection() as conn:
+        db.add_item(conn, assessment_id, item_key, area_id, room_id,
+                    scope=scope, bank_item_key=bank_key, category_key=category,
+                    # A typed label is the only name the item will ever
+                    # have, so it is stored on the row itself.
+                    instance_label=typed if bank_key is None else None)
+    flash(f"Added {label}.", "success")
+    return redirect(_capture_redirect(assessment_id) + f"#item-{item_key}")
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/item/remove", methods=["POST"])
+@login_required
+def remove_item(assessment_id):
+    """Take an added item off this scope, every instance of it.
+
+    Refuses anything on the fixed checklist: those are not the
+    inspector's to remove, and letting a stray POST delete "Smoke alarm"
+    from a unit would turn a required question into an optional one.
+    """
+    if not _load(assessment_id):
+        return _not_found()
+    item_key = (request.form.get("item_key") or "").strip()
+    area_id = to_int(request.form.get("area_id"))
+    room_id = to_int(request.form.get("room_id"))
+    if item_key in cl.ITEM_LABELS or uc.is_known_item(item_key):
+        flash("That one is part of the checklist.", "warning")
+        return redirect(_capture_redirect(assessment_id))
+    with db.get_connection() as conn:
+        removed = db.delete_item(conn, assessment_id, item_key, area_id, room_id)
+    flash("Removed." if removed else "Nothing to remove.",
+          "success" if removed else "warning")
     return redirect(_capture_redirect(assessment_id))
 
 

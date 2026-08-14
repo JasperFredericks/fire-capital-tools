@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "tools/_site_dd_picker.html" import item_picker, picker_form %}
 {% block title %}{{ area.label }} - Site DD{% endblock %}
 
 {#
@@ -151,6 +152,17 @@
 </div>
 
 <!-- ── Unit-wide items ────────────────────────────────────────────────── -->
+{# Additive actions post here, so removing an item never submits (or
+   half-submits) the unit's answers. #}
+{{ picker_form(assessment, add_scope, area.id, none, 'pickerForm') }}
+
+<form id="unitItemForm" method="POST"
+      action="{{ url_for('site_dd.remove_item', assessment_id=assessment.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="area_id" value="{{ area.id }}">
+  <input type="hidden" name="scope" value="unit">
+</form>
+
 <form method="POST" action="{{ url_for('site_dd.save_area', assessment_id=assessment.id, area_id=area.id) }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
@@ -181,10 +193,13 @@
     <p class="page-subtitle" style="margin:0 0 6px;">
       Things that belong to the dwelling rather than to any one room.
     </p>
-    {% for item in unit_items %}
+    {% for item in unit_items + added_items %}
       {% set row = (unit_rows.get(item.key) or [none])[0] %}
       <div class="sdd-item">
-        <div class="sdd-item-label">{{ item.label }}</div>
+        <div class="sdd-item-label">
+          {{ item.label }}
+          {%- if item.added %}<span class="sdd-added-tag">Added</span>{% endif %}
+        </div>
         {% if item.hint %}<div class="sdd-item-hint">{{ item.hint }}</div>{% endif %}
         {% if item.kind == 'choice' %}
           <div class="sdd-cond-row" role="radiogroup" aria-label="{{ item.label }}">
@@ -212,8 +227,18 @@
         {% endif %}
         <input class="sdd-note" type="text" name="note_{{ item.key }}"
                value="{{ row.note if row and row.note else '' }}" placeholder="Note (optional)">
+        {% if item.added %}
+          <button type="submit" form="unitItemForm" class="sdd-instance-remove"
+                  formaction="{{ url_for('site_dd.remove_item', assessment_id=assessment.id) }}"
+                  name="item_key" value="{{ item.key }}">
+            Remove {{ item.label|lower }} from this unit
+          </button>
+        {% endif %}
       </div>
     {% endfor %}
+
+    {# One picker for the unit, same rule as the room page. #}
+    {{ item_picker(add_scope, bank_groups, 'pickerForm') }}
   </div>
 
   <div class="sdd-navbar">
