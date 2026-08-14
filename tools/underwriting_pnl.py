@@ -207,7 +207,7 @@ def build_expenses(expense_lines: list[dict[str, Any]],
     return out
 
 
-MANAGEMENT_FEE_CATEGORY = "Management Fee (% of EGI)"
+MANAGEMENT_FEE_CATEGORY = "Management Fee (% of rental income)"
 
 
 def management_fee_group(result: dict[str, Any],
@@ -215,8 +215,12 @@ def management_fee_group(result: dict[str, Any],
     """The management fee as a statement line, or None when there isn't one.
 
     The fee is a scenario assumption, not an expense line: it is a
-    percentage of each year's effective gross income rather than a row in
-    the T12, so build_expenses cannot see it. But project_noi_series
+    percentage of each year's net rental income rather than a row in the
+    T12, so build_expenses cannot see it. This module reads the figure the
+    engine already computed rather than recomputing it, so a change of
+    basis reaches the statement automatically -- only the heading has to
+    follow, and it does, because a line labelled with the wrong base is
+    worse than one with no label. But project_noi_series
     subtracts it to reach NOI, which means a statement that omitted it
     would not add up -- and would say so loudly, because reconcile()
     compares against the engine's own totals.

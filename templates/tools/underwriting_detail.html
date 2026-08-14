@@ -613,7 +613,7 @@
       {% for key, label in [
           ('purchase_price','Purchase Price ($)'), ('closing_costs_pct','Closing Costs (%)'),
           ('acquisition_fee_pct','Acquisition Fee (%)'),
-          ('management_fee_pct','Management Fee (% of EGI/yr)'),
+          ('management_fee_pct','Management Fee (% of rental income/yr)'),
           ('capital_transaction_fee_pct','Capital Transaction Fee (% of sale)'),
           ('ltv_pct','LTV (%)'), ('interest_rate_pct','Interest Rate (%)'),
           ('amort_years','Amortization (yrs)'), ('hold_years','Hold Period (yrs)'),
@@ -625,6 +625,13 @@
           <label class="form-label" for="{{ key }}">{{ label }}</label>
           <input class="form-input" type="text" id="{{ key }}" name="{{ key }}"
                  value="{{ scenario[key] if scenario[key] is not none else '' }}">
+          {% if key == 'management_fee_pct' %}
+            <span class="stat-box-sub">
+              Charged on rent collected &mdash; gross potential rent less loss to
+              lease, vacancy, concessions and bad debt. Other income (parking,
+              laundry, pet fees) is excluded.
+            </span>
+          {% endif %}
         </div>
       {% endfor %}
     </div>
