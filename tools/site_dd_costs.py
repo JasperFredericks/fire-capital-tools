@@ -53,9 +53,13 @@ REQUIRED_PROVENANCE_PHRASE = "not from a cost table"
 
 SOURCE_LABELS = {
     SOURCE_MANUAL: "Inspector estimate — not from a cost table",
-    # Written by nothing today. Phrased now so the wording is decided
-    # before the numbers arrive rather than in a hurry alongside them.
-    SOURCE_REFERENCE: "From the reference cost table",
+    # A researched national average, and labelled as one. It is a
+    # starting point for a budget, not a bid, and saying so is what stops
+    # a plausible-looking figure being read as a quote.
+    SOURCE_REFERENCE: (
+        "Researched market average — a national figure, not a quote for "
+        "this building"
+    ),
     SOURCE_NONE: "",
 }
 
@@ -100,6 +104,41 @@ def clean_cost(value: Any) -> float | None:
     if cost <= 0 or cost > MAX_UNIT_COST:
         return None
     return cost
+
+
+def reference_for(finding: dict[str, Any],
+                  flooring_type: str | None = None) -> Any:
+    """The researched reference cost for a finding, or None.
+
+    The ONLY route by which est_cost_source can become 'reference'. A
+    figure that is not in site_dd_reference_costs cannot become one at
+    render time, by construction: nothing else in this codebase writes
+    that value, and a test asserts it.
+    """
+    from tools import site_dd_reference_costs as refcosts
+
+    key = finding.get("bank_item_key") or finding.get("item_key")
+    return refcosts.for_item(key, flooring_type)
+
+
+def apply_reference(finding: dict[str, Any],
+                    flooring_type: str | None = None) -> dict[str, Any]:
+    """Fill in a reference cost, WITHOUT ever overwriting a person.
+
+    An inspector standing in the room beats a national average, always.
+    So a finding that already carries a manual estimate is returned
+    untouched -- the reference figure is not "better information", it is
+    a default for the rows nobody has priced.
+    """
+    if normalize_source(finding.get("est_cost_source")) == SOURCE_MANUAL:
+        return finding
+    ref = reference_for(finding, flooring_type)
+    if ref is None:
+        return finding
+    return {**finding,
+            "est_unit_cost": ref.unit_cost,
+            "est_cost_source": SOURCE_REFERENCE,
+            "_reference": ref}
 
 
 def source_for(cost: Any, previous: Any = None) -> str:

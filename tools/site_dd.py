@@ -55,6 +55,8 @@ from tools import site_dd_bank as bank
 from tools import site_dd_checklist as cl
 from tools import site_dd_conditions as cond
 from tools import site_dd_costs as costs
+from tools import site_dd_reference_costs as refcosts
+from tools import site_dd_capex_export as capex_export
 from tools import site_dd_capture as cap
 from tools import site_dd_unit_checklist as uc
 from tools import upload_limits as ul
@@ -1032,6 +1034,66 @@ def remove_item(assessment_id):
     flash("Removed." if removed else "Nothing to remove.",
           "success" if removed else "warning")
     return redirect(_capture_redirect(assessment_id))
+
+
+@site_dd_bp.route("/assessment/<int:assessment_id>/capex.<fmt>")
+@login_required
+def capex_budget(assessment_id, fmt):
+    """The capital budget for an assessment.
+
+    Reference costs are applied HERE, at export time, rather than being
+    written into the findings table. A national average is not something
+    the inspector recorded, and storing it beside their judgements would
+    make the two indistinguishable a month later -- the whole point of
+    est_cost_source. A manual estimate always wins: apply_reference
+    leaves a priced row alone.
+    """
+    assessment = _load(assessment_id)
+    if not assessment:
+        return _not_found()
+    if fmt not in ("pdf", "xlsx"):
+        flash("Capex export is available as PDF or Excel.", "warning")
+        return redirect(url_for("site_dd.detail", assessment_id=assessment_id))
+
+    with db.get_connection(  ) as conn:
+        findings = db.list_all_findings(conn, assessment_id)
+        rooms = {}
+        for area in db.list_areas(conn, assessment_id):
+            for room in db.list_rooms(conn, area["id"]):
+                rooms[room["id"]] = room
+
+    # A flooring cost depends on the material, which is a separate item
+    # on the same room -- so the type is looked up per room rather than
+    # assumed.
+    flooring_by_room = {f.get("room_id"): f.get("detail")
+                        for f in findings if f.get("item_key") == "flooring_type"}
+
+    labels = dict(cl.ITEM_LABELS)
+    for room_type, _ in uc.ROOM_TYPES:
+        labels.update({i["key"]: i["label"] for i in uc.items_for_room(room_type)})
+    labels.update({i["key"]: i["label"] for i in uc.items_for_unit()})
+    labels.update({b["key"]: b["label"] for b in bank.BANK_ITEMS})
+
+    # Only findings that actually record a problem reach the budget. A
+    # water heater in good order is not a capital line.
+    work = [f for f in findings if f.get("condition") in cond.WORK_CONDITIONS]
+    priced = [costs.apply_reference(f, flooring_by_room.get(f.get("room_id")))
+              for f in work]
+    lines = capex_export.build_lines(priced, labels)
+    summary = capex_export.summarize(lines)
+
+    import tempfile
+    out = (Path(tempfile.mkdtemp())
+           / capex_export.suggested_filename(assessment, fmt))
+    if fmt == "pdf":
+        capex_export.build_pdf(out, assessment, lines, summary)
+        mime = "application/pdf"
+    else:
+        capex_export.build_xlsx(out, assessment, lines, summary)
+        mime = ("application/vnd.openxmlformats-officedocument"
+                ".spreadsheetml.sheet")
+    return send_file(str(out), as_attachment=True, download_name=out.name,
+                     mimetype=mime)
 
 
 # ── Report ───────────────────────────────────────────────────────────────
