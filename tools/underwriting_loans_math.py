@@ -38,21 +38,30 @@ Payment and balance arithmetic is deliberately not reimplemented: both
 delegate to deal_analyzer_math, so a single loan entered here and the
 same loan entered as an LTV produce identical numbers by construction.
 
-── BACKLOG: interest-only periods ───────────────────────────────────────
+── Interest-only periods ────────────────────────────────────────────────
 
-Not built, and asked for. Michelle's Quick Deal Analyzer notes included
-"needs an IO period"; that request belongs here rather than there, since
-a single-point cap-rate valuation has no debt in it at all. Interest-only
-exists nowhere in this codebase today -- deal_analyzer_math's header
-lists it as explicitly out of scope.
+Built, per loan. `io_years` on a loan row means that many years of
+interest-only payments before amortization begins; absent or 0 is an
+ordinary loan and takes the arithmetic that was here before.
 
-What it would take: a per-loan io_years, a payment of principal * rate /
-12 during the IO months, and a balance that stays at the original
-principal until amortization begins. annual_payment() and balance_after()
-are the two functions that would change, and both are shared with the
-single-loan path through deal_analyzer_math -- so this is a shared-engine
-change and needs the equivalence discipline every other one has had, not
-a quick edit. Scoped separately and deliberately not started here.
+Two things about it are worth stating rather than inferring.
+
+The convention. When the IO period ends the loan amortizes over its
+REMAINING term -- the original amortization minus the IO period -- so it
+still matures on its original schedule. The alternative, re-amortizing
+over the full original term, lowers the payment and pushes a larger
+balloon past the original maturity. Both are real conventions and they
+are not interchangeable: on a $4.5M loan with two years of IO they differ
+by roughly $27,000 of balloon. Every result carries balloon_convention so
+a page never has to assert which one produced its number.
+
+Debt service is a series, not a scalar. That is the part that reached
+further than the backlog note predicted: annual_payment() and
+balance_after() were named as the two functions to change, but the engine
+computed one debt-service figure and subtracted it from every year, so
+the per-year loop had to change too. A stack where only the senior loan
+is interest-only steps up partway through the hold while the rest stays
+level, which no single number describes.
 """
 
 from __future__ import annotations
@@ -104,15 +113,64 @@ def validate(loans: list[dict[str, Any]]) -> None:
         if int(_f(amort)) > MAX_AMORT_YEARS:
             raise LoanValidationError(
                 f"{name}: amortization must be {MAX_AMORT_YEARS} years or less.")
+        io = loan.get("io_years")
+        if io not in (None, ""):
+            io_years = int(_f(io))
+            if io_years < 0:
+                raise LoanValidationError(
+                    f"{name}: interest-only period cannot be negative.")
+            # An IO period at least as long as the amortization means the
+            # loan never retires a dollar of principal. That is not an
+            # unusual structure, it is an impossible one as described.
+            if io_years >= int(_f(amort)):
+                raise LoanValidationError(
+                    f"{name}: an interest-only period of {io_years} years with "
+                    f"a {int(_f(amort))}-year amortization means the loan never "
+                    f"amortizes — the interest-only period must be shorter.")
+
+
+def io_months_of(loan: dict[str, Any]) -> int:
+    """This loan's interest-only period, in months.
+
+    Per loan, not per scenario. The schema carries every other economic
+    term on the row already, and the lending matches: an IO period is
+    common on senior acquisition debt while a mezzanine piece may be
+    interest-only for its whole term or amortizing from day one. Forcing
+    one IO period across a stack would model a structure nobody wrote.
+    """
+    return int(_f(loan.get("io_years"))) * 12
 
 
 def annual_payment(loan: dict[str, Any]) -> float:
-    """This loan's own level annual debt service."""
+    """This loan's own level annual debt service, ignoring any IO period.
+
+    Unchanged on purpose: this is the fully-amortizing payment, which is
+    still a well-defined figure and still what a loan with no IO period
+    pays every year. Callers that need the time-varying figure ask
+    debt_service_series() for it.
+    """
     amount = _f(loan.get("amount"))
     if amount <= 0:
         return 0.0
     return dam.monthly_payment(amount, _f(loan.get("rate_pct")) / 100.0,
                                int(_f(loan.get("amort_years")))) * 12
+
+
+def debt_service_series(loan: dict[str, Any], hold_years: int) -> list[float]:
+    """This loan's annual debt service for each year of the hold.
+
+    With no IO period this is annual_payment() repeated, by the same
+    expression, so a stack of ordinary loans totals to exactly what it
+    did before interest-only existed.
+    """
+    amount = _f(loan.get("amount"))
+    hold = int(hold_years)
+    if amount <= 0:
+        return [0.0] * hold
+    return dam.annual_debt_service_series(
+        amount, _f(loan.get("rate_pct")) / 100.0,
+        int(_f(loan.get("amort_years"))), hold,
+        io_months=io_months_of(loan))
 
 
 def balance_after(loan: dict[str, Any], months: int) -> float:
@@ -121,7 +179,8 @@ def balance_after(loan: dict[str, Any], months: int) -> float:
     if amount <= 0:
         return 0.0
     return dam.remaining_balance(amount, _f(loan.get("rate_pct")) / 100.0,
-                                 int(_f(loan.get("amort_years"))), months)
+                                 int(_f(loan.get("amort_years"))), months,
+                                 io_months=io_months_of(loan))
 
 
 def implied_ltv_pct(loans: list[dict[str, Any]], purchase_price: Any) -> float | None:
@@ -158,10 +217,15 @@ def summarize(loans: list[dict[str, Any]], hold_years: int,
     validate(loans)
     months = int(hold_years) * 12
 
+    hold = int(hold_years)
     per_loan = []
     running_ds = 0.0
     for idx, loan in enumerate(loans, start=1):
-        payment = annual_payment(loan)
+        series = debt_service_series(loan, hold)
+        # Year 1 is what the per-loan DSCR has always divided by, and with
+        # no IO period it is still the level payment exactly.
+        payment = series[0] if series else annual_payment(loan)
+        io_years = int(_f(loan.get("io_years")))
         running_ds += payment
         per_loan.append({
             "sort_order": loan.get("sort_order", idx),
@@ -169,8 +233,15 @@ def summarize(loans: list[dict[str, Any]], hold_years: int,
             "amount": _f(loan.get("amount")),
             "rate_pct": _f(loan.get("rate_pct")),
             "amort_years": int(_f(loan.get("amort_years"))),
+            "io_years": io_years,
             "annual_debt_service": payment,
             "monthly_debt_service": payment / 12 if payment else 0.0,
+            "debt_service_series": series,
+            # What this loan pays once amortization starts. None when it
+            # never changes, so the page can say "and nothing changes".
+            "post_io_debt_service": (series[io_years]
+                                     if io_years and io_years < hold else None),
+            "io_covers_whole_hold": bool(io_years and io_years >= hold),
             "balance_at_exit": balance_after(loan, months),
             "dscr": (noi_year1 / payment) if (noi_year1 is not None and payment > 0) else None,
             "cumulative_dscr": (noi_year1 / running_ds)
@@ -178,6 +249,12 @@ def summarize(loans: list[dict[str, Any]], hold_years: int,
         })
 
     debt_service = sum(l["annual_debt_service"] for l in per_loan)
+    # The stack's debt service year by year: each loan amortizes on its own
+    # terms, so a stack where only the senior loan is interest-only steps
+    # up partway through while the rest stays level.
+    combined_series = [sum(l["debt_service_series"][t] for l in per_loan)
+                       for t in range(hold)] if per_loan else [0.0] * hold
+    any_io = any(l["io_years"] for l in per_loan)
     return {
         "loans": per_loan,
         "loan_count": len(per_loan),
@@ -188,6 +265,15 @@ def summarize(loans: list[dict[str, Any]], hold_years: int,
         "implied_ltv_pct": implied_ltv_pct(loans, purchase_price),
         "combined_dscr": (noi_year1 / debt_service)
                          if (noi_year1 is not None and debt_service > 0) else None,
+        "debt_service_series": combined_series,
+        "has_io": any_io,
+        # The stack's own step-up year: the first year its combined debt
+        # service differs from year 1. None when nothing steps up.
+        "post_io_debt_service": next(
+            (v for v in combined_series[1:] if v != combined_series[0]), None)
+        if any_io else None,
+        "io_covers_whole_hold": bool(per_loan) and all(
+            l["io_covers_whole_hold"] for l in per_loan),
     }
 
 
@@ -202,4 +288,10 @@ def engine_debt(summary: dict[str, Any]) -> dict[str, Any]:
         "loan_amount": summary["loan_amount"],
         "annual_debt_service": summary["annual_debt_service"],
         "balance_at_exit": summary["balance_at_exit"],
+        # Only sent when a loan in the stack actually has an IO period.
+        # Absent, the engine spreads the scalar across the hold exactly as
+        # it did before this key existed, so a stack of ordinary loans
+        # takes the same path it always took.
+        **({"debt_service_series": summary["debt_service_series"]}
+           if summary.get("has_io") else {}),
     }

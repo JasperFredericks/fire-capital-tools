@@ -9,9 +9,15 @@ Same standalone principle as tools/market_data_service.py.
 
 Scope is a levered-returns read on *one* set of assumptions: a single
 blended NOI growth rate, a single amortizing loan held to sale, and a cap-
-rate exit. No unit-level rent roll, no itemized expenses, no interest-only
-period, no refinance, no sensitivity tables -- those belong in the
-Underwriting tool.
+rate exit. No unit-level rent roll, no itemized expenses, no refinance, no
+sensitivity tables -- those belong in the Underwriting tool.
+
+Interest-only periods live here now, because the amortization arithmetic
+they change has always lived here and Underwriting borrows it. They are
+not exposed by Deal Analyzer: that tool sets no io_years, the parameter
+defaults to absent, and the debt-service series collapses to the level
+payment it always was. A test asserts Deal Analyzer's route never sets
+the field, and another asserts the no-IO result is unchanged key by key.
 
 Two conventions worth stating because reasonable models differ:
 
@@ -37,6 +43,15 @@ from typing import Any
 # the upper bound at +1000%, comfortably past any plausible real return.
 IRR_LOW = -0.9999
 IRR_HIGH = 10.0
+
+# How the balloon was arrived at, carried in every result so a page never
+# has to assert a convention it did not compute. See _amortizing_months().
+BALLOON_CONVENTION_LEVEL = (
+    "Level payment amortizing over the full term from day one.")
+BALLOON_CONVENTION_IO = (
+    "Interest-only first, then amortizing over the REMAINING term "
+    "(amortization period minus the interest-only period), so the loan "
+    "still matures on its original schedule.")
 # Convergence is measured on the *rate* interval, not on the NPV residual
 # in dollars. An NPV threshold would be scale-dependent: the same rate
 # precision leaves a residual of cents on a $1M deal and fractions of a
@@ -58,6 +73,23 @@ class ValidationError(ValueError):
 
 # ── Loan mechanics ───────────────────────────────────────────────────────
 
+def _payment_over_months(principal: float, annual_rate: float, n: int) -> float:
+    """Level payment amortizing `principal` over exactly `n` months.
+
+    The month-denominated form of monthly_payment(), extracted rather
+    than duplicated so there is one amortization formula in this codebase
+    and not two. An interest-only period leaves a remaining term measured
+    in months, and rounding it back to whole years would move the
+    payment. The operations and their order are exactly what
+    monthly_payment() has always performed, so the year-denominated
+    result is unchanged to the bit.
+    """
+    r = annual_rate / 12.0
+    if r == 0:
+        return principal / n
+    return principal * r / (1 - (1 + r) ** -n)
+
+
 def monthly_payment(principal: float, annual_rate: float, amort_years: int) -> float:
     """Level monthly payment fully amortizing `principal` over
     `amort_years`. Handles a 0% loan as straight-line principal repayment
@@ -67,26 +99,113 @@ def monthly_payment(principal: float, annual_rate: float, amort_years: int) -> f
     n = amort_years * 12
     if n <= 0:
         raise ValidationError("Amortization period must be at least 1 year.")
-    r = annual_rate / 12.0
-    if r == 0:
-        return principal / n
-    return principal * r / (1 - (1 + r) ** -n)
+    return _payment_over_months(principal, annual_rate, n)
 
 
-def remaining_balance(principal: float, annual_rate: float, amort_years: int, months_paid: int) -> float:
+def io_monthly_payment(principal: float, annual_rate: float) -> float:
+    """One month's interest on `principal`, and nothing more.
+
+    An interest-only payment retires no principal, which is the whole
+    point: the balance is still the original principal on the day the IO
+    period ends. Uses the same monthly rate the amortization math uses,
+    so the two agree on what a month of interest costs.
+    """
+    if principal <= 0:
+        return 0.0
+    return principal * (annual_rate / 12.0)
+
+
+def _amortizing_months(amort_years: int, io_months: int) -> int:
+    """Months of amortization left once the IO period ends.
+
+    Convention B, and the reason it is stated everywhere a balloon is
+    shown: after interest-only ends the loan amortizes over its REMAINING
+    term -- the original amortization minus the IO period -- so it still
+    matures on its original schedule. The alternative convention
+    re-amortizes over the full original term, which lowers the payment
+    and pushes a larger balloon out past the original maturity date. Both
+    are real; they are not interchangeable, and on a $4.5M loan with two
+    years of IO they differ by about $27,000 of balloon.
+    """
+    n = amort_years * 12 - io_months
+    if n <= 0:
+        raise ValidationError(
+            "An interest-only period as long as the amortization period "
+            "would mean the loan never amortizes at all.")
+    return n
+
+
+def remaining_balance(principal: float, annual_rate: float, amort_years: int,
+                      months_paid: int, *, io_months: int = 0) -> float:
     """Outstanding principal after `months_paid` payments -- the balloon
     that gets retired out of sale proceeds. Never returns a negative
     balance: if the loan fully amortizes within the hold, the balance is
-    zero, not an overpayment."""
+    zero, not an overpayment.
+
+    `io_months` is keyword-only and defaults to 0, which takes the
+    original code path below unchanged -- every existing caller, and
+    every Deal Analyzer call, computes exactly what it always did.
+    """
     if principal <= 0:
         return 0.0
-    pmt = monthly_payment(principal, annual_rate, amort_years)
+    if io_months <= 0:
+        pmt = monthly_payment(principal, annual_rate, amort_years)
+        r = annual_rate / 12.0
+        if r == 0:
+            return max(0.0, principal - pmt * months_paid)
+        grown = (1 + r) ** months_paid
+        balance = principal * grown - pmt * ((grown - 1) / r)
+        return max(0.0, balance)
+
+    # Nothing amortizes while only interest is being paid, so the balance
+    # on the last day of the IO period is still the original principal.
+    n_remaining = _amortizing_months(amort_years, io_months)
+    if months_paid <= io_months:
+        return principal
+    pmt = _payment_over_months(principal, annual_rate, n_remaining)
     r = annual_rate / 12.0
+    m = months_paid - io_months
     if r == 0:
-        return max(0.0, principal - pmt * months_paid)
-    grown = (1 + r) ** months_paid
+        return max(0.0, principal - pmt * m)
+    grown = (1 + r) ** m
     balance = principal * grown - pmt * ((grown - 1) / r)
     return max(0.0, balance)
+
+
+def annual_debt_service_series(principal: float, annual_rate: float,
+                               amort_years: int, hold_years: int, *,
+                               io_months: int = 0) -> list[float]:
+    """Annual debt service for operating years 1..hold_years.
+
+    A list rather than a scalar because an interest-only period makes
+    debt service a function of time. With `io_months` at 0 -- every Deal
+    Analyzer call and every scenario with no IO period -- this returns
+    the single level payment repeated, computed by the same
+    `monthly_payment(...) * 12` expression the engine used before this
+    function existed, so the default path is identical elementwise rather
+    than merely close.
+    """
+    h = int(hold_years)
+    if h < 1:
+        raise ValidationError("Hold period must be at least 1 year.")
+    if principal <= 0:
+        return [0.0] * h
+    if io_months <= 0:
+        return [monthly_payment(principal, annual_rate, amort_years) * 12] * h
+
+    n_remaining = _amortizing_months(amort_years, io_months)
+    io_pmt = io_monthly_payment(principal, annual_rate)
+    am_pmt = _payment_over_months(principal, annual_rate, n_remaining)
+
+    series = []
+    for year in range(1, h + 1):
+        first, last = (year - 1) * 12 + 1, year * 12
+        # Months of this year that fall inside the IO period. A whole-year
+        # io_years never splits a year, but the arithmetic is written for
+        # the general case rather than assuming the caller's units.
+        io_count = min(12, max(0, min(last, io_months) - first + 1))
+        series.append(io_pmt * io_count + am_pmt * (12 - io_count))
+    return series
 
 
 # ── IRR ──────────────────────────────────────────────────────────────────
@@ -240,22 +359,48 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
             "Total cash invested works out to zero or less — reduce LTV or add closing costs."
         )
 
+    # Interest-only period, single-loan mode. Absent on every Deal
+    # Analyzer call -- that tool has no such field -- so this is 0 and the
+    # series below collapses to the level payment it has always been.
+    io_years = int(float(inputs.get("io_years") or 0))
+    if io_years < 0:
+        raise ValidationError("Interest-only period cannot be negative.")
+    if io_years and io_years >= amort_years:
+        raise ValidationError(
+            f"An interest-only period of {io_years} years with a "
+            f"{amort_years}-year amortization means the loan never "
+            f"amortizes — the IO period must be shorter.")
+    io_months = io_years * 12
+
     if debt is None:
-        debt_service = monthly_payment(loan, rate, amort_years) * 12 if loan > 0 else 0.0
+        debt_service_series = annual_debt_service_series(
+            loan, rate, amort_years, H, io_months=io_months) if loan > 0 else [0.0] * H
     else:
-        debt_service = float(debt["annual_debt_service"])
+        # A multi-loan stack whose loans have their own IO periods hands
+        # over a series; one without them hands over the scalar it always
+        # did, which is spread across the hold unchanged.
+        supplied = debt.get("debt_service_series")
+        debt_service_series = ([float(x) for x in supplied] if supplied
+                               else [float(debt["annual_debt_service"])] * H)
+    if len(debt_service_series) != H:
+        raise ValidationError(
+            "Debt service series must have one entry per year of the hold.")
+
+    # The headline scalar stays year 1, which is what it has always been.
+    debt_service = debt_service_series[0]
 
     # Year-by-year operations, from the supplied NOI series.
     years = []
     cumulative = 0.0
     for t in range(1, H + 1):
         noi_t = float(noi_series[t - 1])
-        cf_t = noi_t - debt_service
+        ds_t = debt_service_series[t - 1]
+        cf_t = noi_t - ds_t
         cumulative += cf_t
         years.append({
             "year": t,
             "noi": noi_t,
-            "debt_service": debt_service,
+            "debt_service": ds_t,
             "cash_flow": cf_t,
             "cumulative_cash_flow": cumulative,
         })
@@ -275,7 +420,8 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
     capital_transaction_fee = gross_sale * ctf_pct
     # The multi-loan override supplies the summed payoff of the stack; with
     # no override this is the single LTV-sized loan, exactly as before.
-    balance_at_exit = (remaining_balance(loan, rate, amort_years, H * 12)
+    balance_at_exit = (remaining_balance(loan, rate, amort_years, H * 12,
+                                         io_months=io_months)
                        if debt is None else float(debt["balance_at_exit"]))
     net_sale_levered = (gross_sale - selling_costs - capital_transaction_fee
                         - balance_at_exit)
@@ -310,6 +456,30 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
         dscr = None
         dscr_reason = "No debt — DSCR does not apply to an all-cash purchase."
 
+    # DSCR through the hold, not just at the front of it.
+    #
+    # With an interest-only period the year-1 ratio is the most flattering
+    # number in the deal: debt service is lower precisely because no
+    # principal is being retired. Quoting it alone would let a scenario
+    # clear a covenant on screen and breach it the year IO ends. So the
+    # per-year series is reported, along with the minimum across the hold
+    # -- the binding constraint, and the figure any pass/fail grading is
+    # meant to read.
+    dscr_by_year = [
+        (float(noi_series[t]) / debt_service_series[t])
+        if debt_service_series[t] > 0 else None
+        for t in range(H)
+    ]
+    measured = [d for d in dscr_by_year if d is not None]
+    dscr_min = min(measured) if measured else None
+    dscr_min_year = (dscr_by_year.index(dscr_min) + 1) if measured else None
+
+    # The two phases, named, so the page never has to infer them.
+    io_year_count = min(io_years, H) if io_years else 0
+    dscr_io = dscr_by_year[0] if io_year_count else None
+    dscr_post_io = (dscr_by_year[io_year_count]
+                    if io_year_count and io_year_count < H else None)
+
     cash_on_cash = operating_cf[0] / equity
 
     return {
@@ -319,6 +489,18 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
         "equity_invested": equity,
         "annual_debt_service": debt_service,
         "monthly_debt_service": debt_service / 12 if debt_service else 0.0,
+        "debt_service_series": debt_service_series,
+        "io_years": io_years,
+        # Which convention produced the balloon, carried with the result
+        # rather than written into a template. A balloon is only
+        # interpretable alongside the amortization convention behind it,
+        # so the two travel together.
+        "balloon_convention": (BALLOON_CONVENTION_IO if io_years
+                               else BALLOON_CONVENTION_LEVEL),
+        # True when the IO period outlasts the hold: the loan never
+        # amortizes a dollar before sale, so the balloon is the original
+        # principal. Legal and sometimes intended, never silent.
+        "io_covers_whole_hold": bool(io_years and io_years >= H),
         "years": years,
         "noi_exit_year": noi_exit,
         "gross_sale_price": gross_sale,
@@ -332,6 +514,11 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
         "cash_on_cash": cash_on_cash,
         "dscr": dscr,
         "dscr_reason": dscr_reason,
+        "dscr_by_year": dscr_by_year,
+        "dscr_min": dscr_min,
+        "dscr_min_year": dscr_min_year,
+        "dscr_io": dscr_io,
+        "dscr_post_io": dscr_post_io,
         "levered_irr": levered_irr,
         "levered_irr_reason": levered_irr_reason,
         "unlevered_irr": unlevered_irr,

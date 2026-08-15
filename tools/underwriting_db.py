@@ -150,6 +150,10 @@ SCENARIO_NUMERIC = (
     "hold_years", "exit_cap_pct", "selling_costs_pct", "vacancy_pct",
     "concessions_pct", "bad_debt_pct", "other_income_annual",
     "rent_growth_pct", "expense_growth_pct", "amort_years",
+    # Single-loan interest-only period. Belongs here rather than in
+    # SCENARIO_PARTIAL_ONLY because the assumptions form is exactly where
+    # it is edited, beside the amortization it modifies.
+    "io_years",
 )
 
 # Deliberately NOT in SCENARIO_NUMERIC. That tuple drives the assumptions
@@ -201,11 +205,24 @@ _SCENARIO_ADDED_COLUMNS = (
     # falls back to DEFAULT_CONTINGENCY_PCT, so the 5% is a default rather
     # than a hardcoded rule -- a scenario can set 0 and mean it.
     ("capex_contingency_pct", "REAL"),
+    # Years of interest-only payments before amortization begins, for
+    # single-loan mode. NULL is an ordinary fully-amortizing loan, which
+    # is every scenario that predates this column -- so the migration
+    # cannot move a stored result.
+    ("io_years", "INTEGER"),
 )
 
 
 _EXPENSE_ADDED_COLUMNS = (
     ("growth_schedule", "TEXT"),
+)
+
+
+# Per loan, not per scenario: every other economic term already sits on
+# the loan row, and a stack can legitimately mix an interest-only senior
+# loan with an amortizing mezzanine piece.
+_LOAN_ADDED_COLUMNS = (
+    ("io_years", "INTEGER"),
 )
 
 
@@ -220,6 +237,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
     for name, coltype in _EXPENSE_ADDED_COLUMNS:
         if name not in existing_exp:
             conn.execute(f"ALTER TABLE underwriting_expense_lines ADD COLUMN {name} {coltype}")
+    existing_loan = {row[1] for row in conn.execute(
+        "PRAGMA table_info(underwriting_loans)")}
+    for name, coltype in _LOAN_ADDED_COLUMNS:
+        if name not in existing_loan:
+            conn.execute(f"ALTER TABLE underwriting_loans ADD COLUMN {name} {coltype}")
     conn.commit()
 
 
@@ -418,15 +440,19 @@ def replace_loans(conn, scenario_id: int, loans: list[dict[str, Any]]) -> None:
     conn.execute("DELETE FROM underwriting_loans WHERE scenario_id = ?", (scenario_id,))
     conn.executemany(
         """INSERT INTO underwriting_loans
-           (scenario_id, sort_order, name, amount, rate_pct, amort_years)
-           VALUES (:scenario_id,:sort_order,:name,:amount,:rate_pct,:amort_years)""",
+           (scenario_id, sort_order, name, amount, rate_pct, amort_years, io_years)
+           VALUES (:scenario_id,:sort_order,:name,:amount,:rate_pct,:amort_years,
+                   :io_years)""",
         [{"scenario_id": scenario_id,
           "sort_order": l.get("sort_order", i),
           "name": (str(l.get("name") or f"Loan {i + 1}")[:MAX_LABEL_LEN]).strip()
                   or f"Loan {i + 1}",
           "amount": l.get("amount"),
           "rate_pct": l.get("rate_pct"),
-          "amort_years": l.get("amort_years")}
+          "amort_years": l.get("amort_years"),
+          # None, not 0: an absent interest-only period is unset, and the
+          # math treats NULL and 0 identically anyway.
+          "io_years": l.get("io_years") if l.get("io_years") not in ("", None) else None}
          for i, l in enumerate(loans)])
     conn.commit()
 

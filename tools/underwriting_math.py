@@ -624,6 +624,11 @@ def _engine_inputs(scenario: dict[str, Any],
         # Deal Analyzer has no such field and never sets this key, so its
         # path through the engine is untouched.
         "capital_transaction_fee_pct": _f(scenario.get("capital_transaction_fee_pct")),
+        # Single-loan interest-only period. Absent on every scenario that
+        # predates the column and on every Deal Analyzer call, where it is
+        # 0 and the debt-service series collapses to the level payment.
+        # Ignored in multi-loan mode, where each loan carries its own.
+        "io_years": int(scenario.get("io_years") or 0),
         "noi_year1": 1.0,
         "noi_growth_pct": 0.0,
     }

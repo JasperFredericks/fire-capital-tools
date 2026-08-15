@@ -116,7 +116,8 @@ def _scenario_form(form) -> dict:
     out = {}
     for key in db.SCENARIO_NUMERIC:
         raw = form.get(key)
-        value = to_int(raw) if key in ("amort_years", "hold_years") else to_float(raw)
+        value = (to_int(raw) if key in ("amort_years", "hold_years", "io_years")
+                 else to_float(raw))
         out[key] = DEFAULTS.get(key) if value is None else value
     out["name"] = (form.get("name") or "Base case").strip()
     out["notes"] = (form.get("notes") or "").strip() or None
@@ -664,6 +665,7 @@ def save_loans(scenario_id):
         amounts = request.form.getlist("loan_amount")
         rates = request.form.getlist("loan_rate_pct")
         amorts = request.form.getlist("loan_amort_years")
+        io_years = request.form.getlist("loan_io_years")
 
         loans = []
         for i in range(len(amounts)):
@@ -676,6 +678,10 @@ def save_loans(scenario_id):
                 "amount": amount,
                 "rate_pct": to_float(rates[i]) if i < len(rates) else None,
                 "amort_years": to_int(amorts[i]) if i < len(amorts) else None,
+                # Blank means no interest-only period, which is None rather
+                # than 0 so the column reads as unset. The math treats the
+                # two identically.
+                "io_years": to_int(io_years[i]) if i < len(io_years) else None,
             })
 
         # Validated before it is stored: an unmodellable stack saved now is
