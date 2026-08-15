@@ -440,3 +440,101 @@ class ProvenanceCannotBeFalsifiedTests(unittest.TestCase):
         tampered["noi_direct"] = 900_000.0
         self.assertEqual(m.analyze(tampered)["noi_provenance"], m.PROVENANCE_ENTERED,
                          "a hand-edited NOI is 'Entered', never 'Actuals'")
+
+
+class BuildupOverrideIsVisibleTests(unittest.TestCase):
+    """A directly entered NOI wins, and now says so.
+
+    The precedence is deliberate and unchanged: `noi_direct` beats the
+    build-up. What was wrong is that it won in silence -- the build-up
+    section simply did not render -- so a figure left in that box made
+    every expense percentage above it look like it was being ignored.
+    Michelle reported that as an expense-percentage bug, which is exactly
+    how it presents.
+
+    These tests pin the flag that lets the page say it, and pin that the
+    arithmetic around it did not move.
+    """
+
+    BUILDUP = {
+        "gross_potential_income": 1_000_000.0,
+        "vacancy_pct": 5.0,
+        "other_income": 50_000.0,
+        "operating_expenses": 50.0,
+        "expenses_mode": "pct",
+        "cap_rate_pct": 6.0,
+        "noi_provenance": m.PROVENANCE_BUILDUP,
+    }
+
+    def test_an_ordinary_buildup_is_not_flagged(self):
+        self.assertFalse(m.analyze(dict(self.BUILDUP))["buildup_overridden"])
+
+    def test_a_direct_noi_over_a_buildup_is_flagged(self):
+        result = m.analyze(dict(self.BUILDUP, noi_direct=750_000.0))
+        self.assertTrue(result["buildup_overridden"])
+
+    def test_a_direct_noi_with_no_buildup_is_not_flagged(self):
+        """Nothing was overridden, so nothing is claimed to have been."""
+        result = m.analyze({"noi_direct": 750_000.0, "cap_rate_pct": 6.0,
+                            "noi_provenance": m.PROVENANCE_ENTERED})
+        self.assertFalse(result["buildup_overridden"])
+
+    def test_one_buildup_field_is_enough_to_count_as_overridden(self):
+        for field in ("gross_potential_income", "vacancy_pct",
+                      "other_income", "operating_expenses"):
+            with self.subTest(field=field):
+                result = m.analyze({field: self.BUILDUP[field],
+                                    "noi_direct": 750_000.0,
+                                    "cap_rate_pct": 6.0,
+                                    "noi_provenance": m.PROVENANCE_ENTERED})
+                self.assertTrue(result["buildup_overridden"])
+
+    def test_precedence_is_unchanged(self):
+        result = m.analyze(dict(self.BUILDUP, noi_direct=750_000.0))
+        self.assertEqual(result["noi"], 750_000.0)
+        self.assertIsNone(result["buildup"])
+        self.assertEqual(result["implied_price"], 750_000.0 / 0.06)
+
+    def test_the_flag_does_not_touch_the_numbers(self):
+        """Every figure is what it was before the flag existed."""
+        plain = m.analyze(dict(self.BUILDUP))
+        self.assertEqual(plain["noi"], 500_000.0)
+        self.assertEqual(plain["implied_price"], 500_000.0 / 0.06)
+        self.assertEqual(plain["buildup"]["operating_expenses"], 500_000.0)
+
+    def test_the_percentage_is_charged_on_egi_not_gross(self):
+        """The mechanism Michelle's report described, pinned as correct.
+
+        Reported as 'the percentage is not subtracted'; it always was.
+        Gross and EGI are kept deliberately different here so applying
+        the rate to the wrong base cannot pass.
+        """
+        result = m.analyze({"gross_potential_income": 1_000_000.0,
+                            "vacancy_pct": 10.0, "other_income": 0.0,
+                            "operating_expenses": 50.0, "expenses_mode": "pct",
+                            "cap_rate_pct": 6.0,
+                            "noi_provenance": m.PROVENANCE_BUILDUP})
+        buildup = result["buildup"]
+        self.assertEqual(buildup["effective_gross_income"], 900_000.0)
+        self.assertEqual(buildup["operating_expenses"], 450_000.0)
+        self.assertEqual(buildup["noi"], 450_000.0)
+
+    def test_the_two_expense_modes_agree_on_eagle_rock(self):
+        """Dollar mode was unreachable in the UI for a while; both paths
+        must land on the same figure now that it is back."""
+        egi = EAGLE["effective_gross_income"]
+        opex = EAGLE["operating_expenses"]
+        shared = {"gross_potential_income": EAGLE["gross_potential_income"],
+                  "vacancy_pct": EAGLE["deductions"]
+                  / EAGLE["gross_potential_income"] * 100,
+                  "other_income": EAGLE["other_income"],
+                  "cap_rate_pct": 6.0,
+                  "noi_provenance": m.PROVENANCE_BUILDUP}
+        as_amount = m.analyze(dict(shared, expenses_mode="amount",
+                                   operating_expenses=opex))
+        as_pct = m.analyze(dict(shared, expenses_mode="pct",
+                                operating_expenses=opex / egi * 100))
+        self.assertAlmostEqual(as_amount["noi"], EAGLE["noi"], places=6)
+        self.assertAlmostEqual(as_pct["noi"], EAGLE["noi"], places=6)
+        self.assertAlmostEqual(as_amount["implied_price"],
+                               as_pct["implied_price"], places=6)
