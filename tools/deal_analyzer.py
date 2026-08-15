@@ -47,11 +47,14 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from flask import Blueprint, current_app, flash, render_template, request
+from flask import (Blueprint, current_app, flash, redirect,
+                   render_template, request, url_for)
 from flask_login import login_required
 from werkzeug.utils import secure_filename
 
 from tools import deal_dive_db
+from tools import app_settings
+from tools import grading_settings
 from tools import quick_analyzer_math as calc
 from tools import quick_analyzer_t12 as t12
 from tools import upload_limits as ul
@@ -95,6 +98,24 @@ DEFAULTS = {
 }
 
 TEXT_FIELDS = tuple(DEFAULTS)
+
+
+def _grading():
+    """The bands to grade with, and their provenance.
+
+    Read on every request rather than cached: the settings screen is the
+    same session, and a stale band would grade the next valuation against
+    thresholds the user has just changed.
+    """
+    try:
+        with app_settings.get_connection() as conn:
+            return grading_settings.load(conn)
+    except Exception:
+        # A settings store that cannot be opened must not take the
+        # analyzer down. Falling back to the placeholders is the same
+        # behaviour as never having configured anything, and the
+        # disclaimer that comes with them is then accurate.
+        return grading_settings.load_defaults()
 
 
 def _deal_context():
@@ -228,9 +249,41 @@ def _form_from_t12(form, totals):
     return updated
 
 
+@deal_analyzer_bp.route("/settings", methods=["POST"])
+@login_required
+def save_grading():
+    """Set or clear the grading bands.
+
+    Clearing is offered beside saving rather than buried: a user who
+    configured thresholds and wants the placeholders back must be able to
+    get exactly the original behaviour, and the page says what clearing
+    means.
+    """
+    back = url_for("deal_analyzer.index")
+    if request.form.get("reset"):
+        with app_settings.get_connection() as conn:
+            cleared = grading_settings.clear(conn)
+        flash("Grading bands reset to the unconfirmed placeholders."
+              if cleared else "There were no configured bands to reset.",
+              "success" if cleared else "warning")
+        return redirect(back)
+
+    try:
+        with app_settings.get_connection() as conn:
+            grading_settings.save(conn, request.form.get("green"),
+                                  request.form.get("yellow"),
+                                  request.form.get("orange"))
+    except grading_settings.InvalidThresholds as exc:
+        flash(str(exc), "danger")
+        return redirect(back)
+    flash("Grading bands saved. They now apply to every valuation.", "success")
+    return redirect(back)
+
+
 @deal_analyzer_bp.route("/", methods=["GET", "POST"])
 @login_required
 def index():
+    grading = _grading()
     """GET renders the form (prefilled from ?deal_id=N when present).
 
     POST does one of two things depending on whether a file came with it:
@@ -280,7 +333,9 @@ def index():
         # a NOI, not a target yield.
         if not t12_error and (form.get("cap_rate_pct") or "").strip():
             try:
-                result = calc.analyze(_collect_inputs(form))
+                result = calc.analyze(_collect_inputs(form),
+                                      grade_bands=grading["bands"],
+                                      grade_provenance=grading["provenance"])
             except calc.ValidationError as exc:
                 error = str(exc)
         elif not t12_error and not importing:
@@ -298,6 +353,7 @@ def index():
         deal=deal,
         deal_id=deal_id,
         range_choices=calc.RANGE_CHOICES,
-        grade_bands=calc.GRADE_BANDS,
+        grade_bands=grading["bands"],
+        grading=grading,
         feedback_tool=FEEDBACK_TOOL_NAME,
     )
