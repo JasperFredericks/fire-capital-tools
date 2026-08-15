@@ -260,3 +260,34 @@ class StoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StorageWarningTests(unittest.TestCase):
+    """An unset path does not corrupt anything -- but it silently reverts
+    grading to a DIFFERENT standard, and the page looks normal
+    afterwards. That is only noticed when a deal grades unexpectedly."""
+
+    def setUp(self):
+        import os
+        self.old = os.environ.get("APP_SETTINGS_DB_PATH")
+
+    def tearDown(self):
+        import os
+        if self.old is None:
+            os.environ.pop("APP_SETTINGS_DB_PATH", None)
+        else:
+            os.environ["APP_SETTINGS_DB_PATH"] = self.old
+
+    def test_unset_reports_as_not_persistent(self):
+        import os
+        os.environ.pop("APP_SETTINGS_DB_PATH", None)
+        st = gs.storage_status()
+        self.assertFalse(st["persistent"])
+        self.assertEqual(st["env_var"], "APP_SETTINGS_DB_PATH")
+
+    def test_a_configured_path_reports_as_persistent(self):
+        import os
+        os.environ["APP_SETTINGS_DB_PATH"] = "/data/app_settings.db"
+        st = gs.storage_status()
+        self.assertTrue(st["persistent"])
+        self.assertEqual(Path(st["path"]), Path("/data/app_settings.db"))

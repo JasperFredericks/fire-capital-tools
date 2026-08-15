@@ -109,13 +109,15 @@ def _grading():
     """
     try:
         with app_settings.get_connection() as conn:
-            return grading_settings.load(conn)
+            return dict(grading_settings.load(conn),
+                        storage=grading_settings.storage_status())
     except Exception:
         # A settings store that cannot be opened must not take the
         # analyzer down. Falling back to the placeholders is the same
         # behaviour as never having configured anything, and the
         # disclaimer that comes with them is then accurate.
-        return grading_settings.load_defaults()
+        return dict(grading_settings.load_defaults(),
+                    storage=grading_settings.storage_status())
 
 
 def _deal_context():

@@ -122,6 +122,24 @@ def bands_from(green: float, yellow: float, orange: float
     )
 
 
+def storage_status() -> dict[str, Any]:
+    """Whether a configured threshold will survive a deploy.
+
+    Passed straight through from app_settings so the analyzer page can
+    warn without importing the store itself.
+
+    Worth warning about even though the fallback is safe: an unset path
+    does not corrupt anything -- the tool reverts to the placeholder
+    bands and the placeholder disclaimer, which is an accurate
+    description of what it is then using. But Michelle's configured
+    thresholds are gone, and the page would look entirely normal
+    afterwards. A silent reversion to a DIFFERENT grading standard is
+    exactly the kind of thing that is only noticed when a deal grades
+    unexpectedly.
+    """
+    return app_settings.storage_status()
+
+
 def load(conn: sqlite3.Connection) -> dict[str, Any]:
     """The bands to grade with, and where they came from.
 

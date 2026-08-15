@@ -281,6 +281,18 @@
     will pay, and only the firm can make it. Three bounds; red is
     whatever is left, so there is nothing to set for it.
   #}
+  {% if grading and grading.storage and not grading.storage.persistent %}
+    <div class="result-note" style="border-left:3px solid #b91c1c; margin-bottom:12px;">
+      <strong>Configured thresholds will reset on the next deploy.</strong>
+      <code>{{ grading.storage.env_var }}</code> is not set, so settings are
+      being written to <code>{{ grading.storage.path }}</code> on the container
+      filesystem. Nothing breaks when they are lost &mdash; grading falls back
+      to the placeholder bands below &mdash; but it falls back <em>silently</em>,
+      and the page looks normal afterwards. Set
+      <code>{{ grading.storage.env_var }}=/data/app_settings.db</code> to fix it.
+    </div>
+  {% endif %}
+
   <details class="qa-grade-settings" {{ 'open' if grading and not grading.configured }}>
     <summary style="cursor:pointer; font-weight:600; padding:6px 0;">
       {% if grading and grading.configured %}
