@@ -147,24 +147,66 @@ class SchemaTests(unittest.TestCase):
             row = db.get_findings(conn, aid)["roof"][0]
         self.assertEqual(row["est_cost_source"], "none")
 
-    def test_nothing_in_the_codebase_writes_a_reference_cost(self):
-        """The reference table is still gated on the numbers decision.
-        The column shipping ahead of it is the point; the column being
-        quietly populated with placeholders is not."""
-        # Comments describing the column are expected and are not writes.
-        comment_starts = ("#", "--", "*", '"', "'")
-        assignments = []
-        for path in sorted(Path("tools").glob("*.py")):
-            if path.name == "site_dd_costs.py":
-                continue
-            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    def test_only_one_module_can_assign_a_reference_source(self):
+        """The gate has moved, not been removed.
+
+        'reference' used to be unwritable because the table did not
+        exist. Now it does, and the constraint that matters is
+        different: a reference figure must come FROM that table and may
+        never be invented at render time. So exactly one module assigns
+        the value, and it is the one that reads the table.
+        """
+        from pathlib import Path as _P
+
+        assigning = []
+        for path in sorted(_P("tools").glob("*.py")):
+            if path.name == "site_dd_reference_costs.py":
+                continue          # defines the table, assigns nothing
+            for line in path.read_text(encoding="utf-8").splitlines():
                 body = line.strip()
-                if body.startswith(comment_starts):
+                # Only '#' -- a dict key looks like a quoted string, and
+                # skipping those skipped the one line this test is for.
+                if body.startswith("#"):
                     continue
-                if "reference" in body and ("est_cost_source" in body
-                                            or "SOURCE_REFERENCE" in body):
-                    assignments.append(f"{path}:{n}: {body}")
-        self.assertEqual(assignments, [])
+                if "est_cost_source" in body and "SOURCE_REFERENCE" in body:
+                    assigning.append(path.name)
+                    break
+        self.assertEqual(assigning, ["site_dd_costs.py"],
+                         f"reference costs are assigned in {assigning}")
+
+    def test_no_template_can_invent_a_reference_cost(self):
+        from pathlib import Path as _P
+        offenders = [p.name for p in _P("templates").rglob("*.html")
+                     if "SOURCE_REFERENCE" in p.read_text(encoding="utf-8")
+                     or "est_cost_source = " in p.read_text(encoding="utf-8")]
+        self.assertEqual(offenders, [])
+
+    def test_every_applied_figure_exists_in_the_table(self):
+        from tools import site_dd_reference_costs as refcosts
+        for key in refcosts.REFERENCE_COSTS:
+            out = costs.apply_reference({"item_key": key})
+            with self.subTest(key):
+                self.assertEqual(out["est_cost_source"], costs.SOURCE_REFERENCE)
+                self.assertEqual(out["est_unit_cost"],
+                                 refcosts.REFERENCE_COSTS[key].unit_cost)
+
+    def test_an_item_absent_from_the_table_gets_nothing(self):
+        """No fallback, no interpolation, no nearest-neighbour guess."""
+        for key in ("foundation", "landscaping", "not_a_real_item",
+                    "hazmat_indicators"):
+            with self.subTest(key):
+                out = costs.apply_reference({"item_key": key})
+                self.assertIsNone(out.get("est_unit_cost"))
+                self.assertNotEqual(out.get("est_cost_source"),
+                                    costs.SOURCE_REFERENCE)
+
+    def test_a_manual_estimate_is_never_overwritten(self):
+        """An inspector who stood in the room beats a national average."""
+        out = costs.apply_reference(
+            {"item_key": "water_heater", "est_unit_cost": 900.0,
+             "est_cost_source": costs.SOURCE_MANUAL})
+        self.assertEqual(out["est_unit_cost"], 900.0)
+        self.assertEqual(out["est_cost_source"], costs.SOURCE_MANUAL)
 
     def test_no_runtime_path_can_produce_a_reference_source(self):
         for value in ("450", 450, "$1,250", "", None, "reference", 0, -1):
