@@ -113,6 +113,11 @@ DEFAULT_RANGE_PCT = 10
 
 PROVENANCE_UNCONFIRMED = "unconfirmed"
 PROVENANCE_CONFIRMED = "confirmed"
+# Set by the person using the tool, through the settings screen. A third
+# state on purpose: "the user chose these" is neither an invented
+# placeholder nor an externally validated standard, and collapsing it
+# into either would misstate what the number is.
+PROVENANCE_USER = "user"
 
 # Every disclaimer must contain this phrase. A test asserts it, so the
 # label cannot be softened into meaninglessness by a later edit.
@@ -126,6 +131,16 @@ GRADE_DISCLAIMERS = {
     ),
     PROVENANCE_CONFIRMED: (
         "Bands confirmed by FIRE Capital."
+    ),
+    # Deliberately claims exactly as much as is true and no more. These
+    # ARE the firm's standard, because the firm set them -- so the
+    # placeholder hedging would be false modesty. But they are still not
+    # an industry benchmark and not from the template, and saying so
+    # keeps the colour from acquiring authority it has not earned.
+    PROVENANCE_USER: (
+        "Your configured thresholds. These are FIRE Capital's own standard "
+        "for this tool — not an industry benchmark, and not from the "
+        "Michael Blank template."
     ),
 }
 
@@ -324,7 +339,9 @@ def price_range(price: float, range_pct: float) -> dict[str, float]:
 
 # ── Grading ──────────────────────────────────────────────────────────────
 
-def grade(asking_price: Any, implied: float) -> dict[str, Any]:
+def grade(asking_price: Any, implied: float, *,
+          bands: tuple[GradeBand, ...] | None = None,
+          provenance: str | None = None) -> dict[str, Any]:
     """Grade an asking price against the implied price.
 
     Returns a dict with `graded: False` and a reason rather than raising
@@ -332,13 +349,25 @@ def grade(asking_price: Any, implied: float) -> dict[str, Any]:
     valuation with no asking price to compare against is a perfectly
     valid use of this tool, not an error.
 
-    The bands are unconfirmed placeholders. Every return carries the
-    disclaimer so a caller cannot render the colour without it.
+    `bands` and `provenance` are injected by the caller when the user has
+    configured their own thresholds. They default to the module constants,
+    so a caller that knows nothing about settings -- and every scenario
+    that predates them -- gets exactly the behaviour it got before, down
+    to the disclaimer string.
+
+    This module stays pure. It does not read the settings itself; it is
+    handed them, so the arithmetic remains testable without a database.
+
+    Every return carries the disclaimer for whichever bands were used, so
+    a caller cannot render the colour without its provenance.
     """
+    bands = bands or GRADE_BANDS
+    provenance = provenance or GRADE_PROVENANCE
     base = {
-        "provenance": GRADE_PROVENANCE,
-        "disclaimer": GRADE_DISCLAIMERS[GRADE_PROVENANCE],
-        "bands": GRADE_BANDS,
+        "provenance": provenance,
+        "disclaimer": GRADE_DISCLAIMERS.get(
+            provenance, GRADE_DISCLAIMERS[PROVENANCE_UNCONFIRMED]),
+        "bands": bands,
     }
 
     ask = _f(asking_price)
@@ -354,8 +383,8 @@ def grade(asking_price: Any, implied: float) -> dict[str, Any]:
 
     over_pct = (ask - implied) / implied * 100.0
 
-    band = GRADE_BANDS[-1]
-    for candidate in GRADE_BANDS:
+    band = bands[-1]
+    for candidate in bands:
         if candidate.max_over_pct is not None and over_pct <= candidate.max_over_pct:
             band = candidate
             break
@@ -376,7 +405,9 @@ def grade(asking_price: Any, implied: float) -> dict[str, Any]:
 
 # ── Entry point ──────────────────────────────────────────────────────────
 
-def analyze(inputs: dict[str, Any]) -> dict[str, Any]:
+def analyze(inputs: dict[str, Any], *,
+            grade_bands: tuple[GradeBand, ...] | None = None,
+            grade_provenance: str | None = None) -> dict[str, Any]:
     """The Quick Deal Analyzer entry point.
 
     Two NOI routes converge here. When `noi_direct` carries a value the
@@ -387,6 +418,12 @@ def analyze(inputs: dict[str, Any]) -> dict[str, Any]:
     is why provenance is an input rather than something inferred here:
     only the caller knows whether the numbers in the form arrived by hand
     or out of a parsed file.
+
+    `grade_bands`/`grade_provenance` are passed straight to grade(). The
+    VALUATION IS NOT AFFECTED BY THEM in any way -- they reach only the
+    grading layer that sits on top of an already-computed price, and a
+    test asserts the implied price is bit-identical whatever bands are
+    supplied.
     """
     provenance = inputs.get("noi_provenance") or PROVENANCE_BUILDUP
     if provenance not in VALID_PROVENANCE:
@@ -438,7 +475,11 @@ def analyze(inputs: dict[str, Any]) -> dict[str, Any]:
         "implied_price": price,
         "range": price_range(price, range_pct),
         "range_choices": RANGE_CHOICES,
-        "grade": grade(inputs.get("asking_price"), price),
+        # Configured bands travel through untouched. None means the
+        # module defaults, which is exactly what every existing caller
+        # passes by not passing anything.
+        "grade": grade(inputs.get("asking_price"), price,
+                       bands=grade_bands, provenance=grade_provenance),
         "price_per_unit": (price / int(inputs["unit_count"]))
                           if _f(inputs.get("unit_count")) else None,
     }

@@ -255,17 +255,85 @@
   {% endif %}
 
   {#
-    The disclaimer is not decoration. These bands were invented by the
-    assistant that built this tool because a grade was asked for and no
-    source for one existed; Michelle had not supplied her real thresholds
-    when this shipped. tools/deal_readiness_defaults.py set the precedent
-    for saying so on screen rather than rendering an invented threshold
-    confidently. It renders whether or not a grade was produced, so the
-    bands can never be read without their provenance.
+    The disclaimer is not decoration, and it now has two things to say.
+
+    Unconfigured, the bands were invented by the assistant that built this
+    tool because a grade was asked for and no source existed --
+    tools/deal_readiness_defaults.py set the precedent for saying so on
+    screen rather than rendering an invented threshold confidently.
+
+    Configured, they are the firm's own standard and the placeholder
+    hedging would be false modesty -- but they are still not an industry
+    benchmark, and the wording says so. Either way it renders whether or
+    not a grade was produced, so the bands can never be read without
+    their provenance.
   #}
-  <div class="result-note" style="margin-bottom:14px;">
+  <div class="result-note" style="margin-bottom:14px;
+       {% if result.grade.provenance == 'user' %}border-left:3px solid #059669;{% endif %}">
     <strong>Where these bands come from:</strong> {{ result.grade.disclaimer }}
+    {% if grading and grading.configured and grading.updated_at %}
+      <span class="stat-box-sub">Set {{ grading.updated_at[:10] }}.</span>
+    {% endif %}
   </div>
+
+  {#
+    Editable because a grading band is a statement about what the firm
+    will pay, and only the firm can make it. Three bounds; red is
+    whatever is left, so there is nothing to set for it.
+  #}
+  {% if grading and grading.storage and not grading.storage.persistent %}
+    <div class="result-note" style="border-left:3px solid #b91c1c; margin-bottom:12px;">
+      <strong>Configured thresholds will reset on the next deploy.</strong>
+      <code>{{ grading.storage.env_var }}</code> is not set, so settings are
+      being written to <code>{{ grading.storage.path }}</code> on the container
+      filesystem. Nothing breaks when they are lost &mdash; grading falls back
+      to the placeholder bands below &mdash; but it falls back <em>silently</em>,
+      and the page looks normal afterwards. Set
+      <code>{{ grading.storage.env_var }}=/data/app_settings.db</code> to fix it.
+    </div>
+  {% endif %}
+
+  <details class="qa-grade-settings" {{ 'open' if grading and not grading.configured }}>
+    <summary style="cursor:pointer; font-weight:600; padding:6px 0;">
+      {% if grading and grading.configured %}
+        Change these thresholds
+      {% else %}
+        Set your own thresholds
+      {% endif %}
+    </summary>
+    <form method="POST" action="{{ url_for('deal_analyzer.save_grading') }}"
+          style="margin:10px 0 16px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <p class="page-subtitle" style="margin:0 0 10px;">
+        How far above the implied price an asking price may sit and still
+        earn each colour. Each must be tighter than the one below it, or a
+        band could never be reached.
+      </p>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:12px;">
+        {% for key, label in [('green','Green — up to'), ('yellow','Yellow — up to'),
+                              ('orange','Orange — up to')] %}
+          <div class="form-group">
+            <label class="form-label" for="grade_{{ key }}">{{ label }} (%)</label>
+            <input class="form-input" type="text" id="grade_{{ key }}" name="{{ key }}"
+                   value="{{ grading.values[key] if grading else '' }}">
+          </div>
+        {% endfor %}
+        <div class="form-group">
+          <label class="form-label">Red</label>
+          <div class="stat-box-sub" style="padding-top:9px;">
+            Everything above Orange. Nothing to set.
+          </div>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary">Save thresholds</button>
+      {% if grading and grading.configured %}
+        <button type="submit" name="reset" value="1" class="btn btn-ghost"
+                onclick="return confirm('Reset to the unconfirmed placeholder bands?');">
+          Reset to placeholders
+        </button>
+      {% endif %}
+    </form>
+  </details>
 
   <div class="table-wrap">
     <table class="rent-comps-table">
