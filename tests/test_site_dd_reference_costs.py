@@ -246,3 +246,55 @@ class ExportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReadabilityTests(unittest.TestCase):
+    """The 'Not priced' sheet is the thing that goes to Michelle. A list
+    meant to be read by somebody who does not work in this codebase must
+    not be written in its identifiers."""
+
+    def _labels(self):
+        labels = dict(cl.ITEM_LABELS)
+        for room_type, _ in uc.ROOM_TYPES:
+            labels.update({i["key"]: i["label"]
+                           for i in uc.items_for_room(room_type)})
+        labels.update({i["key"]: i["label"] for i in uc.items_for_unit()})
+        labels.update({b["key"]: b["label"] for b in bank.BANK_ITEMS})
+        return labels
+
+    def test_the_unpriced_report_uses_human_labels_when_given_them(self):
+        rows = ref.unpriced_report(self._labels())
+        by_key = {r["key"]: r["label"] for r in rows}
+        self.assertEqual(by_key["ada_parking_path"], "ADA parking & path of travel")
+        self.assertEqual(by_key["appliance_dishwasher"], "Dishwasher")
+        self.assertEqual(by_key["wd_hookups"], "W/D hookups only")
+
+    def test_almost_every_unpriced_item_has_a_real_label(self):
+        """A raw key surviving into the list means an item nobody named."""
+        labels = self._labels()
+        raw = [r["key"] for r in ref.unpriced_report(labels)
+               if r["label"] == r["key"]]
+        # concrete_flooring is a flooring MATERIAL, not a checklist item,
+        # so it legitimately has no item label of its own.
+        self.assertEqual(raw, ["concrete_flooring"], f"unlabelled: {raw}")
+
+    def test_the_export_sheets_carry_labels(self):
+        import io
+        import tempfile
+        from openpyxl import load_workbook
+        from tools import site_dd_capex_export as capex
+
+        out = Path(tempfile.mkdtemp()) / "b.xlsx"
+        capex.build_xlsx(out, {"property_label": "T"}, [], capex.summarize([]),
+                         self._labels())
+        wb = load_workbook(out)
+        un = wb["Not priced"]
+        self.assertEqual([c.value for c in un[1]][:2], ["Item", "Key"])
+        first_col = {un.cell(row=r, column=1).value
+                     for r in range(2, un.max_row + 1)}
+        self.assertIn("ADA parking & path of travel", first_col)
+        ref_sheet = wb["Reference costs"]
+        self.assertEqual([c.value for c in ref_sheet[1]][:2], ["Item", "Key"])
+
+
+from pathlib import Path  # noqa: E402
