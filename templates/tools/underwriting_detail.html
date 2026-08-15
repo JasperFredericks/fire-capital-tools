@@ -70,9 +70,27 @@
       <div class="stat-box-sub">Year-1 NOI &divide; price</div></div>
     <div class="stat-box"><div class="stat-box-label">Cash-on-Cash (Yr 1)</div>
       <div class="stat-box-value">{{ pct(r.cash_on_cash) }}</div></div>
-    <div class="stat-box"><div class="stat-box-label">DSCR (Yr 1)</div>
-      <div class="stat-box-value">{{ '{:,.2f}x'.format(r.dscr) if r.dscr is not none else '—' }}</div>
-      <div class="stat-box-sub">{{ r.dscr_reason or 'Year-1 NOI ÷ debt service' }}</div></div>
+    {#
+      With an interest-only period the year-1 ratio is the most flattering
+      number in the deal -- debt service is lower precisely because no
+      principal is being retired. Showing it alone would let a scenario
+      clear a covenant on screen and breach it the year IO ends, so the
+      box reports the minimum across the hold and names both phases.
+    #}
+    <div class="stat-box"><div class="stat-box-label">
+        DSCR{% if r.io_years %} (lowest year){% else %} (Yr 1){% endif %}</div>
+      {% if r.io_years and r.dscr_min is not none %}
+        <div class="stat-box-value">{{ '{:,.2f}x'.format(r.dscr_min) }}</div>
+        <div class="stat-box-sub">
+          {{ '{:,.2f}x'.format(r.dscr_io) }} during the interest-only period{%
+            if r.dscr_post_io is not none %},
+          {{ '{:,.2f}x'.format(r.dscr_post_io) }} from year {{ r.io_years + 1 }}{%
+            endif %}. Lowest is year {{ r.dscr_min_year }}.
+        </div>
+      {% else %}
+        <div class="stat-box-value">{{ '{:,.2f}x'.format(r.dscr) if r.dscr is not none else '—' }}</div>
+        <div class="stat-box-sub">{{ r.dscr_reason or 'Year-1 NOI ÷ debt service' }}</div>
+      {% endif %}</div>
     <div class="stat-box"><div class="stat-box-label">Levered IRR</div>
       <div class="stat-box-value">{{ pct(r.levered_irr) }}</div>
       <div class="stat-box-sub">{% if r.levered_irr_reason %}Not computable — {{ r.levered_irr_reason }}{% else %}Over {{ scenario.hold_years }} years{% endif %}</div></div>
@@ -95,8 +113,32 @@
       </div></div>
     <div class="stat-box"><div class="stat-box-label">Annual Debt Service</div>
       <div class="stat-box-value">{{ money(r.annual_debt_service) }}</div>
-      <div class="stat-box-sub">{{ money(r.monthly_debt_service) }} per month</div></div>
+      <div class="stat-box-sub">
+        {{ money(r.monthly_debt_service) }} per month{% if r.io_years %},
+        interest-only{% endif %}</div></div>
   </div>
+  {#
+    The whole point of surfacing this: debt service is no longer one
+    number for the whole hold, and the year it changes is the year the
+    coverage ratio is worst.
+  #}
+  {% if r.io_years %}
+    <p class="result-note" style="border-left:3px solid #b45309;">
+      <strong>Interest-only for the first
+      {{ r.io_years }} year{{ '' if r.io_years == 1 else 's' }}.</strong>
+      Debt service is {{ money(r.debt_service_series[0]) }} a year while no
+      principal is being retired{% if not r.io_covers_whole_hold %}, then
+      {{ money(r.debt_service_series[r.io_years]) }} from year
+      {{ r.io_years + 1 }}, when the loan begins amortizing over its
+      remaining {{ scenario.amort_years - r.io_years }} years so it still
+      matures on its original schedule{% endif %}.
+      {% if r.io_covers_whole_hold %}
+        The interest-only period covers the entire {{ scenario.hold_years }}-year
+        hold, so <strong>no principal is repaid before sale and the payoff is
+        the full original loan amount</strong>, {{ money(r.loan_amount) }}.
+      {% endif %}
+    </p>
+  {% endif %}
   <p class="page-subtitle">
     Equity {{ money(r.equity_invested) }} &middot; loan {{ money(r.loan_amount) }} &middot;
     annual debt service {{ money(r.annual_debt_service) }}.
@@ -616,7 +658,8 @@
           ('management_fee_pct','Management Fee (% of rental income/yr)'),
           ('capital_transaction_fee_pct','Capital Transaction Fee (% of sale)'),
           ('ltv_pct','LTV (%)'), ('interest_rate_pct','Interest Rate (%)'),
-          ('amort_years','Amortization (yrs)'), ('hold_years','Hold Period (yrs)'),
+          ('amort_years','Amortization (yrs)'),
+          ('io_years','Interest-Only Period (yrs)'), ('hold_years','Hold Period (yrs)'),
           ('exit_cap_pct','Exit Cap Rate (%)'), ('selling_costs_pct','Selling Costs (%)'),
           ('vacancy_pct','Vacancy (%)'), ('concessions_pct','Concessions (%)'),
           ('bad_debt_pct','Bad Debt (%)'), ('other_income_annual','Other Income ($/yr)'),
@@ -625,6 +668,15 @@
           <label class="form-label" for="{{ key }}">{{ label }}</label>
           <input class="form-input" type="text" id="{{ key }}" name="{{ key }}"
                  value="{{ scenario[key] if scenario[key] is not none else '' }}">
+          {% if key == 'io_years' %}
+            <span class="stat-box-sub">
+              Years of interest-only payments before amortization begins.
+              Blank or 0 is an ordinary amortizing loan. Afterwards the loan
+              amortizes over its <strong>remaining</strong> term
+              &mdash; the amortization above minus this &mdash; so it still
+              matures on its original schedule.
+            </span>
+          {% endif %}
           {% if key == 'management_fee_pct' %}
             <span class="stat-box-sub">
               Charged on rent collected &mdash; gross potential rent less loss to
@@ -708,7 +760,7 @@
       <table class="rent-comps-table">
         <thead>
           <tr>
-            <th>Loan</th><th>Amount</th><th>Rate</th><th>Amort</th>
+            <th>Loan</th><th>Amount</th><th>Rate</th><th>Amort</th><th>IO</th>
             <th>Annual Debt Service</th><th>Balance at Exit</th>
             <th>DSCR (this loan)</th><th>DSCR (through this loan)</th>
           </tr>
@@ -720,7 +772,16 @@
               <td>{{ money(l.amount) }}</td>
               <td>{{ '{:,.3g}%'.format(l.rate_pct) }}</td>
               <td>{{ l.amort_years }} yrs</td>
-              <td>{{ money(l.annual_debt_service) }}</td>
+              <td>{{ (l.io_years ~ ' yrs') if l.io_years else '—' }}</td>
+              <td>
+                {{ money(l.annual_debt_service) }}
+                {% if l.io_years %}
+                  <div class="stat-box-sub">
+                    interest-only{% if l.post_io_debt_service %}, then
+                    {{ money(l.post_io_debt_service) }} from year {{ l.io_years + 1 }}{% endif %}
+                  </div>
+                {% endif %}
+              </td>
               <td>{{ money(l.balance_at_exit) }}</td>
               <td>{{ '{:,.2f}x'.format(l.dscr) if l.dscr is not none else '—' }}</td>
               <td>{{ '{:,.2f}x'.format(l.cumulative_dscr) if l.cumulative_dscr is not none else '—' }}</td>
@@ -736,6 +797,25 @@
       per-lender covenants. The <em>through this loan</em> column walks the
       stack in order, so it is visible where coverage runs out.
     </p>
+    {#
+      A balloon is only interpretable next to the amortization convention
+      that produced it, so the convention is stated beside the column
+      rather than left to be assumed.
+    #}
+    {% if ds.has_io %}
+      <p class="stat-box-sub" style="margin-top:6px; color:#b45309;">
+        <strong>Balance at Exit, with interest-only debt in the stack:</strong>
+        an interest-only loan retires no principal until its IO period ends,
+        then amortizes over its <strong>remaining</strong> term (its
+        amortization minus its interest-only period), so it still matures on
+        its original schedule.
+        {% if ds.io_covers_whole_hold %}
+          Every loan here is interest-only for the whole hold, so the balance
+          at exit is the full original principal &mdash; nothing amortizes
+          before sale.
+        {% endif %}
+      </p>
+    {% endif %}
   {% else %}
     <p class="page-subtitle" style="margin-top:12px;">
       This scenario is in <strong>single-loan mode</strong>: one loan sized by the
@@ -749,8 +829,8 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <table class="rent-comps-table" id="loans-table">
       <thead>
-        <tr><th style="width:32%;">Name</th><th>Amount ($)</th><th>Rate (%)</th>
-            <th>Amortization (yrs)</th><th></th></tr>
+        <tr><th style="width:28%;">Name</th><th>Amount ($)</th><th>Rate (%)</th>
+            <th>Amortization (yrs)</th><th>Interest-only (yrs)</th><th></th></tr>
       </thead>
       <tbody id="loans-body">
         {% for l in loans %}
@@ -759,6 +839,7 @@
             <td><input class="form-input" type="text" name="loan_amount" value="{{ l.amount if l.amount is not none else '' }}"></td>
             <td><input class="form-input" type="text" name="loan_rate_pct" value="{{ l.rate_pct if l.rate_pct is not none else '' }}"></td>
             <td><input class="form-input" type="text" name="loan_amort_years" value="{{ l.amort_years if l.amort_years is not none else '' }}"></td>
+            <td><input class="form-input" type="text" name="loan_io_years" value="{{ l.io_years if l.io_years is not none else '' }}" placeholder="0"></td>
             <td><button type="button" class="btn btn-ghost" onclick="this.closest('tr').remove();">Remove</button></td>
           </tr>
         {% endfor %}
@@ -789,6 +870,7 @@
       '<td><input class="form-input" type="text" name="loan_amount" value=""></td>' +
       '<td><input class="form-input" type="text" name="loan_rate_pct" value=""></td>' +
       '<td><input class="form-input" type="text" name="loan_amort_years" value="{{ default_amort_years }}"></td>' +
+      '<td><input class="form-input" type="text" name="loan_io_years" value="" placeholder="0"></td>' +
       '<td><button type="button" class="btn btn-ghost" onclick="this.closest(\'tr\').remove();">Remove</button></td>';
   }
 </script>

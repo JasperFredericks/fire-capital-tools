@@ -128,12 +128,21 @@ def _expense_ratio(result: dict[str, Any]) -> Optional[float]:
 THRESHOLDS: tuple[Threshold, ...] = (
     Threshold(
         key="dscr",
-        label="DSCR (Year 1)",
+        label="DSCR (lowest year)",
         value=1.25,
         direction=MIN,
         fmt="ratio",
         provenance=PROVENANCE_TEMPLATE,
-        extract=lambda r: _returns(r, "dscr"),
+        # The minimum across the hold, not year 1. With an interest-only
+        # period year 1 is the most flattering year in the deal -- debt
+        # service is lower precisely because no principal is being retired
+        # -- so testing a covenant against it would pass a scenario that
+        # breaches the year IO ends. Falls back to the year-1 figure for a
+        # result computed before dscr_min existed. With no IO period and a
+        # growing NOI the two are the same number.
+        extract=lambda r: (_returns(r, "dscr_min")
+                           if _returns(r, "dscr_min") is not None
+                           else _returns(r, "dscr")),
         reason_key="dscr_reason",
         source_note="Taken from the Michael Blank template's Variables sheet.",
     ),
