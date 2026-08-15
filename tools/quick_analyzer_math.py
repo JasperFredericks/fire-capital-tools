@@ -433,7 +433,21 @@ def analyze(inputs: dict[str, Any], *,
     provenance = resolve_provenance(provenance, inputs, inputs.get("imported"))
 
     noi_direct = _f(inputs.get("noi_direct"))
+    # Precedence is unchanged and deliberate: a directly entered NOI wins.
+    # What was wrong was that it won *silently* -- the build-up section
+    # simply vanished from the result, so a stale figure in that box made
+    # every expense percentage look like it was being ignored. This flag
+    # changes nothing about which number is used; it only lets the page
+    # say that the override happened. It is set only when there was
+    # actually a build-up to override, so somebody who only ever enters
+    # NOI directly is not told their empty fields were discarded.
+    buildup_overridden = False
     if noi_direct is not None:
+        buildup_overridden = any(
+            _f(inputs.get(k)) is not None
+            for k in ("gross_potential_income", "vacancy_pct",
+                      "other_income", "operating_expenses")
+        )
         buildup = None
         noi = noi_direct
         # A directly entered figure is "Entered" unless it came out of a
@@ -467,6 +481,7 @@ def analyze(inputs: dict[str, Any], *,
     return {
         "inputs": dict(inputs),
         "buildup": buildup,
+        "buildup_overridden": buildup_overridden,
         "noi": noi,
         "noi_provenance": provenance,
         "noi_provenance_label": PROVENANCE_LABELS[provenance],

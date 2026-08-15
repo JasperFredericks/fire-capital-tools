@@ -13,3 +13,7 @@ geopandas>=1.0
 shapely>=2.0
 pyogrio>=0.9
 openai>=2.53.0,<3
+# Spec-compliant HTML5 parser. Used only by tests/test_template_structure.py,
+# which asserts on the DOM a browser actually builds from each template --
+# the string-level view is what missed the select-nesting regression.
+html5lib>=1.1

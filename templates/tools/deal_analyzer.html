@@ -154,12 +154,58 @@
           <input class="form-input" type="text" id="operating_expenses" name="operating_expenses" value="{{ form.operating_expenses }}" style="flex:1;">
           <select class="form-input" id="expenses_mode" name="expenses_mode" style="max-width:150px;">
             <option value="pct" {% if form.expenses_mode != 'amount' %}selected{% endif %}>% of EGI</option>
+            <option value="amount" {% if form.expenses_mode == 'amount' %}selected{% endif %}>$ per year</option>
+          </select>
+        </div>
+        <span class="stat-box-sub">Operating only &mdash; no debt service, no capital items.</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="noi_direct">Or enter NOI directly ($/yr)</label>
+        <input class="form-input" type="text" id="noi_direct" name="noi_direct" value="{{ form.noi_direct }}" placeholder="301,304">
+        <span class="stat-box-sub">Overrides the build-up above when filled in.</span>
+      </div>
+    </div>
+
+    <div class="scorecard-mini-title" style="margin:14px 0 8px;">Value It</div>
+    <div class="da-grid-3" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
+      <div class="form-group">
+        <label class="form-label" for="cap_rate_pct">Target Cap Rate (%)</label>
+        <input class="form-input" type="text" id="cap_rate_pct" name="cap_rate_pct" value="{{ form.cap_rate_pct }}" placeholder="6.0" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="asking_price">Asking Price ($)</label>
+        <input class="form-input" type="text" id="asking_price" name="asking_price" value="{{ form.asking_price }}" placeholder="4,500,000">
+        <span class="stat-box-sub">Optional &mdash; used only to compare, never to value.</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="unit_count">Units</label>
+        <input class="form-input" type="text" id="unit_count" name="unit_count" value="{{ form.unit_count }}" placeholder="92">
+        <span class="stat-box-sub">Optional &mdash; shows price per unit.</span>
+      </div>
+    </div>
+
+    <button type="submit" name="action" value="value" class="btn btn-primary">Calculate Value</button>
+</div>
+</form>
 
 <!-- ── Grading thresholds ─────────────────────────────────────────── -->
 {#
   Outside the results block on purpose. These are settings, not part
   of a valuation, and putting them inside it meant they could not be
   reached without first running an analysis.
+
+  And outside the analyzer's </form> on purpose, which is the harder
+  half. This block carries its own <form> posting to save_grading, and
+  a form nested inside another form is not markup a browser will build:
+  it drops the inner start tag and adopts the fields into the outer one.
+  The first attempt at the reachability fix above landed this block in
+  the middle of <select name="expenses_mode">, where its hidden csrf
+  <input> closed the select early per HTML5's "in select" rule -- which
+  silently deleted the "$ per year" option and rerouted "Save
+  thresholds" into a valuation submit. Both bugs were invisible in the
+  template source and only appeared in a parsed DOM. If this block moves
+  again, it must stay after </form>; the standing test in
+  tests/test_template_structure.py enforces the select half of that.
 #}
 <div class="card">
   <div class="scorecard-section-title">Grading thresholds</div>
@@ -201,8 +247,16 @@
                             ('orange','Orange — up to')] %}
         <div class="form-group">
           <label class="form-label" for="grade_{{ key }}">{{ label }} (%)</label>
+          {#
+            grading['values'], not grading.values. Jinja resolves dotted
+            access by attribute first, and a dict already has a .values
+            method -- so grading.values[key] subscripted a built-in
+            method, failed silently, and rendered an empty box. The bands
+            were saved and graded with correctly the whole time; only the
+            form for editing them always came up blank.
+          #}
           <input class="form-input" type="text" id="grade_{{ key }}" name="{{ key }}"
-                 value="{{ grading.values[key] if grading else '' }}">
+                 value="{{ grading['values'][key] if grading else '' }}">
         </div>
       {% endfor %}
       <div class="form-group">
@@ -222,39 +276,6 @@
   </form>
 </details>
 </div>
-            <option value="amount" {% if form.expenses_mode == 'amount' %}selected{% endif %}>$ per year</option>
-          </select>
-        </div>
-        <span class="stat-box-sub">Operating only &mdash; no debt service, no capital items.</span>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="noi_direct">Or enter NOI directly ($/yr)</label>
-        <input class="form-input" type="text" id="noi_direct" name="noi_direct" value="{{ form.noi_direct }}" placeholder="301,304">
-        <span class="stat-box-sub">Overrides the build-up above when filled in.</span>
-      </div>
-    </div>
-
-    <div class="scorecard-mini-title" style="margin:14px 0 8px;">Value It</div>
-    <div class="da-grid-3" style="display:grid; grid-template-columns: repeat(3, 1fr); gap:14px;">
-      <div class="form-group">
-        <label class="form-label" for="cap_rate_pct">Target Cap Rate (%)</label>
-        <input class="form-input" type="text" id="cap_rate_pct" name="cap_rate_pct" value="{{ form.cap_rate_pct }}" placeholder="6.0" required>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="asking_price">Asking Price ($)</label>
-        <input class="form-input" type="text" id="asking_price" name="asking_price" value="{{ form.asking_price }}" placeholder="4,500,000">
-        <span class="stat-box-sub">Optional &mdash; used only to compare, never to value.</span>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="unit_count">Units</label>
-        <input class="form-input" type="text" id="unit_count" name="unit_count" value="{{ form.unit_count }}" placeholder="92">
-        <span class="stat-box-sub">Optional &mdash; shows price per unit.</span>
-      </div>
-    </div>
-
-    <button type="submit" name="action" value="value" class="btn btn-primary">Calculate Value</button>
-</div>
-</form>
 
 {% if result %}
 <!-- ── Valuation ──────────────────────────────────────────────────────── -->
@@ -277,6 +298,22 @@
     <span class="source-badge">NOI: {{ result.noi_provenance_label }}</span>
     <span class="stat-box-sub" style="margin-left:8px;">{{ result.noi_provenance_note }}</span>
   </div>
+
+  {# The override, said out loud. The precedence itself is intentional --
+     a directly entered NOI beats the build-up -- but it used to happen
+     with no trace: the build-up table simply did not render, so a figure
+     left in that box made every expense percentage above look like it
+     was being ignored. Nothing about which number wins has changed here.
+     Only that the page now admits it. #}
+  {% if result.buildup_overridden %}
+    <div class="result-note" style="border-left:3px solid #b45309; margin:0 0 18px;">
+      <strong>Your build-up was overridden by the NOI entered directly above.</strong>
+      The income and expense figures you entered were not used: this
+      valuation capitalises the
+      {{ money2(result.noi) }} NOI from the &ldquo;Or enter NOI
+      directly&rdquo; box. Clear that box to value the build-up instead.
+    </div>
+  {% endif %}
 
   <!-- Range toggle -->
   <div class="scorecard-mini-title" style="margin-bottom:8px;">Worth a closer look between</div>
