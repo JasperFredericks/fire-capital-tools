@@ -1089,7 +1089,7 @@ def capex_budget(assessment_id, fmt):
         capex_export.build_pdf(out, assessment, lines, summary)
         mime = "application/pdf"
     else:
-        capex_export.build_xlsx(out, assessment, lines, summary)
+        capex_export.build_xlsx(out, assessment, lines, summary, labels)
         mime = ("application/vnd.openxmlformats-officedocument"
                 ".spreadsheetml.sheet")
     return send_file(str(out), as_attachment=True, download_name=out.name,

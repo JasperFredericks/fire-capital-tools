@@ -210,7 +210,8 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
 
 
 def build_xlsx(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
-               summary: dict[str, Any]) -> Path:
+               summary: dict[str, Any],
+               labels: dict[str, str] | None = None) -> Path:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font
 
@@ -254,28 +255,34 @@ def build_xlsx(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
     # The reference table itself, so a reader can audit any figure that
     # appeared above without leaving the file.
     ref = wb.create_sheet("Reference costs")
-    ref.append(["Item", "Unit cost", "Unit", "Sources", "How it was derived"])
+    ref.append(["Item", "Key", "Unit cost", "Unit", "Sources",
+                "How it was derived"])
     for cell in ref[1]:
         cell.font = bold
     for key in sorted(refcosts.REFERENCE_COSTS):
         c = refcosts.REFERENCE_COSTS[key]
-        ref.append([c.key, c.unit_cost, refcosts.UNIT_LABELS[c.unit],
+        ref.append([(labels or {}).get(c.key, c.key), c.key, c.unit_cost,
+                    refcosts.UNIT_LABELS[c.unit],
                     ", ".join(c.sources), c.note])
-    for col, width in zip("ABCDE", (26, 12, 14, 42, 80)):
+    for col, width in zip("ABCDEF", (30, 24, 12, 14, 42, 80)):
         ref.column_dimensions[col].width = width
-    for row in ref.iter_rows(min_row=2, min_col=5, max_col=5):
+    for row in ref.iter_rows(min_row=2, min_col=6, max_col=6):
         row[0].alignment = Alignment(wrap_text=True, vertical="top")
 
-    # And what has NO figure, with the reason. This sheet is the ask.
+    # And what has NO figure, with the reason. This sheet is the ask, so
+    # it gets the labels a person recognises -- "ADA parking & path of
+    # travel", not "ada_parking_path". A list meant to be read by
+    # somebody who does not work in this codebase should not be written
+    # in its identifiers.
     un = wb.create_sheet("Not priced")
-    un.append(["Item", "Why it has no researched figure"])
+    un.append(["Item", "Key", "Why it has no researched figure"])
     for cell in un[1]:
         cell.font = bold
-    for row in refcosts.unpriced_report():
-        un.append([row["label"], row["reason"]])
-    un.column_dimensions["A"].width = 30
-    un.column_dimensions["B"].width = 90
-    for r in un.iter_rows(min_row=2, min_col=2, max_col=2):
+    for row in refcosts.unpriced_report(labels or {}):
+        un.append([row["label"], row["key"], row["reason"]])
+    for col, width in zip("ABC", (34, 24, 90)):
+        un.column_dimensions[col].width = width
+    for r in un.iter_rows(min_row=2, min_col=3, max_col=3):
         r[0].alignment = Alignment(wrap_text=True, vertical="top")
 
     wb.save(str(path))
