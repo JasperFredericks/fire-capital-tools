@@ -16,8 +16,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from flask import Blueprint, current_app, render_template
-from flask_login import login_required
+from flask import Blueprint, abort, current_app, render_template
+from flask_login import current_user, login_required
+
+from models import User
 
 from tools import market_data_service
 from tools import openai_usage
@@ -139,6 +141,9 @@ def service_costs_page():
     OpenAI is read separately from the other two: it has no app-enforced
     cap to show usage against, so it is reported as a per-feature
     breakdown rather than as used-against-threshold."""
+    if not User.matches_admin_user(current_user.get_id() or "", current_app.config):
+        abort(403)
+
     with openai_usage.get_connection() as conn:
         openai_breakdown = openai_usage.usage_for_month(conn)
 

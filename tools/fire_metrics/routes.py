@@ -6,10 +6,12 @@ import io
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Blueprint, current_app, jsonify, render_template, request
-from flask_login import login_required
+from flask import Blueprint, abort, current_app, jsonify, render_template, request, send_file
+from flask_login import current_user, login_required
+from models import User
 
 from fire_metrics.fire_metrics_updater import db as db_module
 from fire_metrics.fire_metrics_updater.city_search import find_city_match
@@ -42,7 +44,204 @@ fire_metrics_bp = Blueprint("fire_metrics", __name__)
 ALLOWED_CRE_SELECTION_SOURCES = frozenset({
     "main_city_search",
     "city_analytics",
+    "multi_city_search_auto",
 })
+
+CITY_ANALYTICS_EXPORT_COLUMNS = [
+    ("City", "city", "text"),
+    ("State", "state", "text"),
+    ("FIRE Score", "fire_score", "float1"),
+    ("Data Coverage", "fire_score_coverage", "percent_whole1"),
+    ("Population", "population_current", "int"),
+    ("Population Growth", "population_growth_recent", "percent2"),
+    ("Median Income", "median_income_current", "currency0"),
+    ("Income Growth", "median_income_growth_recent", "percent2"),
+    ("Home Value", "median_home_value_current", "currency0"),
+    ("Home Value Growth", "median_home_value_growth_recent", "percent2"),
+    ("Employment", "employment_current", "int"),
+    ("Employment Growth", "employment_growth_recent", "percent2"),
+    ("Climate Risk", "climate_risk_score", "float1"),
+    ("Climate Rating", "climate_risk_rating", "text"),
+    ("Crime", "crime_index_score", "float1"),
+    ("Crime Rating", "crime_rating", "text"),
+    ("Density-Adj. Crime", "density_adjusted_crime_score", "float1"),
+    ("Density-Adj. Crime Rating", "density_adjusted_crime_rating", "text"),
+    ("Landlord Friendliness", "landlord_friendliness_label", "text"),
+]
+
+
+def _is_admin_user() -> bool:
+    if not current_user.is_authenticated:
+        return False
+    return User.matches_admin_user(current_user.get_id() or "", current_app.config)
+
+
+def _admin_forbidden_response(*, is_ajax: bool):
+    if is_ajax:
+        return jsonify({
+            "success_message": None,
+            "error_message": "Admin access is required for that action.",
+        }), 403
+    abort(403)
+
+
+def _safe_float(value):
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_text(value) -> str:
+    return str(value or "").strip()
+
+
+def _city_label(row: dict) -> str:
+    display_name = _safe_text(row.get("display_name"))
+    if display_name and "," in display_name:
+        return display_name.split(",", 1)[0].strip()
+    city = _safe_text(row.get("city"))
+    if city and city.lower().endswith(" city"):
+        return city[:-5].strip()
+    return city
+
+
+def _normalize_city_analytics_export_rows(payload_rows) -> list[dict]:
+    out = []
+    if not isinstance(payload_rows, list):
+        return out
+    for raw in payload_rows:
+        if not isinstance(raw, dict):
+            continue
+        row = {
+            "city": _city_label(raw),
+            "state": _safe_text(raw.get("state")).upper(),
+            "fire_score": _safe_float(raw.get("fire_score")),
+            "fire_score_coverage": _safe_float(raw.get("fire_score_coverage")),
+            "population_current": _safe_float(raw.get("population_current")),
+            "population_growth_recent": _safe_float(raw.get("population_growth_recent")),
+            "median_income_current": _safe_float(raw.get("median_income_current")),
+            "median_income_growth_recent": _safe_float(raw.get("median_income_growth_recent")),
+            "median_home_value_current": _safe_float(raw.get("median_home_value_current")),
+            "median_home_value_growth_recent": _safe_float(raw.get("median_home_value_growth_recent")),
+            "employment_current": _safe_float(raw.get("employment_current")),
+            "employment_growth_recent": _safe_float(raw.get("employment_growth_recent")),
+            "climate_risk_score": _safe_float(raw.get("climate_risk_score")),
+            "climate_risk_rating": _safe_text(raw.get("climate_risk_rating")),
+            "crime_index_score": _safe_float(raw.get("crime_index_score")),
+            "crime_rating": _safe_text(raw.get("crime_rating")),
+            "density_adjusted_crime_score": _safe_float(raw.get("density_adjusted_crime_score")),
+            "density_adjusted_crime_rating": _safe_text(raw.get("density_adjusted_crime_rating")),
+            "landlord_friendliness_label": _safe_text(raw.get("landlord_friendliness_label")),
+        }
+        out.append(row)
+    return out
+
+
+def _city_analytics_export_filename(ext: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return f"fire_metrics_city_analytics_{stamp}.{ext}"
+
+
+def _build_city_analytics_xlsx(rows: list[dict]) -> bytes:
+    import openpyxl
+    from openpyxl.styles import Font
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "City Analytics"
+
+    headers = [col[0] for col in CITY_ANALYTICS_EXPORT_COLUMNS]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    for row in rows:
+        ws.append([row.get(col[1]) for col in CITY_ANALYTICS_EXPORT_COLUMNS])
+
+    for idx, (_, _, fmt) in enumerate(CITY_ANALYTICS_EXPORT_COLUMNS, start=1):
+        col = ws.column_dimensions[openpyxl.utils.get_column_letter(idx)]
+        col.width = 18
+        for cell in ws.iter_cols(min_col=idx, max_col=idx, min_row=2, max_row=ws.max_row):
+            c = cell[0]
+            if c.value is None:
+                continue
+            if fmt == "currency0":
+                c.number_format = "$#,##0"
+            elif fmt == "percent2":
+                c.number_format = "0.00%"
+            elif fmt == "percent_whole1":
+                c.number_format = '0.0"%"'
+            elif fmt == "float1":
+                c.number_format = "0.0"
+            elif fmt == "int":
+                c.number_format = "#,##0"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def _pdf_table_value(row: dict, key: str, fmt: str) -> str:
+    value = row.get(key)
+    if value is None or value == "":
+        return "-"
+    if fmt == "currency0":
+        return f"${float(value):,.0f}"
+    if fmt == "percent2":
+        return f"{float(value) * 100:.2f}%"
+    if fmt == "percent_whole1":
+        return f"{float(value):.1f}%"
+    if fmt == "float1":
+        return f"{float(value):.1f}"
+    if fmt == "int":
+        return f"{float(value):,.0f}"
+    return _safe_text(value) or "-"
+
+
+def _build_city_analytics_pdf(rows: list[dict]) -> bytes:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    headers = [col[0] for col in CITY_ANALYTICS_EXPORT_COLUMNS]
+    all_rows = [
+        [_pdf_table_value(row, key, fmt) for _, key, fmt in CITY_ANALYTICS_EXPORT_COLUMNS]
+        for row in rows
+    ]
+    rows_per_page = 20
+    pages = [all_rows[i:i + rows_per_page] for i in range(0, len(all_rows), rows_per_page)] or [[]]
+
+    buffer = io.BytesIO()
+    with PdfPages(buffer) as pdf:
+        for page_idx, page_rows in enumerate(pages, start=1):
+            fig = plt.figure(figsize=(14, 8.5))
+            fig.text(0.05, 0.96, "FIRE Metrics - City Analytics", fontsize=14, fontweight="bold", color="#1a2744")
+            fig.text(0.95, 0.96, datetime.now(timezone.utc).strftime("Exported %Y-%m-%d"), ha="right", fontsize=9, color="#6b7280")
+            fig.text(0.95, 0.03, f"Page {page_idx} of {len(pages)}", ha="right", fontsize=8, color="#6b7280")
+
+            ax = fig.add_axes([0.04, 0.09, 0.92, 0.82])
+            ax.axis("off")
+            table = ax.table(
+                cellText=page_rows,
+                colLabels=headers,
+                cellLoc="left",
+                loc="upper left",
+            )
+            table.auto_set_font_size(False)
+            table.set_fontsize(7)
+            table.scale(1, 1.25)
+            for (row_i, _), cell in table.get_celld().items():
+                if row_i == 0:
+                    cell.set_text_props(weight="bold", color="#1a2744")
+                    cell.set_facecolor("#eef2fb")
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+    return buffer.getvalue()
 
 
 def _cre_generation_allowed(payload: dict) -> bool:
@@ -273,6 +472,7 @@ def index():
         context = {
             "status": status,
             "crime_workbook": _crime_workbook_status(),
+            "can_manage_fire_metrics_admin": _is_admin_user(),
             "success_message": None,
             "error_message": None,
             "search_query": "",
@@ -300,6 +500,9 @@ def index():
             return render_template("tools/fire_metrics.html", **context)
 
         action = request.form.get("action", "")
+        admin_actions = {"refresh_all", "refresh_live_only", "rebuild_index"}
+        if action in admin_actions and not context["can_manage_fire_metrics_admin"]:
+            return _admin_forbidden_response(is_ajax=is_ajax)
 
         def respond(status_code: int = 200):
             if is_ajax:
@@ -720,6 +923,9 @@ def refresh_status():
 @fire_metrics_bp.route("/upload-crime-workbook", methods=["POST"])
 @login_required
 def upload_crime_workbook():
+    if not _is_admin_user():
+        return _admin_forbidden_response(is_ajax=request.headers.get("X-Requested-With") == "XMLHttpRequest")
+
     def safe_crime_workbook_status() -> dict:
         try:
             return _crime_workbook_status()
@@ -786,6 +992,9 @@ def upload_crime_workbook():
 @fire_metrics_bp.route("/debug-refresh")
 @login_required
 def debug_refresh():
+    if not _is_admin_user():
+        abort(403)
+
     # TEMPORARY diagnostic route -- added specifically to inspect the raw
     # refresh_metadata table (including per-step results the normal status
     # payload doesn't surface) without needing direct Railway console/DB
@@ -807,12 +1016,55 @@ def debug_refresh():
 @fire_metrics_bp.route("/download-latest")
 @login_required
 def download_latest():
-    data = _export_workbook()
-    from flask import send_file
+    if not _is_admin_user():
+        abort(403)
 
+    data = _export_workbook()
     return send_file(
         io.BytesIO(data),
         as_attachment=True,
         download_name="fire_metrics_city_data.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@fire_metrics_bp.route("/export/city-analytics.xlsx", methods=["POST"])
+@login_required
+def export_city_analytics_excel():
+    payload = request.get_json(silent=True) or {}
+    rows = _normalize_city_analytics_export_rows(payload.get("cities"))
+    if not rows:
+        return jsonify({
+            "status": "error",
+            "error_code": "empty_city_analytics",
+            "user_message": "Add at least one city to City Analytics before exporting.",
+        }), 400
+
+    data = _build_city_analytics_xlsx(rows)
+    return send_file(
+        io.BytesIO(data),
+        as_attachment=True,
+        download_name=_city_analytics_export_filename("xlsx"),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@fire_metrics_bp.route("/export/city-analytics.pdf", methods=["POST"])
+@login_required
+def export_city_analytics_pdf():
+    payload = request.get_json(silent=True) or {}
+    rows = _normalize_city_analytics_export_rows(payload.get("cities"))
+    if not rows:
+        return jsonify({
+            "status": "error",
+            "error_code": "empty_city_analytics",
+            "user_message": "Add at least one city to City Analytics before exporting.",
+        }), 400
+
+    data = _build_city_analytics_pdf(rows)
+    return send_file(
+        io.BytesIO(data),
+        as_attachment=True,
+        download_name=_city_analytics_export_filename("pdf"),
+        mimetype="application/pdf",
     )

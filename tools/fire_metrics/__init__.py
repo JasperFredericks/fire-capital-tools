@@ -7,13 +7,22 @@ is re-exported as a module so tests can patch tools.fire_metrics.ai_summary.
 """
 
 from tools import fire_metrics_ai_summary as ai_summary
-from tools.fire_metrics.routes import city_summary, city_summary_cre, fire_metrics_bp, top_cities
+from tools.fire_metrics.routes import (
+    city_summary,
+    city_summary_cre,
+    export_city_analytics_excel,
+    export_city_analytics_pdf,
+    fire_metrics_bp,
+    top_cities,
+)
 from tools.fire_metrics.services import _fetch_top_cities, _summary_unavailable_response
 
 __all__ = [
     "ai_summary",
     "city_summary",
     "city_summary_cre",
+    "export_city_analytics_excel",
+    "export_city_analytics_pdf",
     "fire_metrics_bp",
     "top_cities",
     "_fetch_top_cities",

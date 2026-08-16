@@ -3,14 +3,19 @@ import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
+import io
+import json
 from pathlib import Path
 
 from flask import Flask
+import openpyxl
 
 from fire_metrics.fire_metrics_updater import db as db_module
 from tools import fire_metrics as fire_metrics_routes
 from tools import fire_metrics_ai_summary as summary
 from tools.fire_metrics import _summary_unavailable_response, city_summary, city_summary_cre, top_cities
+from models import User
+from app import create_app
 
 
 def make_city(
@@ -231,6 +236,22 @@ class FireMetricsAISummaryTests(unittest.TestCase):
             response = result
             status_code = response.status_code
         return status_code, response.get_json()
+
+    def _call_city_analytics_export(self, app: Flask, *, fmt: str, rows: list[dict]):
+        route = "/tools/fire-metrics/export/city-analytics.xlsx" if fmt == "xlsx" else "/tools/fire-metrics/export/city-analytics.pdf"
+        endpoint = (
+            fire_metrics_routes.export_city_analytics_excel
+            if fmt == "xlsx"
+            else fire_metrics_routes.export_city_analytics_pdf
+        )
+        with app.test_request_context(route, method="POST", json={"cities": rows}):
+            result = endpoint.__wrapped__()
+        if isinstance(result, tuple):
+            response, status_code = result
+        else:
+            response = result
+            status_code = response.status_code
+        return status_code, response
 
     def _seed_top_cities_fixture(self, conn: sqlite3.Connection) -> None:
         rows = [
@@ -2089,6 +2110,230 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("function flushPendingCurrentCityPreview()", template)
         self.assertIn("markerRegistry.get(selectedMarkerRegistryKey)", template)
         self.assertNotIn("function markerInfoContent(city)", template)
+
+    def test_frontend_search_city_removal_prunes_city_analytics_rows(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("function removeComparisonCitiesByKeys(cityKeys)", template)
+        self.assertIn("removeComparisonCitiesByKeys(removedKeys);", template)
+        self.assertIn("removeComparisonCitiesByKeys(new Set([cityKeyToRemove]));", template)
+        self.assertIn("selectCurrentSearchCity(nextKey, {", template)
+
+    def test_frontend_multi_search_auto_selection_triggers_single_city_cre_path(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("selectCurrentSearchCity(stableCityKey(firstCity), {", template)
+        self.assertIn('creSelectionSource: "multi_city_search_auto"', template)
+        self.assertIn('creSelectionSource: ""', template)
+
+    def test_frontend_cre_loading_indicator_states_are_present(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        stylesheet = Path("static/style.css").read_text(encoding="utf-8")
+        self.assertIn('id="fire-ai-cre-status"', template)
+        self.assertIn("fire-ai-cre-spinner", template)
+        self.assertIn("function setCreLoadingVisible(visible)", template)
+        self.assertIn("setCreLoadingVisible(true);", template)
+        self.assertIn("setCreLoadingVisible(false);", template)
+        self.assertIn("Searching approved institutional research", template)
+        self.assertIn("No relevant research from approved sources.", template)
+        self.assertIn("Institutional research is temporarily unavailable.", template)
+        self.assertIn(".fire-ai-cre-status", stylesheet)
+        self.assertIn(".fire-ai-cre-spinner", stylesheet)
+
+    def test_frontend_city_analytics_export_controls_present(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn('id="download-comparison-excel-btn"', template)
+        self.assertIn('id="download-comparison-pdf-btn"', template)
+        self.assertIn("function buildCityAnalyticsExportRows()", template)
+        self.assertIn("function exportCityAnalytics(kind)", template)
+        self.assertIn("syncComparisonExportButtons", template)
+
+    def test_city_summary_cre_allows_multi_city_auto_source_and_blocks_untrusted_source(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=True,
+            FIRE_METRICS_SUMMARY_MODEL="model-a",
+            OPENAI_API_KEY="test-key",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        mock_cre = {
+            "cre_sentences": "Institutional demand trends are constructive.",
+            "research_sources": [{
+                "publisher": "CBRE",
+                "title": "Quarterly Outlook",
+                "published_date": "",
+                "url": "https://example.com/cbre",
+            }],
+            "cre_generated_at": summary.utc_now_iso(),
+            "cre_research_version": summary.CRE_RESEARCH_VERSION,
+            "result_type": "success",
+        }
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cre-multi-source-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+
+                with patch.object(fire_metrics_routes.ai_summary, "openai_cre_research", return_value=mock_cre) as cre_mock:
+                    allowed_code, allowed_payload = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="multi_city_search_auto",
+                    )
+                    blocked_code, blocked_payload = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="ranking_list",
+                    )
+
+                self.assertEqual(allowed_code, 200)
+                self.assertEqual(allowed_payload.get("cre_status"), "success")
+                self.assertEqual(blocked_code, 200)
+                self.assertEqual(blocked_payload.get("cre_status"), "skipped")
+                self.assertEqual(cre_mock.call_count, 1)
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_admin_visibility_and_access_control_for_michelle_vs_normal_user(self):
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-admin-access-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                ephemeral_admin_password = os.urandom(16).hex()
+                ephemeral_user_password = os.urandom(16).hex()
+                app = create_app()
+                app.config.update(
+                    TESTING=True,
+                    WTF_CSRF_ENABLED=False,
+                    ADMIN_USERNAME="michelle",
+                    ADMIN_PASSWORD_HASH=User.hash_password(ephemeral_admin_password),
+                    USER_STORE_PATH=os.path.join(tmp, "users.json"),
+                )
+
+                with app.app_context():
+                    User.create("analyst.user", ephemeral_user_password, app.config)
+
+                with app.test_client() as client:
+                    with client.session_transaction() as session:
+                        session["_user_id"] = "michelle"
+                        session["_fresh"] = True
+                    dash_html = client.get("/dashboard").get_data(as_text=True)
+                    fire_html = client.get("/tools/fire-metrics/").get_data(as_text=True)
+                    self.assertIn("API &amp; Service Costs", dash_html)
+                    self.assertIn('<h2 class="dashboard-section-title">Admin Data Tools</h2>', fire_html)
+                    self.assertEqual(client.get("/admin/service-costs").status_code, 200)
+
+                with app.test_client() as client:
+                    with client.session_transaction() as session:
+                        session["_user_id"] = "analyst.user"
+                        session["_fresh"] = True
+                    dash_html = client.get("/dashboard").get_data(as_text=True)
+                    fire_html = client.get("/tools/fire-metrics/").get_data(as_text=True)
+                    self.assertNotIn("API &amp; Service Costs", dash_html)
+                    self.assertNotIn('<h2 class="dashboard-section-title">Admin Data Tools</h2>', fire_html)
+                    self.assertEqual(client.get("/admin/service-costs").status_code, 403)
+                    self.assertEqual(
+                        client.post(
+                            "/tools/fire-metrics/",
+                            data={"action": "refresh_all"},
+                            headers={"X-Requested-With": "XMLHttpRequest"},
+                        ).status_code,
+                        403,
+                    )
+                    self.assertEqual(client.post("/tools/fire-metrics/upload-crime-workbook").status_code, 403)
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_city_analytics_exports_xlsx_and_pdf_include_current_rows_only(self):
+        app = Flask(__name__)
+        rows = [
+            {
+                "display_name": "San Francisco, CA",
+                "city": "San Francisco",
+                "state": "CA",
+                "fire_score": 82.5,
+                "fire_score_coverage": 91.0,
+                "population_current": 808988,
+                "population_growth_recent": 0.012,
+                "median_income_current": 136689,
+                "median_income_growth_recent": 0.031,
+                "median_home_value_current": 1300000,
+                "median_home_value_growth_recent": 0.027,
+                "employment_current": 560000,
+                "employment_growth_recent": 0.018,
+                "climate_risk_score": 40,
+                "climate_risk_rating": "Moderate",
+                "crime_index_score": 55,
+                "crime_rating": "Moderate",
+                "density_adjusted_crime_score": 46,
+                "density_adjusted_crime_rating": "Moderate",
+                "landlord_friendliness_label": "Neutral",
+            },
+            {
+                "display_name": "Los Angeles, CA",
+                "city": "Los Angeles",
+                "state": "CA",
+                "fire_score": 74.2,
+                "fire_score_coverage": 89.0,
+                "population_current": 3820914,
+                "population_growth_recent": 0.009,
+                "median_income_current": 80500,
+                "median_income_growth_recent": 0.024,
+                "median_home_value_current": 910000,
+                "median_home_value_growth_recent": 0.021,
+                "employment_current": 1980000,
+                "employment_growth_recent": 0.015,
+                "climate_risk_score": 52,
+                "climate_risk_rating": "Moderate",
+                "crime_index_score": 62,
+                "crime_rating": "Moderate",
+                "density_adjusted_crime_score": 58,
+                "density_adjusted_crime_rating": "Moderate",
+                "landlord_friendliness_label": "Neutral",
+            },
+        ]
+
+        xlsx_input_snapshot = json.dumps(rows, sort_keys=True)
+        xlsx_code, xlsx_response = self._call_city_analytics_export(app, fmt="xlsx", rows=rows)
+        self.assertEqual(xlsx_code, 200)
+        xlsx_response.direct_passthrough = False
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_response.get_data()))
+        self.assertIn("City Analytics", wb.sheetnames)
+        ws = wb["City Analytics"]
+        headers = [cell.value for cell in ws[1]]
+        self.assertIn("City", headers)
+        self.assertIn("FIRE Score", headers)
+        self.assertIn("Population Growth", headers)
+        self.assertEqual(ws.cell(row=2, column=1).value, "San Francisco")
+        self.assertEqual(ws.cell(row=3, column=1).value, "Los Angeles")
+        self.assertEqual(json.dumps(rows, sort_keys=True), xlsx_input_snapshot)
+
+        pdf_code, pdf_response = self._call_city_analytics_export(app, fmt="pdf", rows=rows)
+        self.assertEqual(pdf_code, 200)
+        pdf_response.direct_passthrough = False
+        pdf_data = pdf_response.get_data()
+        self.assertEqual(pdf_response.mimetype, "application/pdf")
+        self.assertTrue(pdf_data.startswith(b"%PDF"))
+        self.assertGreater(len(pdf_data), 800)
+
+    def test_city_analytics_exports_empty_state_returns_controlled_error(self):
+        app = Flask(__name__)
+        xlsx_code, xlsx_response = self._call_city_analytics_export(app, fmt="xlsx", rows=[])
+        self.assertEqual(xlsx_code, 400)
+        self.assertEqual(xlsx_response.get_json().get("error_code"), "empty_city_analytics")
+
+        pdf_code, pdf_response = self._call_city_analytics_export(app, fmt="pdf", rows=[])
+        self.assertEqual(pdf_code, 400)
+        self.assertEqual(pdf_response.get_json().get("error_code"), "empty_city_analytics")
 
     def test_frontend_map_dominant_css_sizing_rules_present(self):
         stylesheet = Path("static/style.css").read_text(encoding="utf-8")

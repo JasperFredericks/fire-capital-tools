@@ -37,6 +37,7 @@ def create_app(config_class: type = Config) -> Flask:
             request.path.startswith("/tools/mmr-summary/upload")
             or request.path.startswith("/tools/mmr-summary/download/")
             or request.path.startswith("/tools/fire-metrics/download-latest")
+            or request.path.startswith("/tools/fire-metrics/export/city-analytics")
             or request.path.startswith("/tools/fire-metrics/search")
             or request.path.startswith("/tools/fire-metrics/refresh-status")
             or request.path.startswith("/tools/scorecard-pro/upload")
@@ -60,6 +61,14 @@ def create_app(config_class: type = Config) -> Flask:
     @login_manager.user_loader
     def load_user(user_id: str) -> User | None:
         return User.get_by_id(user_id, app.config)
+
+    @app.context_processor
+    def inject_user_permissions():
+        can_access_admin = (
+            current_user.is_authenticated
+            and User.matches_admin_user(current_user.get_id() or "", app.config)
+        )
+        return {"can_access_admin": can_access_admin}
 
     # ── Blueprints ─────────────────────────────────────────────────────────
     from auth import auth_bp

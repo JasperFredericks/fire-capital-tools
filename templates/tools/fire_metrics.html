@@ -121,6 +121,8 @@
       <p class="page-subtitle" style="margin-top:4px;">Compare multiple cities from successful search results.</p>
     </div>
     <div class="comparison-actions">
+      <button id="download-comparison-excel-btn" type="button" class="btn btn-ghost" disabled>Download Excel</button>
+      <button id="download-comparison-pdf-btn" type="button" class="btn btn-ghost" disabled>Download PDF</button>
       <button id="clear-comparison-btn" type="button" class="btn btn-ghost">Clear City Analytics</button>
     </div>
   </div>
@@ -177,6 +179,10 @@
     </div>
     <div class="fire-ai-cre-section">
       <div class="fire-ai-overview-section-title">Institutional CRE Research</div>
+      <div id="fire-ai-cre-status" class="fire-ai-cre-status" role="status" aria-live="polite" hidden>
+        <span class="fire-ai-cre-spinner" aria-hidden="true"></span>
+        <span class="fire-ai-cre-status-text">Searching approved institutional research…</span>
+      </div>
       <div id="fire-ai-cre-body" class="fire-ai-overview-body">Institutional research loads after explicit city selection.</div>
       <div id="fire-ai-overview-sources" class="fire-ai-overview-sources" style="display:none;"></div>
     </div>
@@ -184,6 +190,7 @@
   </div>
 </div>
 
+{% if can_manage_fire_metrics_admin %}
 <div class="card">
   <h2 class="dashboard-section-title">Admin Data Tools</h2>
   <p class="page-subtitle" style="margin-top:0;">
@@ -253,6 +260,7 @@
     <div id="crime-upload-message" class="alert alert-info" style="margin-top:10px; display:none;"></div>
   </div>
 </div>
+{% endif %}
 
 <div class="card">
   <details class="fire-mobile-details">
@@ -274,6 +282,8 @@
   const topCitiesUrl = "{{ url_for('fire_metrics.top_cities') }}";
   const citySummaryUrl = "{{ url_for('fire_metrics.city_summary') }}";
   const citySummaryCreUrl = "{{ url_for('fire_metrics.city_summary_cre') }}";
+  const exportCityAnalyticsExcelUrl = "{{ url_for('fire_metrics.export_city_analytics_excel') }}";
+  const exportCityAnalyticsPdfUrl = "{{ url_for('fire_metrics.export_city_analytics_pdf') }}";
   const statusUrl = "{{ url_for('fire_metrics.refresh_status') }}";
   const uploadCrimeUrl = "{{ url_for('fire_metrics.upload_crime_workbook') }}";
   const csrfToken = "{{ csrf_token() }}";
@@ -291,12 +301,15 @@
   const statusChip = document.getElementById("status-chip");
   const addToComparisonBtn = document.getElementById("add-to-comparison-btn");
   const clearComparisonBtn = document.getElementById("clear-comparison-btn");
+  const downloadComparisonExcelBtn = document.getElementById("download-comparison-excel-btn");
+  const downloadComparisonPdfBtn = document.getElementById("download-comparison-pdf-btn");
   const comparisonEmptyMessage = document.getElementById("comparison-empty-message");
   const comparisonWrap = document.getElementById("comparison-table-wrap");
   const comparisonBody = document.getElementById("comparison-table-body");
   const fireScoreCrimeSourceEl = document.getElementById("fire-score-crime-source");
   const aiOverviewBody = document.getElementById("fire-ai-overview-body");
   const aiCreBody = document.getElementById("fire-ai-cre-body");
+  const aiCreStatus = document.getElementById("fire-ai-cre-status");
   const aiOverviewSources = document.getElementById("fire-ai-overview-sources");
   const aiOverviewMeta = document.getElementById("fire-ai-overview-meta");
   const mapContainer = document.getElementById("fire-google-map");
@@ -395,6 +408,7 @@
   let pendingCurrentCityPreview = { cityKey: "", panMap: false };
   let lastObservedRefreshAt = initialLastRefreshAt;
   let wasRefreshRunning = Boolean(initiallyRunning);
+  let creLoadingVisible = false;
   const explicitCreIntent = "explicit_city_selection";
 
   function fmtNum(value) {
@@ -790,6 +804,8 @@
 
   function clearSearchedCitiesWorkspace(options = {}) {
     const shouldFocusInput = options.focusInput !== false;
+    const removedKeys = new Set(currentSearchCities.map((city) => stableCityKey(city)).filter(Boolean));
+    removeComparisonCitiesByKeys(removedKeys);
     currentSearchCities = [];
     activeSearchCityKey = "";
     currentCity = null;
@@ -809,6 +825,18 @@
 
   function clearCurrentSearchCities() {
     clearSearchedCitiesWorkspace({ focusInput: false });
+  }
+
+  function removeComparisonCitiesByKeys(cityKeys) {
+    if (!(cityKeys instanceof Set) || !cityKeys.size || !comparisonCities.length) return false;
+    const beforeCount = comparisonCities.length;
+    comparisonCities = comparisonCities.filter((city) => !cityKeys.has(stableCityKey(city)));
+    const changed = comparisonCities.length !== beforeCount;
+    if (changed) {
+      saveComparison();
+      renderComparisonTable();
+    }
+    return changed;
   }
 
   function appendToCurrentSearchCities(cities) {
@@ -851,6 +879,7 @@
 
     const wasActive = activeSearchCityKey === cityKeyToRemove || (currentCity && stableCityKey(currentCity) === cityKeyToRemove);
     const remaining = currentSearchCities.filter((city) => stableCityKey(city) !== cityKeyToRemove);
+    removeComparisonCitiesByKeys(new Set([cityKeyToRemove]));
 
     if (!remaining.length) {
       clearSearchedCitiesWorkspace({ focusInput: true });
@@ -1788,11 +1817,13 @@
     if (!comparisonCities.length) {
       comparisonWrap.style.display = "none";
       comparisonEmptyMessage.style.display = "block";
+      syncComparisonExportButtons();
       return;
     }
 
     comparisonWrap.style.display = "block";
     comparisonEmptyMessage.style.display = "none";
+    syncComparisonExportButtons();
 
     comparisonCities.forEach((city) => {
       const tr = document.createElement("tr");
@@ -1882,6 +1913,16 @@
     addToComparisonBtn.textContent = "Add to City Analytics";
   }
 
+  function syncComparisonExportButtons() {
+    const hasRows = comparisonCities.length > 0;
+    if (downloadComparisonExcelBtn) {
+      downloadComparisonExcelBtn.disabled = !hasRows;
+    }
+    if (downloadComparisonPdfBtn) {
+      downloadComparisonPdfBtn.disabled = !hasRows;
+    }
+  }
+
   function syncComparisonAddButton() {
     if (!currentCity) {
       resetComparisonAddButton();
@@ -1943,6 +1984,13 @@
     aiCreBody.textContent = text;
   }
 
+  function setCreLoadingVisible(visible) {
+    if (!aiCreStatus) return;
+    if (creLoadingVisible === visible) return;
+    creLoadingVisible = visible;
+    aiCreStatus.hidden = !visible;
+  }
+
   function clearCreSources() {
     if (!aiOverviewSources) return;
     aiOverviewSources.innerHTML = "";
@@ -1950,11 +1998,13 @@
   }
 
   function setCreIdle() {
+    setCreLoadingVisible(false);
     setCreBody("Institutional research loads after explicit city selection.");
     clearCreSources();
   }
 
   function setCreLoading() {
+    setCreLoadingVisible(true);
     setCreBody("Searching approved institutional research…");
     clearCreSources();
   }
@@ -2040,6 +2090,7 @@
   }
 
   function renderCrePayload(payload) {
+    setCreLoadingVisible(false);
     const status = String(payload?.cre_status || "").trim().toLowerCase();
     if (status === "success") {
       setCreBody(String(payload.cre_summary || ""));
@@ -2104,6 +2155,7 @@
         return;
       }
       if (mySequence !== creRequestSequence) return;
+      setCreLoadingVisible(false);
       setCreBody("Institutional research is temporarily unavailable.");
       clearCreSources();
     }
@@ -2290,7 +2342,7 @@
         panMap: true,
         requestOverview: true,
         scrollAnalyticsRow: true,
-        creSelectionSource: "",
+        creSelectionSource: "multi_city_search_auto",
       });
       input.value = "";
       setCityPickerStatus(`Added ${appendResult.added.length || 0} new searched ${appendResult.added.length === 1 ? "city" : "cities"}.`);
@@ -2398,9 +2450,97 @@
     renderMapPoints();
   });
 
+  function buildCityAnalyticsExportRows() {
+    return comparisonCities.map((city) => ({
+      display_name: cleanDisplayFromCityObject(city),
+      city: getCityField(city),
+      state: normalizeStateToken(getStateField(city)),
+      fire_score: fireScoreForCity(city),
+      fire_score_coverage: fireScoreCoverageForCity(city),
+      population_current: asNumber(city.population_current),
+      population_growth_recent: asNumber(city.population_growth_recent),
+      median_income_current: asNumber(city.median_income_current),
+      median_income_growth_recent: asNumber(city.median_income_growth_recent),
+      median_home_value_current: asNumber(city.median_home_value_current),
+      median_home_value_growth_recent: asNumber(city.median_home_value_growth_recent),
+      employment_current: asNumber(city.employment_current),
+      employment_growth_recent: asNumber(city.employment_growth_recent),
+      climate_risk_score: asNumber(city.climate_risk_score),
+      climate_risk_rating: city.climate_risk_rating || "",
+      crime_index_score: asNumber(city.crime_index_score),
+      crime_rating: city.crime_rating || "",
+      density_adjusted_crime_score: asNumber(city.density_adjusted_crime_score),
+      density_adjusted_crime_rating: city.density_adjusted_crime_rating || "",
+      landlord_friendliness_label: city.landlord_friendliness_label || "",
+    }));
+  }
+
+  function downloadBlobFromResponse(response, blob, fallbackName) {
+    let filename = fallbackName;
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename=\"?([^\";]+)\"?/i);
+    if (match && match[1]) filename = match[1];
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportCityAnalytics(kind) {
+    if (!comparisonCities.length) {
+      showMessage("Add at least one city to City Analytics before exporting.", "warning");
+      return;
+    }
+
+    const endpoint = kind === "pdf" ? exportCityAnalyticsPdfUrl : exportCityAnalyticsExcelUrl;
+    const fallbackName = kind === "pdf" ? "fire_metrics_city_analytics.pdf" : "fire_metrics_city_analytics.xlsx";
+
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+          "X-Requested-With": "XMLHttpRequest",
+        },
+        body: JSON.stringify({ cities: buildCityAnalyticsExportRows() }),
+      });
+
+      if (!res.ok) {
+        let userMessage = "City Analytics export failed.";
+        try {
+          const payload = await res.json();
+          userMessage = payload.user_message || userMessage;
+        } catch (_err) {
+          // Fall back to default message when non-JSON error responses occur.
+        }
+        showMessage(userMessage, "warning");
+        return;
+      }
+
+      const blob = await res.blob();
+      downloadBlobFromResponse(res, blob, fallbackName);
+    } catch (err) {
+      showMessage(`City Analytics export failed: ${err}`, "error");
+    }
+  }
+
+  if (downloadComparisonExcelBtn) {
+    downloadComparisonExcelBtn.addEventListener("click", () => exportCityAnalytics("xlsx"));
+  }
+
+  if (downloadComparisonPdfBtn) {
+    downloadComparisonPdfBtn.addEventListener("click", () => exportCityAnalytics("pdf"));
+  }
+
   comparisonCities = loadComparison();
   comparisonCities = comparisonCities.map((city) => sanitizeCity(city));
   renderComparisonTable();
+  syncComparisonExportButtons();
   resetComparisonAddButton();
   clearOverview();
   renderCityChips();
