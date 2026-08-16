@@ -32,6 +32,7 @@ requires a property_label.
 
 from __future__ import annotations
 
+import os
 import secrets
 import shutil
 from pathlib import Path
@@ -51,6 +52,8 @@ from tools import underwriting_db as db
 from tools import underwriting_market as umkt
 from tools import quick_analyzer_t12 as qa_t12
 from tools import underwriting_property as uprop
+from tools import om_db
+from tools import om_extract
 from tools import upload_limits as ul
 from tools import deal_readiness_defaults as readiness
 from tools import underwriting_loans_math as ulm
@@ -68,6 +71,10 @@ underwriting_bp = Blueprint("underwriting", __name__)
 
 FEEDBACK_TOOL_NAME = "Underwriting"
 ALLOWED_UPLOAD_EXT = {".xlsx", ".xlsm", ".csv"}
+
+# Scoped to the OM route alone. Deliberately NOT added to the constant
+# above, which is shared with the rent roll and T12 importers.
+OM_UPLOAD_EXT = {".pdf"}
 
 DEFAULTS = {
     "closing_costs_pct": 2.0, "ltv_pct": 65.0, "amort_years": 30,
@@ -412,6 +419,8 @@ def detail(scenario_id):
         property_info=property_info,
         market=market,
         crosscheck=crosscheck,
+        om_documents=_om_documents(scenario_id),
+        om_page_cap=om_extract.PAGE_CAP,
         feedback_tool=FEEDBACK_TOOL_NAME,
     )
 
@@ -887,10 +896,19 @@ def delete(scenario_id):
 
 # ── Uploads ──────────────────────────────────────────────────────────────
 
-def _save_upload(scenario_id, file_storage):
+def _save_upload(scenario_id, file_storage, allowed=None):
+    """Save an upload under this scenario's directory on the volume.
+
+    `allowed` is per-route rather than global. The OM route accepts PDFs
+    and the rent-roll and T12 routes must not: widening the shared
+    ALLOWED_UPLOAD_EXT would have let a PDF be posted to the rent-roll
+    importer, which reads it as a spreadsheet and fails somewhere less
+    legible than here.
+    """
+    allowed = ALLOWED_UPLOAD_EXT if allowed is None else allowed
     name = secure_filename(file_storage.filename)
     ext = Path(name).suffix.lower()
-    if ext not in ALLOWED_UPLOAD_EXT:
+    if ext not in allowed:
         raise ValueError(f"Unsupported file type: {ext or 'unknown'}.")
     stored = f"{secrets.token_urlsafe(8)}_{name}"
     path = _upload_dir(scenario_id) / stored
@@ -1026,3 +1044,206 @@ def purge_for_deal(deal_id: int, upload_root: Path) -> list[int]:
     for sid in ids:
         shutil.rmtree(Path(upload_root) / "underwriting" / str(sid), ignore_errors=True)
     return ids
+
+
+# ── Offering memorandum ──────────────────────────────────────────────────
+#
+# Reference material, never an input. The summary is displayed beside the
+# scenario and no route below writes a single scenario column -- there is
+# a source-level test asserting that, because the T12 importer a few
+# hundred lines up DOES write scenario fields from an upload, and this
+# must not become the same shape of thing by drift.
+
+def _om_model_name() -> str:
+    return (os.environ.get("OM_EXTRACTION_MODEL")
+            or os.environ.get("FIRE_METRICS_SUMMARY_MODEL")
+            or "gpt-4.1-mini")
+
+
+def _om_api_key() -> str:
+    return current_app.config.get("OPENAI_API_KEY") or ""
+
+
+def _om_documents(scenario_id: int) -> list[dict]:
+    """Each uploaded OM with its extraction, if one has been paid for."""
+    with om_db.get_connection() as conn:
+        docs = om_db.list_documents(conn, scenario_id)
+        for doc in docs:
+            doc["extraction"] = om_db.get_extraction(
+                conn, doc["file_sha256"], om_extract.PROMPT_VERSION)
+    return docs
+
+
+def _om_redirect(scenario_id):
+    return redirect(url_for("underwriting.detail",
+                            scenario_id=scenario_id) + "#om")
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/om", methods=["POST"])
+@login_required
+def upload_om(scenario_id):
+    """Step one of two: read the PDF locally and spend nothing.
+
+    Page count, readability and the cost estimate are all derived from
+    the file itself. A scanned OM is refused here, before any call could
+    be made, which is the entire reason the gate has two steps.
+    """
+    with db.get_connection() as conn:
+        scenario = db.get_scenario(conn, scenario_id)
+    if not scenario:
+        return _not_found()
+
+    upload = request.files.get("om")
+    if not upload or not upload.filename:
+        flash("No OM file selected.", "danger")
+        return _om_redirect(scenario_id)
+    try:
+        ul.check(request.content_length, ul.DOCUMENT_BYTES, "OM")
+    except ul.UploadTooLarge as exc:
+        flash(str(exc), "danger")
+        return _om_redirect(scenario_id)
+
+    try:
+        original, path = _save_upload(scenario_id, upload, OM_UPLOAD_EXT)
+    except ValueError:
+        flash("An offering memorandum must be a PDF.", "danger")
+        return _om_redirect(scenario_id)
+
+    data = Path(path).read_bytes()
+    try:
+        inspection = om_extract.inspect(data)
+    except om_extract.OMUnreadable as exc:
+        # The file is removed: keeping a PDF whose text cannot be read
+        # would leave a document on the volume that no page can use.
+        Path(path).unlink(missing_ok=True)
+        flash(str(exc), "danger")
+        return _om_redirect(scenario_id)
+
+    with om_db.get_connection() as conn:
+        om_db.add_document(
+            conn, scenario_id,
+            file_sha256=om_extract.file_sha256(data),
+            original_name=original, stored_name=Path(path).name,
+            bytes_=len(data), page_count=inspection["page_count"],
+            pages_used=inspection["pages_used"],
+            pages_skipped=inspection["pages_skipped"],
+            unreadable_pages=inspection["unreadable_pages"])
+
+    note = om_extract.skipped_note(inspection)
+    flash(f"{original} read: {inspection['page_count']} pages, "
+          f"{len(inspection['readable_pages'])} with readable text. "
+          f"Nothing has been sent to OpenAI yet."
+          + (f" {note}" if note else ""), "success")
+    return _om_redirect(scenario_id)
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/om/<int:doc_id>/extract",
+                       methods=["POST"])
+@login_required
+def extract_om(scenario_id, doc_id):
+    """Step two: the only place this feature spends anything.
+
+    A cached extraction for these exact bytes and this prompt version is
+    served without a call. Force Refresh is the one way past that, and it
+    is an explicit button rather than a default.
+    """
+    with db.get_connection() as conn:
+        scenario = db.get_scenario(conn, scenario_id)
+    if not scenario:
+        return _not_found()
+
+    with om_db.get_connection() as conn:
+        doc = om_db.get_document(conn, doc_id)
+    if not doc or doc["scenario_id"] != scenario_id:
+        flash("That OM is not on this scenario.", "danger")
+        return _om_redirect(scenario_id)
+
+    force = request.form.get("force_refresh") == "1"
+    if not force:
+        with om_db.get_connection() as conn:
+            cached = om_db.get_extraction(conn, doc["file_sha256"],
+                                          om_extract.PROMPT_VERSION)
+        if cached:
+            flash("Already read — showing the stored summary. Nothing was "
+                  "sent and nothing was charged.", "success")
+            return _om_redirect(scenario_id)
+
+    if not _om_api_key():
+        flash("OPENAI_API_KEY is not configured, so no OM can be read.",
+              "danger")
+        return _om_redirect(scenario_id)
+
+    path = _upload_dir(scenario_id) / doc["stored_name"]
+    if not path.exists():
+        flash("The stored PDF for this OM is missing.", "danger")
+        return _om_redirect(scenario_id)
+
+    data = path.read_bytes()
+    try:
+        inspection = om_extract.inspect(data)
+        extracted = om_extract.extract(data, api_key=_om_api_key(),
+                                       model_name=_om_model_name(),
+                                       inspection=inspection)
+    except om_extract.OMUnreadable as exc:
+        flash(str(exc), "danger")
+        return _om_redirect(scenario_id)
+    except om_extract.OMRejected as exc:
+        # The call was made and billed, and the counter already recorded
+        # it. What is refused is SHOWING the result, because it failed a
+        # check against the document it claims to be quoting.
+        flash("The summary that came back did not match the document and "
+              "was discarded rather than shown: "
+              + "; ".join(exc.reasons[:3]), "danger")
+        return _om_redirect(scenario_id)
+    except Exception as exc:                          # noqa: BLE001
+        flash(f"The OM could not be read: {exc}", "danger")
+        return _om_redirect(scenario_id)
+
+    with om_db.get_connection() as conn:
+        om_db.save_extraction(
+            conn, file_sha256=doc["file_sha256"],
+            prompt_version=om_extract.PROMPT_VERSION,
+            summary=extracted["summary"], model=extracted["model"],
+            prompt_tokens=extracted["prompt_tokens"],
+            completion_tokens=extracted["completion_tokens"],
+            pages_used=extracted["pages_used"],
+            skipped_note=extracted["skipped_note"])
+
+    flash(f"OM read: {extracted['prompt_tokens']:,} prompt and "
+          f"{extracted['completion_tokens']:,} completion tokens. "
+          "Nothing on this scenario was changed.", "success")
+    return _om_redirect(scenario_id)
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/om/<int:doc_id>/file")
+@login_required
+def om_file(scenario_id, doc_id):
+    """The original PDF, kept so a page reference can be checked.
+
+    A summary that cites page 14 is only useful beside the document that
+    has a page 14.
+    """
+    with om_db.get_connection() as conn:
+        doc = om_db.get_document(conn, doc_id)
+    if not doc or doc["scenario_id"] != scenario_id:
+        return _not_found()
+    path = _upload_dir(scenario_id) / doc["stored_name"]
+    if not path.exists():
+        return _not_found()
+    return send_file(str(path), as_attachment=False,
+                     download_name=doc["original_name"])
+
+
+@underwriting_bp.route("/scenario/<int:scenario_id>/om/<int:doc_id>/delete",
+                       methods=["POST"])
+@login_required
+def delete_om(scenario_id, doc_id):
+    with om_db.get_connection() as conn:
+        doc = om_db.get_document(conn, doc_id)
+        if not doc or doc["scenario_id"] != scenario_id:
+            flash("That OM is not on this scenario.", "danger")
+            return _om_redirect(scenario_id)
+        om_db.delete_document(conn, doc_id)
+    (_upload_dir(scenario_id) / doc["stored_name"]).unlink(missing_ok=True)
+    flash(f"Removed {doc['original_name']}.", "success")
+    return _om_redirect(scenario_id)

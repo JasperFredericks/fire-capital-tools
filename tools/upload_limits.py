@@ -69,6 +69,11 @@ ENDPOINT_LIMITS = {
     "site_dd.upload_photo": VIDEO_BYTES,      # the route accepts both kinds
     "fire_metrics.upload_crime_workbook": CRIME_WORKBOOK_BYTES,
     "investor_notes.upload": TRANSCRIPT_BYTES,
+    # An offering memorandum is a designed PDF with photography.
+    # DOCUMENT_BYTES is the same 20 MB every other document
+    # endpoint here gets; the real one measured during design was
+    # 119 KB, so this is generous rather than tight.
+    "underwriting.upload_om": DOCUMENT_BYTES,
 }
 
 
