@@ -84,10 +84,48 @@ MIN_CHARS_PER_PAGE = 20
 # A mostly-image OM produces a summary built from captions.
 MIN_READABLE_SHARE = 0.30
 
-# Token estimate for the confirm-before-spend gate. Measured, not
-# guessed: 4.8 characters per token on real OM-like text.
-CHARS_PER_TOKEN = 4.8
-INSTRUCTION_TOKENS = 900
+# A real OM argues for itself in three to five sentences worth quoting.
+# More than that is padding. FEWER is not an error -- see validate() --
+# because a document with no marketing prose has no pitch to quote, and
+# saying so is the correct answer rather than a failed one.
+MAX_PITCH_BULLETS = 5
+
+# Shown when a document turns out to carry no seller's argument at all.
+# Deliberately not phrased as a problem: nothing went wrong, and the
+# sentence says what the document is rather than what the model failed
+# to do.
+PITCH_ABSENT_NOTE = (
+    "This reads as a financial document rather than an offering "
+    "memorandum; no seller's pitch was found.")
+
+# Token estimate for the confirm-before-spend gate.
+#
+# CALIBRATED AGAINST A REAL CALL, NOT ASSUMED
+#
+# The first live extraction billed 4,817 prompt tokens where this
+# estimated 3,201 -- 33.5% low. Measuring the pieces explained all of it,
+# and the explanation matters more than the number:
+#
+#   page text, framed     4,297   estimated at 2,301
+#   instructions            287   estimated at 900
+#   json_schema            414   NOT COUNTED AT ALL
+#
+# Two errors in opposite directions and one omission. The big one is
+# characters-per-token: 4.8 was measured on prose, and a financial page
+# is not prose. "1,343,580" is several tokens for nine characters, and a
+# table is mostly figures and column whitespace -- the real rate on that
+# document was 2.57. The instruction constant was guessed high, and the
+# schema travels with every request and was simply forgotten.
+#
+# So the estimate is now built from the parts, each measured. The
+# characters-per-token figure is the dense-table rate on purpose: a
+# prose-heavy OM will come in under the estimate, which is the right
+# direction for a number shown before spending. An estimate that
+# surprises you is only a problem when it surprises you upward.
+CHARS_PER_TOKEN = 2.6          # dense financial pages; prose runs ~4.8
+INSTRUCTION_TOKENS = 300       # measured 287
+SCHEMA_TOKENS = 430            # measured 414, sent with every request
+PAGE_FRAME_TOKENS = 8          # the "--- PAGE n ---" label per page
 COMPLETION_TOKEN_ALLOWANCE = 2000
 
 # Numbers, as they appear in a document: 1,343,580 / $6,990,000 / 5.50%
@@ -195,7 +233,10 @@ def inspect(data: bytes) -> dict[str, Any]:
     used = list(range(1, min(len(pages), PAGE_CAP) + 1))
     skipped = list(range(PAGE_CAP + 1, len(pages) + 1))
     chars = sum(len(pages[i - 1]) for i in used)
-    prompt_tokens = int(chars / CHARS_PER_TOKEN) + INSTRUCTION_TOKENS
+    prompt_tokens = (int(chars / CHARS_PER_TOKEN)
+                     + len(used) * PAGE_FRAME_TOKENS
+                     + INSTRUCTION_TOKENS
+                     + SCHEMA_TOKENS)
 
     return {
         "page_count": len(pages),
@@ -225,6 +266,20 @@ def skipped_note(inspection: dict[str, Any]) -> str:
             f"reflected anywhere in this summary.")
 
 
+def notes(parsed: dict[str, Any]) -> list[str]:
+    """Things worth saying about a summary that are not defects.
+
+    Kept apart from validate()'s reasons on purpose. A reason means the
+    result is discarded; a note means the result stands and something
+    about it is worth stating plainly. An OM with no pitch is the case
+    this exists for.
+    """
+    out = []
+    if not (parsed.get("pitch") or []):
+        out.append(PITCH_ABSENT_NOTE)
+    return out
+
+
 # ── The request ──────────────────────────────────────────────────────────
 
 def build_instructions() -> str:
@@ -241,9 +296,12 @@ def build_instructions() -> str:
         "document prints a price and an income but not a cap rate, there "
         "is no cap rate. "
         "For every number, give the page it appears on, counting from 1. "
-        "In 'pitch', quote the seller's own sentences verbatim, between 3 "
-        "and 5 of them, each with its page. Do not paraphrase, summarise, "
-        "soften or improve them — they are quotations. "
+        "In 'pitch', quote the seller's own sentences verbatim, up to 5 of "
+        "them, each with its page. Do not paraphrase, summarise, soften or "
+        "improve them — they are quotations. If the document contains no "
+        "promotional or persuasive prose — a pro-forma, a rent roll or a "
+        "financial statement rather than a marketing document — return an "
+        "empty list. Do not manufacture a pitch from table headings. "
         "In 'not_stated', list what an offering memorandum would normally "
         "contain that this one does not: named absences such as a T12 "
         "reference, an itemised expense breakdown, a rent roll, financing "
@@ -420,9 +478,19 @@ def validate(parsed: dict[str, Any], pages: list[str],
                 "but that page does not contain it")
 
     # 3. Every pitch bullet must be the document's own words.
+    #
+    # Zero bullets is a finding, not a failure. The first real call this
+    # feature ever made was against a pro-forma P&L -- a table of figures
+    # with no marketing prose in it -- and the model correctly reported
+    # no seller's pitch. A mandatory 3-to-5 rule rejected that, blaming
+    # the model for being right about a document that simply is not an
+    # offering memorandum. The upper bound stays: more than five is the
+    # model padding, which is a real failure.
     pitch = parsed.get("pitch") or []
-    if not 3 <= len(pitch) <= 5:
-        reasons.append(f"pitch has {len(pitch)} bullets; it must have 3 to 5")
+    if len(pitch) > MAX_PITCH_BULLETS:
+        reasons.append(
+            f"pitch has {len(pitch)} bullets; no more than "
+            f"{MAX_PITCH_BULLETS} may be returned")
     for item in pitch:
         quote = item.get("quote") or ""
         page = item.get("page")
@@ -494,4 +562,5 @@ def extract(data: bytes, *, api_key: str, model_name: str,
         "pages_used": pages_used,
         "pages_skipped": inspection["pages_skipped"],
         "skipped_note": skipped_note(inspection),
+        "notes": notes(parsed),
     }
