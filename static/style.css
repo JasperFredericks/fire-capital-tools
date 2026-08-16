@@ -178,6 +178,46 @@ a { color: inherit; text-decoration: none; }
   margin-left: 240px;
   flex: 1;
   min-height: 100vh;
+  /* min-width:0 is load-bearing. Do not remove it as tidying.
+     (Reasoning recovered from commit 40e335f, whose branch was deleted.)
+
+     A flex item defaults to min-width:auto, which means it CANNOT shrink
+     below its content's intrinsic minimum width. A wide table therefore
+     pushed this column wider than the viewport and the whole page
+     scrolled sideways -- and, worse, it silently defeated the
+     `overflow-x: auto` already on .table-wrap below, because a scroll
+     container cannot scroll if its ancestor simply grows to fit it
+     instead. That rule was written correctly and had never once been
+     able to work.
+
+     min-width:0 lets the column shrink to the viewport, at which point
+     .table-wrap does the job it was always written to do: the table
+     scrolls inside its own box and the page does not.
+
+     Measured at a 375px client width, comparing scrollWidth against
+     clientWidth -- NOT innerWidth, because the mobile layout viewport
+     expands to fit overflow, which is how this survived an earlier
+     check:
+
+         page                     before   after
+         Site DD index             600px    375px
+         Deal Dive                 534px    375px
+         Underwriting              616px    375px
+         Rent Comps                672px    375px
+         Dashboard                 375px    375px
+         Quick Deal Analyzer       375px    375px
+         Scorecard Pro             375px    375px
+         Weekly Property Summary   375px    375px
+
+     Four pages, not the two originally reported -- widening the audit
+     found Underwriting and Rent Comps as well. Site DD's table now
+     scrolls inside its own box (client 287, scroll 512) instead of
+     widening the page.
+
+     Desktop is provably untouched: all eight pages screenshot
+     byte-identical at 1440px before and after, with identical column
+     geometry. At that width the column is already wider than its
+     content, so the rule is a no-op there. */
   min-width: 0;
 }
 
