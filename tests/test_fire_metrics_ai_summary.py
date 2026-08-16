@@ -2118,6 +2118,17 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("removeComparisonCitiesByKeys(new Set([cityKeyToRemove]));", template)
         self.assertIn("selectCurrentSearchCity(nextKey, {", template)
 
+    def test_frontend_city_analytics_does_not_restore_stale_rows_after_refresh(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("const comparisonStorageKey = \"fire_metrics_city_comparison_master_v1\";", template)
+        self.assertIn("function clearPersistedComparisonStorage()", template)
+        self.assertIn("localStorage.removeItem(comparisonStorageKey);", template)
+        self.assertIn("function loadComparison()", template)
+        self.assertIn("clearPersistedComparisonStorage();", template)
+        self.assertIn("return [];", template)
+        self.assertIn("comparisonCities = loadComparison();", template)
+        self.assertIn("body: JSON.stringify({ cities: buildCityAnalyticsExportRows() })", template)
+
     def test_frontend_multi_search_auto_selection_triggers_single_city_cre_path(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
         self.assertIn("selectCurrentSearchCity(stableCityKey(firstCity), {", template)
@@ -2137,6 +2148,19 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("Institutional research is temporarily unavailable.", template)
         self.assertIn(".fire-ai-cre-status", stylesheet)
         self.assertIn(".fire-ai-cre-spinner", stylesheet)
+
+    def test_frontend_cre_loading_indicator_clears_in_terminal_and_stale_paths(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn("let creLoadingVisible = Boolean(aiCreStatus && !aiCreStatus.hidden);", template)
+        self.assertIn("creLoadingVisible = Boolean(visible);", template)
+        self.assertIn("aiCreStatus.hidden = !creLoadingVisible;", template)
+        self.assertIn("renderCrePayload(payload);", template)
+        self.assertIn("if (err && err.name === \"AbortError\")", template)
+        self.assertIn("finally {", template)
+        self.assertIn("if (mySequence === creRequestSequence)", template)
+        self.assertIn("setCreLoadingVisible(false);", template)
+        self.assertIn("if (!creSelectionSource) {", template)
+        self.assertIn("setCreIdle();", template)
 
     def test_frontend_city_analytics_export_controls_present(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")

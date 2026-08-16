@@ -408,8 +408,16 @@
   let pendingCurrentCityPreview = { cityKey: "", panMap: false };
   let lastObservedRefreshAt = initialLastRefreshAt;
   let wasRefreshRunning = Boolean(initiallyRunning);
-  let creLoadingVisible = false;
+  let creLoadingVisible = Boolean(aiCreStatus && !aiCreStatus.hidden);
   const explicitCreIntent = "explicit_city_selection";
+
+  function clearPersistedComparisonStorage() {
+    try {
+      localStorage.removeItem(comparisonStorageKey);
+    } catch (error) {
+      // Ignore storage unavailability; in-memory state remains authoritative.
+    }
+  }
 
   function fmtNum(value) {
     if (value === null || value === undefined || value === "") return "-";
@@ -1721,22 +1729,14 @@
   }
 
   function saveComparison() {
-    try {
-      localStorage.setItem(comparisonStorageKey, JSON.stringify(comparisonCities));
-    } catch (error) {
-      // Keep working in-memory if browser storage is unavailable.
-    }
+    // City Analytics is session-owned by active search chips; do not persist
+    // it across page reloads where the chip workspace starts empty.
+    clearPersistedComparisonStorage();
   }
 
   function loadComparison() {
-    try {
-      const raw = localStorage.getItem(comparisonStorageKey);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (error) {
-      return [];
-    }
+    clearPersistedComparisonStorage();
+    return [];
   }
 
   function sanitizeCity(city) {
@@ -1986,9 +1986,8 @@
 
   function setCreLoadingVisible(visible) {
     if (!aiCreStatus) return;
-    if (creLoadingVisible === visible) return;
-    creLoadingVisible = visible;
-    aiCreStatus.hidden = !visible;
+    creLoadingVisible = Boolean(visible);
+    aiCreStatus.hidden = !creLoadingVisible;
   }
 
   function clearCreSources() {
@@ -2155,9 +2154,12 @@
         return;
       }
       if (mySequence !== creRequestSequence) return;
-      setCreLoadingVisible(false);
       setCreBody("Institutional research is temporarily unavailable.");
       clearCreSources();
+    } finally {
+      if (mySequence === creRequestSequence) {
+        setCreLoadingVisible(false);
+      }
     }
   }
 
@@ -2175,9 +2177,7 @@
     summaryRequestSequence += 1;
     const mySequence = summaryRequestSequence;
     const creSelectionSource = String(options.creSelectionSource || "").trim();
-    if (creSelectionSource) {
-      setCreLoading();
-    } else {
+    if (!creSelectionSource) {
       setCreIdle();
     }
 
