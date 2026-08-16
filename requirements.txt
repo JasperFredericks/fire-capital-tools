@@ -17,3 +17,6 @@ openai>=2.53.0,<3
 # which asserts on the DOM a browser actually builds from each template --
 # the string-level view is what missed the select-nesting regression.
 html5lib>=1.1
+# PDF text extraction for Underwriting's OM upload. Pure Python,
+# no system libraries, no required runtime dependencies.
+pypdf==6.16.1
