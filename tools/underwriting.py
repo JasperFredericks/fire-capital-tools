@@ -54,6 +54,7 @@ from tools import quick_analyzer_t12 as qa_t12
 from tools import underwriting_property as uprop
 from tools import om_db
 from tools import om_extract
+from tools import underwriting_turnover as ut
 from tools import upload_limits as ul
 from tools import deal_readiness_defaults as readiness
 from tools import underwriting_loans_math as ulm
@@ -1003,6 +1004,15 @@ def upload_t12(scenario_id):
         "is_included": l["is_included_default"],
     } for l in breakdown["lines"]]
 
+    # Turnover items are capital, not operating. Applied HERE rather than
+    # in the shared classifier because that function is read by Scorecard
+    # Pro and the Quick Analyzer too, and this is a statement about how
+    # Underwriting models a hold -- not about what those tools report.
+    # See tools/underwriting_turnover.py.
+    reclassified = ut.reclassify(lines)
+    turnover = ut.summarize(lines, reclassified)
+    lines = reclassified
+
     other_income = sum(
         sum(v or 0.0 for v in a["data"].values())
         for c, a in data["accounts"].items() if str(c) == "4300")
@@ -1017,6 +1027,15 @@ def upload_t12(scenario_id):
     excluded = sum(1 for l in lines if not l["is_included"])
     flash(f"T12 imported — {len(lines)} expense lines "
           f"({excluded} excluded by default as debt service or capital items).", "success")
+    # Named, not silent: this default moved money out of the operating
+    # total, and a person reading a changed expense ratio should be able
+    # to see which lines did it and put any of them back.
+    if turnover["count"]:
+        names = ", ".join(str(m["label"]) for m in turnover["moved"][:6])
+        flash(f"{turnover['count']} turnover line(s) totalling "
+              f"${turnover['amount']:,.2f} were classified as capital rather "
+              f"than operating: {names}. Change any of them in the expense "
+              f"table below if you would rather they were operating.", "warning")
     for d in breakdown["discrepancies"]:
         flash(f"{d['category_name']}: the file's own rollup total "
               f"({d['parent_total']:,.2f}) differs from the sum of its detail lines "
