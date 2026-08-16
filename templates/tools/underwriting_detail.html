@@ -1030,6 +1030,15 @@
             Quoted verbatim. These are the seller's words and claims, not
             findings.
           </p>
+        {% else %}
+          {#
+            No pitch is a finding, not a failure. A pro-forma or a rent
+            roll has no seller's argument in it, and saying so is more
+            useful than an empty heading.
+          #}
+          <p class="stat-box-sub" style="margin-top:16px;">
+            {{ om_pitch_absent_note }}
+          </p>
         {% endif %}
 
         {% if s.not_stated %}

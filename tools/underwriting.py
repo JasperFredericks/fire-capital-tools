@@ -421,6 +421,7 @@ def detail(scenario_id):
         crosscheck=crosscheck,
         om_documents=_om_documents(scenario_id),
         om_page_cap=om_extract.PAGE_CAP,
+        om_pitch_absent_note=om_extract.PITCH_ABSENT_NOTE,
         feedback_tool=FEEDBACK_TOOL_NAME,
     )
 

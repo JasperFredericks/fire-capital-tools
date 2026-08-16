@@ -260,16 +260,48 @@ class GuardTests(unittest.TestCase):
         reasons = om.validate(bad, self.pages, self.used)
         self.assertTrue(any("may never" in r for r in reasons))
 
-    def test_too_few_pitch_bullets_is_rejected(self):
-        bad = good_summary()
-        bad["pitch"] = bad["pitch"][:2]
-        self.assertTrue(any("3 to 5" in r
-                            for r in om.validate(bad, self.pages, self.used)))
+    def test_no_pitch_at_all_is_accepted(self):
+        """A pro-forma has no seller's argument, and that is the answer.
 
-    def test_too_many_pitch_bullets_is_rejected(self):
+        The first real call this feature ever made was rejected by a
+        mandatory 3-to-5 rule for correctly reporting that a financial
+        statement contains no marketing prose. The model was right.
+        """
+        summary = good_summary()
+        summary["pitch"] = []
+        self.assertEqual(om.validate(summary, self.pages, self.used), [])
+
+    def test_and_it_is_explained_rather_than_left_blank(self):
+        summary = good_summary()
+        summary["pitch"] = []
+        self.assertEqual(om.notes(summary), [om.PITCH_ABSENT_NOTE])
+        self.assertIn("financial document", om.PITCH_ABSENT_NOTE)
+        self.assertNotIn("error", om.PITCH_ABSENT_NOTE.lower())
+
+    def test_a_document_with_a_pitch_gets_no_such_note(self):
+        self.assertEqual(om.notes(good_summary()), [])
+
+    def test_one_or_two_pitch_bullets_are_accepted(self):
+        for count in (1, 2):
+            with self.subTest(count=count):
+                summary = good_summary()
+                summary["pitch"] = summary["pitch"][:count]
+                self.assertEqual(om.validate(summary, self.pages, self.used), [])
+
+    def test_too_many_pitch_bullets_is_still_rejected(self):
+        """The upper bound stays: more than five is padding."""
         bad = good_summary()
         bad["pitch"] = bad["pitch"] * 3
-        self.assertTrue(any("3 to 5" in r
+        reasons = om.validate(bad, self.pages, self.used)
+        self.assertTrue(any("no more than 5" in r for r in reasons),
+                        str(reasons))
+
+    def test_a_bad_quote_is_still_rejected_even_when_there_is_only_one(self):
+        """Relaxing the count must not relax the content check."""
+        bad = good_summary()
+        bad["pitch"] = [{"quote": "A sentence the document never contained.",
+                         "page": 1}]
+        self.assertTrue(any("not in the document as written" in r
                             for r in om.validate(bad, self.pages, self.used)))
 
     def test_page_integers_are_not_treated_as_document_numbers(self):
@@ -433,3 +465,58 @@ class UploadLimitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EstimatorCalibrationTests(unittest.TestCase):
+    """The estimator, against the one real call that measured it.
+
+    The first live extraction billed 4,817 prompt tokens where the
+    estimator said 3,201 -- 33.5% low. Three causes, all measured:
+    characters-per-token was taken from prose (4.8) and applied to a
+    financial table (2.57 in reality), the instruction constant was
+    guessed high, and the JSON schema travelling with every request was
+    not counted at all.
+
+    These tests pin the corrected shape rather than a single number, so
+    the next person can see what the estimate is made of.
+    """
+
+    REAL_CHARS = 11_049          # the production PDF's extracted text
+    REAL_PAGES = 8
+    REAL_ACTUAL_TOKENS = 4_817   # what the API actually billed
+
+    def test_the_schema_is_counted(self):
+        self.assertGreater(om.SCHEMA_TOKENS, 0,
+                           "the schema is sent with every request")
+
+    def test_the_dense_rate_is_used_not_the_prose_rate(self):
+        self.assertLess(om.CHARS_PER_TOKEN, 3.0)
+
+    def test_the_estimate_now_lands_near_the_measured_call(self):
+        estimate = (int(self.REAL_CHARS / om.CHARS_PER_TOKEN)
+                    + self.REAL_PAGES * om.PAGE_FRAME_TOKENS
+                    + om.INSTRUCTION_TOKENS + om.SCHEMA_TOKENS)
+        error = (estimate - self.REAL_ACTUAL_TOKENS) / self.REAL_ACTUAL_TOKENS
+        self.assertLess(abs(error), 0.15,
+                        f"estimate {estimate} vs actual "
+                        f"{self.REAL_ACTUAL_TOKENS} ({error:+.1%})")
+
+    def test_it_errs_high_rather_than_low(self):
+        """The safe direction for a number shown before spending."""
+        estimate = (int(self.REAL_CHARS / om.CHARS_PER_TOKEN)
+                    + self.REAL_PAGES * om.PAGE_FRAME_TOKENS
+                    + om.INSTRUCTION_TOKENS + om.SCHEMA_TOKENS)
+        self.assertGreaterEqual(estimate, self.REAL_ACTUAL_TOKENS)
+
+    def test_the_old_uncorrected_estimate_would_still_be_low(self):
+        """The control: proves this test would have caught the bug."""
+        old = int(self.REAL_CHARS / 4.8) + 900
+        self.assertLess(old, self.REAL_ACTUAL_TOKENS)
+
+    def test_inspect_reports_the_corrected_estimate(self):
+        info = om.inspect(text_pdf(2))
+        chars = info["characters"]
+        expected = (int(chars / om.CHARS_PER_TOKEN)
+                    + len(info["pages_used"]) * om.PAGE_FRAME_TOKENS
+                    + om.INSTRUCTION_TOKENS + om.SCHEMA_TOKENS)
+        self.assertEqual(info["estimated_prompt_tokens"], expected)
