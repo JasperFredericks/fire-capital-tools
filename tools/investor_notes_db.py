@@ -282,10 +282,35 @@ def evidence_of(row: dict[str, Any]) -> Any:
 
 # ── Aliases ──────────────────────────────────────────────────────────────
 
-def add_alias(conn: sqlite3.Connection, property_key: str, alias: str) -> bool:
+class UnknownProperty(ValueError):
+    """An alias was aimed at a property that does not exist."""
+
+
+def add_alias(conn: sqlite3.Connection, property_key: str, alias: str,
+              valid_keys: set[str] | None = None) -> bool:
+    """Attach a name to a property.
+
+    `valid_keys` is the set of keys that correspond to a real property,
+    supplied by the caller because this module cannot see Deal Dive,
+    Underwriting or Site DD and should not learn how to.
+
+    It exists because an alias is only ever read by looking it up from a
+    property entry: investor_notes_properties.build() attaches aliases by
+    key, so a row whose key matches no entry is stored and then never
+    read by anything, ever. Nothing errored, nothing appeared, and the
+    alias silently did not exist. Passing the real keys turns that into a
+    refusal at the point of writing.
+
+    Omitting `valid_keys` keeps the old unchecked behaviour, which is
+    what the tests that predate this use; the route passes them.
+    """
     alias = " ".join((alias or "").split())[:MAX_ALIAS_LEN]
     if not alias or not property_key:
         return False
+    if valid_keys is not None and property_key not in valid_keys:
+        raise UnknownProperty(
+            f"No property is known by the key {property_key!r}, so an alias "
+            "for it would never be read. Add the property first.")
     try:
         conn.execute(
             "INSERT INTO property_aliases (property_key, alias, created_at) "

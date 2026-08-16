@@ -242,10 +242,12 @@
           basement with no signal.
         #}
         {% set est = cost_describe(row) %}
+        {% set ref = reference_hint(row or {'item_key': item.key}) %}
         <details class="sdd-cost"
                  {{ 'open' if est.has_cost or (row and row.condition in work_conditions) else '' }}>
           <summary class="sdd-cost-open">
             {%- if est.has_cost %}Est. {{ '${:,.0f}'.format(est.cost) }} · {{ est.short }}
+            {%- elif ref %}Researched {{ '${:,.0f}'.format(ref.unit_cost) }} · tap to change
             {%- else %}+ Estimated cost{% endif -%}
           </summary>
           <div class="sdd-cost-body">
@@ -261,6 +263,31 @@
               sentence keeps them apart.
             #}
             <p class="sdd-cost-src">{{ est.label or manual_cost_label }}</p>
+            {#
+              The figure the export would otherwise apply silently.
+              Shown, not prefilled: a number sitting in the input would be
+              submitted as the inspector's own the moment anything else on
+              the form was saved, which is exactly the confusion between a
+              national average and a site visit that this tool exists to
+              prevent. Leaving the box empty keeps "I did not price this"
+              distinguishable from "I priced this at the national average".
+            #}
+            {% if ref %}
+              <p class="sdd-cost-src">
+                {% if ref.overridden %}
+                  <strong>Your {{ '${:,.0f}'.format(est.cost) }} is being used.</strong>
+                  The researched average is
+                  {{ '${:,.0f}'.format(ref.unit_cost) }} {{ ref.unit_label }} —
+                  clear the box above to fall back to it.
+                {% else %}
+                  <strong>If you leave this blank, {{ '${:,.0f}'.format(ref.unit_cost) }}
+                  {{ ref.unit_label }} will be used</strong> — a researched
+                  average ({{ ref.sources }}, {{ ref.researched_on }}), not a
+                  quote for this building. Typing a figure replaces it with
+                  yours.
+                {% endif %}
+              </p>
+            {% endif %}
           </div>
         </details>
 

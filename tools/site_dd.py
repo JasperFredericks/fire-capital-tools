@@ -536,6 +536,11 @@ def area_detail(assessment_id, area_id):
         conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
         work_conditions=cond.WORK_CONDITIONS,
         cost_describe=costs.describe,
+        # Display only. See site_dd_costs.reference_hint(): it returns a
+        # figure and words, never a provenance value, so the capture
+        # screen can SHOW what the table would charge without becoming a
+        # second place that can assign it.
+        reference_hint=costs.reference_hint,
         manual_cost_label=costs.SOURCE_LABELS[costs.SOURCE_MANUAL],
         condition_colours=cond.CONDITION_COLOURS,
         statuses=db.AREA_STATUSES, copy_sources=others,
@@ -699,6 +704,11 @@ def room_detail(assessment_id, area_id, room_id):
         conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
         work_conditions=cond.WORK_CONDITIONS,
         cost_describe=costs.describe,
+        # Display only. See site_dd_costs.reference_hint(): it returns a
+        # figure and words, never a provenance value, so the capture
+        # screen can SHOW what the table would charge without becoming a
+        # second place that can assign it.
+        reference_hint=costs.reference_hint,
         manual_cost_label=costs.SOURCE_LABELS[costs.SOURCE_MANUAL],
         condition_colours=cond.CONDITION_COLOURS,
         media_by_item=media_by_item,

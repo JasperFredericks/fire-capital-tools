@@ -190,8 +190,32 @@
 </div>
 
 <!-- ── Aliases ────────────────────────────────────────────────────────── -->
-<div class="card">
+<div class="card" id="properties">
   <div class="scorecard-section-title">What each property is called</div>
+  {#
+    A property is only listed here if it has a record in Deal Dive,
+    Underwriting or Site DD -- those three are the only places the
+    matcher reads from. Meetings happen before any of those exist, and
+    until one does there is nothing to attach a name to and every
+    transcript about that property comes back unassigned. So the form
+    below makes the smallest real record: an Underwriting scenario
+    carrying a name and no numbers.
+  #}
+  <form method="POST" action="{{ url_for('investor_notes.add_property') }}"
+        style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+               margin:4px 0 16px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input class="form-input" type="text" name="property_label" maxlength="120"
+           placeholder="Property name, e.g. The Canyon Apartments"
+           style="max-width:320px;">
+    <button type="submit" class="btn btn-secondary">Add a property</button>
+    <span class="stat-box-sub" style="flex-basis:100%;">
+      For a property you are meeting about but have not underwritten yet.
+      Creates an Underwriting scenario with the name and nothing else, so
+      it can be matched and aliased today and filled in whenever you get
+      to it.
+    </span>
+  </form>
   <p class="page-subtitle" style="margin:8px 0 12px;">
     Matching looks for these in the transcript. Nobody says
     &ldquo;1120 Jackson Street&rdquo; on a call &mdash; they say &ldquo;Jackson&rdquo;.

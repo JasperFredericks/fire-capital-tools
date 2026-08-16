@@ -141,6 +141,46 @@ def apply_reference(finding: dict[str, Any],
             "_reference": ref}
 
 
+def reference_hint(finding: dict[str, Any],
+                   flooring_type: str | None = None) -> dict[str, Any] | None:
+    """What the researched table would put on this line, for DISPLAY only.
+
+    Read-only by construction: it returns text and a number and no
+    provenance value, so nothing downstream can turn it into a stored
+    cost. apply_reference() remains the single route by which a finding
+    acquires 'reference' as its source.
+
+    It exists because the capture screen was showing a blank cost box for
+    an item the export would happily price at $7,500. An inspector who
+    disagrees with a national HVAC average could only override it by
+    typing over a figure they could not see, which is not an override --
+    it is a guess that happens to win. Showing the number turns the same
+    keystroke into an informed decision.
+
+    Returns None when the table has no figure, which is also when there
+    is nothing to override.
+    """
+    ref = reference_for(finding, flooring_type)
+    if ref is None:
+        return None
+    from tools import site_dd_reference_costs as refcosts
+
+    stored = clean_cost((finding or {}).get("est_unit_cost"))
+    is_manual = normalize_source((finding or {}).get("est_cost_source")) == SOURCE_MANUAL
+    return {
+        "unit_cost": ref.unit_cost,
+        "unit_label": refcosts.UNIT_LABELS.get(ref.unit, ref.unit),
+        "note": ref.note,
+        "sources": ", ".join(ref.sources),
+        "researched_on": refcosts.RESEARCHED_ON,
+        # True when a person has already typed a figure here, so the page
+        # can say "yours is being used instead of" rather than "this will
+        # be used".
+        "overridden": bool(is_manual and stored is not None),
+        "differs": bool(stored is not None and stored != ref.unit_cost),
+    }
+
+
 def source_for(cost: Any, previous: Any = None) -> str:
     """The provenance of a cost that has just been typed.
 

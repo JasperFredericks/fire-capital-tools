@@ -42,6 +42,7 @@ from matplotlib.backends.backend_pdf import PdfPages   # noqa: E402
 from tools import site_dd_checklist as cl              # noqa: E402
 from tools import site_dd_costs as costs               # noqa: E402
 from tools import site_dd_reference_costs as refcosts  # noqa: E402
+from tools import underwriting_capex as ucx            # noqa: E402
 
 PAGE_SIZE = (11, 8.5)
 INK = "#1a2744"
@@ -60,18 +61,54 @@ SOURCE_COLUMN = {
 
 def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = None
                 ) -> list[dict[str, Any]]:
-    """One budget row per finding that has a condition worth costing.
+    """Budget rows, with quantity as the instance count.
 
-    Quantity comes from the finding's own instance, so two sinks are two
-    rows rather than one -- the capex export groups by category, not by
-    item, and a reader adding them up should see each object.
+    Forty toilets are one line of quantity 40, not forty lines of one.
+    This is the grouping site_dd_costs.to_capex_lines() has always
+    implemented for the Underwriting hand-off; the export was written
+    separately and hard-coded quantity to 1, so a unit cost entered by
+    hand produced a line total of exactly that unit cost however many of
+    the thing there were. The two paths now agree.
+
+    WHAT IS IN THE GROUPING KEY, AND WHY IT IS MORE THAN (area, room, item)
+
+    to_capex_lines() groups on (area, room, item) alone and takes the
+    first non-null cost it finds. That is safe when every instance is
+    priced the same and silently wrong when they are not: two toilets at
+    $450 and $600 would become "Toilet x2" at whichever price came first,
+    and $300 would leave the budget without a trace.
+
+    So condition, unit cost and provenance join the key. Instances that
+    are genuinely the same collapse into one line with a quantity;
+    instances that differ in what is wrong with them or what they cost
+    stay visible as separate lines. Nothing can be absorbed into a
+    quantity unless it is interchangeable with the rows beside it.
+
+    The total is not computed here. It comes from
+    underwriting_capex.line_total(), which is the function that already
+    owns quantity x unit cost for the whole app -- writing a second
+    multiplication here would create two numbers that can disagree.
     """
     labels = labels or {}
-    out = []
+    groups: dict[tuple, dict[str, Any]] = {}
+    order: list[tuple] = []
+
     for f in findings or []:
         described = costs.describe(f)
+        key = (f.get("area_id"), f.get("room_id"), f.get("item_key"),
+               f.get("condition"), described["cost"], described["source"],
+               (f.get("instance_label") or "").strip())
+        if key not in groups:
+            groups[key] = {"rows": [], "first": f, "described": described}
+            order.append(key)
+        groups[key]["rows"].append(f)
+
+    out = []
+    for key in order:
+        group = groups[key]
+        f, described = group["first"], group["described"]
         cat = costs.capex_category(f)
-        out.append({
+        line = {
             "item_key": f.get("item_key"),
             "label": (f.get("instance_label")
                       or labels.get(f.get("item_key"))
@@ -83,11 +120,17 @@ def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = 
             "unit_cost": described["cost"],
             "source": described["source"],
             "source_label": SOURCE_COLUMN[described["source"]],
-            "quantity": 1.0,
-            "total": described["cost"] or 0.0,
+            "quantity": float(len(group["rows"])),
+            # Left None on purpose: line_total() below derives it. Kept on
+            # the row so this line has the same shape as an Underwriting
+            # capex line, where an explicit total legitimately overrides
+            # quantity x unit cost.
+            "total_cost": None,
             "reason": (refcosts.reason(f.get("item_key"))
                        if described["cost"] is None else ""),
-        })
+        }
+        line["total"] = ucx.line_total(line)
+        out.append(line)
     return out
 
 
@@ -125,6 +168,14 @@ def summarize(lines: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _money(value: Any) -> str:
     return "—" if value in (None, "") else f"${float(value):,.0f}"
+
+
+def _qty(value: Any) -> str:
+    """Whole counts read as counts: 40, not 40.0."""
+    if value in (None, ""):
+        return "—"
+    number = float(value)
+    return f"{number:,.0f}" if number == int(number) else f"{number:,.2f}"
 
 
 def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
@@ -171,10 +222,14 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
             else:
                 top = 0.865
 
-            cols = (0.06, 0.30, 0.50, 0.64, 0.78, 0.94)
-            heads = ("Item", "Category", "Condition", "Source", "Unit", "Total")
+            # Quantity earns a column now that it can be more than 1: a
+            # $600 unit cost beside a $24,000 total is unreadable without
+            # the 40 that connects them.
+            cols = (0.06, 0.28, 0.46, 0.60, 0.74, 0.82, 0.94)
+            heads = ("Item", "Category", "Condition", "Source", "Unit",
+                     "Qty", "Total")
             for x, head, align in zip(cols, heads,
-                                      ("left",) * 5 + ("right",)):
+                                      ("left",) * 6 + ("right",)):
                 fig.text(x, top, head, fontsize=8.5, fontweight="bold",
                          color=MUTED, ha=align)
             y = top - 0.024
@@ -193,7 +248,9 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
                          else (MUTED if row["source"] == costs.SOURCE_NONE else BODY))
                 fig.text(cols[4], y, _money(row["unit_cost"]), fontsize=8.5,
                          color=BODY)
-                fig.text(cols[5], y, _money(row["total"]) if row["total"] else "—",
+                fig.text(cols[5], y, _qty(row["quantity"]), fontsize=8.5,
+                         color=BODY if row["quantity"] > 1 else MUTED)
+                fig.text(cols[6], y, _money(row["total"]) if row["total"] else "—",
                          fontsize=8.5, color=BODY, ha="right")
                 y -= 0.026
 
