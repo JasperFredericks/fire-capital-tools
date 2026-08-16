@@ -275,10 +275,71 @@ def add_alias():
     key = (request.form.get("property_key") or "").strip()
     alias = (request.form.get("alias") or "").strip()
     with notes_db.get_connection() as conn:
-        ok = notes_db.add_alias(conn, key, alias)
+        valid = {e["key"] for e in _property_entries(conn)}
+        try:
+            ok = notes_db.add_alias(conn, key, alias, valid_keys=valid)
+        except notes_db.UnknownProperty as exc:
+            flash(str(exc), "danger")
+            return redirect(url_for("investor_notes.index"))
     flash(f"Added “{alias}”." if ok else "That alias is already there.",
           "success" if ok else "warning")
     return redirect(url_for("investor_notes.index"))
+
+
+@investor_notes_bp.route("/notes/properties", methods=["POST"])
+@login_required
+def add_property():
+    """Create a property that exists only as a name, for now.
+
+    THE GAP THIS CLOSES
+
+    A property becomes visible to the notetaker by having a record in
+    Deal Dive, Underwriting or Site DD -- those three are the only
+    sources investor_notes_properties.build() reads. Michelle has
+    meetings about properties before any of those exist, and until one
+    does there is nothing to attach an alias to and every transcript
+    naming the property comes back unassigned. That is not a matching
+    problem and no amount of alias work fixes it.
+
+    So this writes the smallest real record rather than inventing a
+    fourth kind of property. An Underwriting scenario needs exactly one
+    thing, property_label, and everything else is nullable -- so a stub
+    is a scenario with a name and no numbers. It gets its key from
+    absorb() like every other scenario, appears in the alias list
+    immediately, and the day somebody underwrites it they open the
+    scenario already sitting there and start typing.
+
+    The alternative -- letting an alias exist on its own -- would create
+    a property visible in one tool and unreachable from every other, and
+    would then collide with the real record the moment one was made.
+    """
+    label = " ".join((request.form.get("property_label") or "").split())[:120]
+    if not label:
+        flash("A property needs a name.", "danger")
+        return redirect(url_for("investor_notes.index") + "#properties")
+
+    with notes_db.get_connection() as conn:
+        existing = {matching.normalize(e["label"]): e
+                    for e in _property_entries(conn)}
+    already = existing.get(matching.normalize(label))
+    if already:
+        flash(f"“{already['label']}” is already here — "
+              f"add an alias to it rather than a second copy.", "warning")
+        return redirect(url_for("investor_notes.index") + "#properties")
+
+    with underwriting_db.get_connection() as conn:
+        scenario_id = underwriting_db.create_scenario(conn, {
+            "property_label": label,
+            # Named for what it is. Somebody opening Underwriting later
+            # should see immediately that no assumptions were ever entered
+            # here, rather than a "Base case" with silent defaults.
+            "name": "Placeholder — no assumptions entered",
+        })
+
+    flash(f"Added “{label}”. It can be aliased now, and its Underwriting "
+          f"scenario is ready whenever you want to put numbers in it.",
+          "success")
+    return redirect(url_for("investor_notes.index") + "#properties")
 
 
 @investor_notes_bp.route("/notes/aliases/<int:alias_id>/delete", methods=["POST"])
