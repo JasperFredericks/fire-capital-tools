@@ -204,12 +204,19 @@ class ScopedToUnderwritingTests(unittest.TestCase):
         self.assertEqual(imported, ["__future__", "re", "typing"], str(imported))
 
     def test_only_underwritings_import_applies_it(self):
-        import subprocess
-        out = subprocess.run(
-            ["git", "grep", "-l", "underwriting_turnover"],
-            capture_output=True, text=True).stdout.split()
-        callers = [p for p in out if p.startswith("tools/")
-                   and p != "tools/underwriting_turnover.py"]
+        """Walked, not shelled out to.
+
+        This used `git grep`, which passes on a developer machine and
+        errors in the deployed container -- there is no git there. The
+        test is about the source tree, so it reads the source tree.
+        """
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent / "tools"
+        callers = sorted(
+            f"tools/{p.name}" for p in root.rglob("*.py")
+            if p.name != "underwriting_turnover.py"
+            and "underwriting_turnover" in p.read_text(encoding="utf-8"))
         self.assertEqual(callers, ["tools/underwriting.py"], str(callers))
 
     def test_the_quick_analyzer_import_is_untouched(self):
