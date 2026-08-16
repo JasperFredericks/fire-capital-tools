@@ -122,6 +122,26 @@
     number for the whole hold, and the year it changes is the year the
     coverage ratio is worst.
   #}
+  {#
+    A refinance moves money to investors mid-hold and changes what the
+    preferred return accrues on afterwards. Both are stated rather than
+    left to be inferred from a changed IRR.
+  #}
+  {% if r.refinance %}
+    <p class="result-note" style="border-left:3px solid #2563eb;">
+      <strong>Cash-out refinance in year {{ r.refinance.refi_year }}.</strong>
+      A new {{ money(r.refinance.loan_amount) }} loan pays off
+      {{ money(r.refinance.payoff_balance) }} and
+      {{ money(r.refinance.refi_costs) }} of costs, leaving
+      <strong>{{ money(r.refinance.excess_proceeds) }}</strong> of excess
+      proceeds. The GP takes {{ money(r.refinance.gp_fee) }} and
+      <strong>{{ money(r.refinance.proceeds_to_investors) }}</strong> is
+      returned to investors, reducing their unreturned capital.
+      No preferred return is paid at the refinance itself &mdash; it keeps
+      accruing afterwards on the smaller remaining balance.
+      The payoff at sale is the new loan's, not the original's.
+    </p>
+  {% endif %}
   {% if r.io_years %}
     <p class="result-note" style="border-left:3px solid #b45309;">
       <strong>Interest-only for the first
@@ -660,6 +680,13 @@
           ('ltv_pct','LTV (%)'), ('interest_rate_pct','Interest Rate (%)'),
           ('amort_years','Amortization (yrs)'),
           ('io_years','Interest-Only Period (yrs)'), ('hold_years','Hold Period (yrs)'),
+          ('refi_year','Refinance in Year (blank = none)'),
+          ('refi_loan_amount','Refinance: New Loan ($)'),
+          ('refi_rate_pct','Refinance: Rate (%)'),
+          ('refi_amort_years','Refinance: Amortization (yrs)'),
+          ('refi_io_years','Refinance: Interest-Only (yrs)'),
+          ('refi_costs_pct','Refinance: Costs (% of new loan)'),
+          ('refi_fee_pct','Refinance: GP Fee (% of excess proceeds)'),
           ('exit_cap_pct','Exit Cap Rate (%)'), ('selling_costs_pct','Selling Costs (%)'),
           ('vacancy_pct','Vacancy (%)'), ('concessions_pct','Concessions (%)'),
           ('bad_debt_pct','Bad Debt (%)'), ('other_income_annual','Other Income ($/yr)'),
@@ -668,6 +695,22 @@
           <label class="form-label" for="{{ key }}">{{ label }}</label>
           <input class="form-input" type="text" id="{{ key }}" name="{{ key }}"
                  value="{{ scenario[key] if scenario[key] is not none else '' }}">
+          {% if key == 'refi_year' %}
+            <span class="stat-box-sub">
+              A cash-out refinance part-way through the hold. Blank means
+              none. Rate and amortization fall back to the existing loan's
+              own terms when left blank.
+            </span>
+          {% endif %}
+          {% if key == 'refi_fee_pct' %}
+            <span class="stat-box-sub">
+              Charged on the <strong>excess proceeds</strong> &mdash; what is
+              left after the old loan is paid off and refinance costs are
+              taken &mdash; not on the gross new loan. That is a different
+              base from the sale-side capital transaction fee, deliberately:
+              the fee sits between the payoff and the return of capital.
+            </span>
+          {% endif %}
           {% if key == 'io_years' %}
             <span class="stat-box-sub">
               Years of interest-only payments before amortization begins.

@@ -172,6 +172,95 @@ def remaining_balance(principal: float, annual_rate: float, amort_years: int,
     return max(0.0, balance)
 
 
+def refinance(loan: float, annual_rate: float, amort_years: int,
+              hold_years: int, *, io_months: int = 0,
+              refi_year: int, refi_loan: float, refi_rate: float,
+              refi_amort_years: int, refi_io_months: int = 0,
+              refi_costs_pct: float = 0.0,
+              refi_fee_pct: float = 0.0) -> dict[str, Any]:
+    """One loan replaced by another, part-way through the hold.
+
+    A cash-out refinance is the first mid-hold capital EVENT this model
+    has had. Everything before it was operating cash flow and a terminal
+    sale, so the shape is new even though every piece of arithmetic it
+    uses already existed.
+
+    THE ORDER, WHICH IS MICHELLE'S AND NOT AN INVENTION
+
+        new loan
+          - payoff of the old loan       (IO-aware, at refi_year * 12)
+          - refinance costs              (points and closing)
+          = excess proceeds
+          - GP capital transaction fee
+          = what reaches the investors
+
+    Preferred return is deliberately absent from that list. It is not
+    paid at the event; it keeps accruing afterwards on whatever capital
+    is still unreturned, which is the whole point of returning capital
+    early.
+
+    THE FEE BASE IS AN ASSUMPTION, FLAGGED
+
+    refi_fee_pct is charged on the EXCESS PROCEEDS POOL, not on the gross
+    new loan. That is the reading the stated order forces -- the fee sits
+    between the payoff and the return of capital, so it can only be a
+    share of what is left after the payoff. The sale-side fee is charged
+    on the gross sale price instead, so the two bases genuinely differ,
+    and that difference is deliberate rather than an oversight. If
+    Michelle means the gross new loan, this is the one line to change.
+
+    A cash-in refinance -- new loan smaller than the payoff -- is refused
+    rather than modelled as a negative distribution.
+    """
+    h = int(hold_years)
+    year = int(refi_year)
+    if not 1 <= year <= h - 1:
+        raise ValidationError(
+            f"The refinance year must be between 1 and {h - 1} for a "
+            f"{h}-year hold — a refinance in the exit year is a sale.")
+    if refi_loan <= 0:
+        raise ValidationError("The new loan amount must be greater than zero.")
+
+    payoff = remaining_balance(loan, annual_rate, amort_years, year * 12,
+                               io_months=io_months)
+    costs = refi_loan * (refi_costs_pct / 100.0)
+    excess = refi_loan - payoff - costs
+    if excess < 0:
+        raise ValidationError(
+            f"This refinance raises ${refi_loan:,.0f} against a payoff of "
+            f"${payoff:,.0f} plus ${costs:,.0f} of costs, so it needs "
+            f"${-excess:,.0f} of cash IN rather than returning any. A "
+            f"cash-in refinance is not modelled here.")
+
+    fee = excess * (refi_fee_pct / 100.0)
+    to_investors = excess - fee
+
+    # Two segments, spliced. The first is simply the original loan's own
+    # series truncated at the refinance; the second starts a new loan on
+    # its own terms, which may include a fresh interest-only period.
+    before = (annual_debt_service_series(loan, annual_rate, amort_years, year,
+                                         io_months=io_months)
+              if loan > 0 else [0.0] * year)
+    after = annual_debt_service_series(refi_loan, refi_rate, refi_amort_years,
+                                       h - year, io_months=refi_io_months)
+    return {
+        "refi_year": year,
+        "payoff_balance": payoff,
+        "refi_costs": costs,
+        "excess_proceeds": excess,
+        "gp_fee": fee,
+        "proceeds_to_investors": to_investors,
+        "debt_service_series": before + after,
+        # The balloon is the NEW loan's, at the months it has actually
+        # been paying -- not the original's, which no longer exists.
+        "balance_at_exit": remaining_balance(refi_loan, refi_rate,
+                                             refi_amort_years,
+                                             (h - year) * 12,
+                                             io_months=refi_io_months),
+        "loan_amount": refi_loan,
+    }
+
+
 def annual_debt_service_series(principal: float, annual_rate: float,
                                amort_years: int, hold_years: int, *,
                                io_months: int = 0) -> list[float]:
@@ -372,9 +461,40 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
             f"amortizes — the IO period must be shorter.")
     io_months = io_years * 12
 
+    # Cash-out refinance. Absent -- every Deal Analyzer call and every
+    # scenario that predates the columns -- leaves everything below
+    # exactly as it was. Single-loan mode only: see the note where
+    # refi_event is consumed.
+    refi_event = None
+    refi_year = int(float(inputs.get("refi_year") or 0))
+    if refi_year and debt is None:
+        refi_event = refinance(
+            loan, rate, amort_years, H, io_months=io_months,
+            refi_year=refi_year,
+            refi_loan=float(inputs.get("refi_loan_amount") or 0.0),
+            refi_rate=(float(inputs["refi_rate_pct"])
+                       if inputs.get("refi_rate_pct") not in (None, "")
+                       else float(inputs["interest_rate_pct"])) / 100.0,
+            refi_amort_years=int(float(inputs.get("refi_amort_years")
+                                       or amort_years)),
+            refi_io_months=int(float(inputs.get("refi_io_years") or 0)) * 12,
+            refi_costs_pct=float(inputs.get("refi_costs_pct") or 0.0),
+            refi_fee_pct=float(inputs.get("refi_fee_pct") or 0.0))
+    elif refi_year and debt is not None:
+        # Multi-loan mode does not naturally apply: a stack has no single
+        # loan to replace, and which loan the refinance retires is a term
+        # nobody has stated. Refused rather than guessed at.
+        raise ValidationError(
+            "A refinance cannot be modelled on a multi-loan stack yet — "
+            "which loan it replaces is not defined. Remove the loan stack "
+            "or the refinance year.")
+
     if debt is None:
-        debt_service_series = annual_debt_service_series(
-            loan, rate, amort_years, H, io_months=io_months) if loan > 0 else [0.0] * H
+        debt_service_series = (
+            refi_event["debt_service_series"] if refi_event
+            else (annual_debt_service_series(
+                loan, rate, amort_years, H, io_months=io_months)
+                if loan > 0 else [0.0] * H))
     else:
         # A multi-loan stack whose loans have their own IO periods hands
         # over a series; one without them hands over the scalar it always
@@ -395,12 +515,19 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
     for t in range(1, H + 1):
         noi_t = float(noi_series[t - 1])
         ds_t = debt_service_series[t - 1]
-        cf_t = noi_t - ds_t
+        # The refinance lands in exactly one year. It is carried as its own
+        # component rather than folded into cash_flow alone, because the
+        # waterfall has to be able to treat a capital event differently
+        # from operations -- the same reason sale proceeds travel apart.
+        refi_t = (refi_event["proceeds_to_investors"]
+                  if refi_event and t == refi_event["refi_year"] else 0.0)
+        cf_t = noi_t - ds_t + refi_t
         cumulative += cf_t
         years.append({
             "year": t,
             "noi": noi_t,
             "debt_service": ds_t,
+            "refi_proceeds": refi_t,
             "cash_flow": cf_t,
             "cumulative_cash_flow": cumulative,
         })
@@ -420,9 +547,13 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
     capital_transaction_fee = gross_sale * ctf_pct
     # The multi-loan override supplies the summed payoff of the stack; with
     # no override this is the single LTV-sized loan, exactly as before.
-    balance_at_exit = (remaining_balance(loan, rate, amort_years, H * 12,
-                                         io_months=io_months)
-                       if debt is None else float(debt["balance_at_exit"]))
+    if refi_event:
+        balance_at_exit = refi_event["balance_at_exit"]
+    elif debt is None:
+        balance_at_exit = remaining_balance(loan, rate, amort_years, H * 12,
+                                            io_months=io_months)
+    else:
+        balance_at_exit = float(debt["balance_at_exit"])
     net_sale_levered = (gross_sale - selling_costs - capital_transaction_fee
                         - balance_at_exit)
     net_sale_unlevered = gross_sale - selling_costs - capital_transaction_fee
@@ -491,6 +622,13 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
         "monthly_debt_service": debt_service / 12 if debt_service else 0.0,
         "debt_service_series": debt_service_series,
         "io_years": io_years,
+        # The refinance, or None. Everything a page or a waterfall needs
+        # to describe the event travels together: what was paid off, what
+        # it cost, what the GP took and what reached the investors.
+        "refinance": refi_event,
+        "refi_year": (refi_event or {}).get("refi_year"),
+        "refi_proceeds": (refi_event or {}).get("proceeds_to_investors", 0.0),
+        "refi_gp_fee": (refi_event or {}).get("gp_fee", 0.0),
         # Which convention produced the balloon, carried with the result
         # rather than written into a template. A balloon is only
         # interpretable alongside the amortization convention behind it,
