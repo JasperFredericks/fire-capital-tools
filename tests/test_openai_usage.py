@@ -415,3 +415,68 @@ class TestIsolationTests(unittest.TestCase):
         that is what identified the cause."""
         from unittest.mock import MagicMock
         self.assertEqual(int(MagicMock()), 1)
+
+
+class EveryCallingModuleGuardsTheCounterTests(unittest.TestCase):
+    """The guard must live where the calls live.
+
+    tests/__init__.py covers package-style runs and this module covers
+    `unittest discover`. Neither covers running a test file directly by
+    path -- `python tests/test_fire_metrics_improvements.py`, or a
+    single-file run from an editor -- because that imports no package and
+    no sibling module.
+
+    So a module whose tests reach openai_usage.record() has to carry its
+    own guard. That is currently one module, and this test names it: if
+    another test module starts exercising the real summary or research
+    functions, this fails until it guards itself too.
+    """
+
+    ROOT = Path(__file__).resolve().parent
+
+    #: Modules whose tests drive code paths that call openai_usage.record().
+    CALLERS = ("test_fire_metrics_improvements.py",)
+
+    def _source(self, name):
+        return (self.ROOT / name).read_text(encoding="utf-8")
+
+    def test_each_calling_module_sets_the_path_itself(self):
+        for name in self.CALLERS:
+            with self.subTest(module=name):
+                body = self._source(name)
+                self.assertIn('os.environ["OPENAI_USAGE_DB_PATH"]',
+                              body.replace("_os.", "os."),
+                              f"{name} can write to the live counter when run alone")
+
+    def test_the_guard_runs_before_any_tools_import(self):
+        """A guard that runs after the import it protects is decoration."""
+        import ast as _ast
+
+        for name in self.CALLERS:
+            with self.subTest(module=name):
+                src = self._source(name)
+                tree = _ast.parse(src)
+                guard = next(
+                    node.lineno for node in _ast.walk(tree)
+                    if isinstance(node, _ast.Subscript)
+                    and "OPENAI_USAGE_DB_PATH" in (_ast.get_source_segment(src, node) or "")
+                    and "environ" in (_ast.get_source_segment(src, node) or ""))
+                first_import = next(
+                    node.lineno for node in tree.body
+                    if isinstance(node, _ast.ImportFrom)
+                    and (node.module or "").startswith(("tools", "fire_metrics")))
+                self.assertLess(guard, first_import,
+                                f"{name} imports the code under test before guarding")
+
+    def test_it_only_redirects_an_unset_or_deployment_path(self):
+        """A developer aiming the variable somewhere is not overridden."""
+        for name in self.CALLERS + ("__init__.py",):
+            with self.subTest(module=name):
+                body = self._source(name).replace("_os.", "os.")
+                self.assertIn('startswith("/data/")', body)
+
+    def test_the_module_that_spends_is_still_the_one_named(self):
+        """The control: if this module stopped calling the real functions,
+        the list above would be guarding nothing and should be revisited."""
+        body = self._source("test_fire_metrics_improvements.py")
+        self.assertIn("openai_cre_research", body)

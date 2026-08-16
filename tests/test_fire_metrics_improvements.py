@@ -7,6 +7,37 @@ Tests for FIRE Metrics improvements:
 
 from __future__ import annotations
 
+# ── OpenAI counter guard ─────────────────────────────────────────────────
+#
+# THIS module is the one that spends. Its tests call the real
+# openai_summary() and openai_cre_research() with a mocked client, and
+# both call openai_usage.record() before returning -- deliberately, so a
+# cache hit cannot inflate the count. With a MagicMock response the
+# recorded token counts come back as 1, because int(MagicMock()) is 1.
+#
+# That was not theoretical: running the suite on production once took the
+# live counter from 1 call to 37, thirty-six phantom calls at a token
+# each. The counter exists to answer "what is spending the OpenAI
+# budget", and a number inflated by a test run is worse than no number.
+#
+# tests/__init__.py and tests/test_openai_usage.py already carry this
+# guard, and between them they cover `unittest discover` and package-style
+# runs. Neither covers running THIS file directly by path --
+# `python tests/test_fire_metrics_improvements.py`, or a single-file run
+# from an editor -- which imports no package and no sibling module. The
+# module that makes the calls should not depend on a different module
+# being imported first to be safe.
+#
+# Set only when the variable is unset or points at a real deployment
+# path, so a developer aiming it somewhere deliberately is not overridden.
+import os as _os
+import tempfile as _tempfile
+
+_configured = _os.environ.get("OPENAI_USAGE_DB_PATH", "")
+if not _configured or _configured.startswith("/data/"):
+    _os.environ["OPENAI_USAGE_DB_PATH"] = _os.path.join(
+        _tempfile.mkdtemp(prefix="fct-test-openai-usage-"), "openai_usage.db")
+
 import json
 import sqlite3
 import tempfile
