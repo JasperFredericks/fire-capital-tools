@@ -686,7 +686,8 @@
           ('refi_amort_years','Refinance: Amortization (yrs)'),
           ('refi_io_years','Refinance: Interest-Only (yrs)'),
           ('refi_costs_pct','Refinance: Costs (% of new loan)'),
-          ('refi_fee_pct','Refinance: GP Fee (% of excess proceeds)'),
+          ('refi_fee_pct','Refinance: GP Capital Transaction Fee (% of new loan)'),
+          ('refi_bank_fee_pct','Refinance: Bank Loan Fee (% of new loan)'),
           ('exit_cap_pct','Exit Cap Rate (%)'), ('selling_costs_pct','Selling Costs (%)'),
           ('vacancy_pct','Vacancy (%)'), ('concessions_pct','Concessions (%)'),
           ('bad_debt_pct','Bad Debt (%)'), ('other_income_annual','Other Income ($/yr)'),
@@ -704,11 +705,18 @@
           {% endif %}
           {% if key == 'refi_fee_pct' %}
             <span class="stat-box-sub">
-              Charged on the <strong>excess proceeds</strong> &mdash; what is
-              left after the old loan is paid off and refinance costs are
-              taken &mdash; not on the gross new loan. That is a different
-              base from the sale-side capital transaction fee, deliberately:
-              the fee sits between the payoff and the return of capital.
+              Charged on the <strong>gross new loan</strong>, not on the
+              excess proceeds: a $5.2M refinance at 1% is $52,000. This is
+              the GP's fee for the transaction and is separate from the
+              bank's own loan fee below &mdash; both come out of the new
+              loan, and neither replaces the other.
+            </span>
+          {% endif %}
+          {% if key == 'refi_bank_fee_pct' %}
+            <span class="stat-box-sub">
+              The lender's standard loan fee, also a share of the gross new
+              loan. Deducted alongside the GP fee and the refinance costs
+              before anything reaches the investors.
             </span>
           {% endif %}
           {% if key == 'io_years' %}

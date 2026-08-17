@@ -639,6 +639,7 @@ def _engine_inputs(scenario: dict[str, Any],
         "refi_io_years": scenario.get("refi_io_years"),
         "refi_costs_pct": _f(scenario.get("refi_costs_pct")),
         "refi_fee_pct": _f(scenario.get("refi_fee_pct")),
+        "refi_bank_fee_pct": _f(scenario.get("refi_bank_fee_pct")),
         "noi_year1": 1.0,
         "noi_growth_pct": 0.0,
     }

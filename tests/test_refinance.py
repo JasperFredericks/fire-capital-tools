@@ -48,12 +48,23 @@ EQUITY = 2_688_848.65
 REFI_LOAN = 5_200_000.0
 REFI_COSTS_PCT = 1.37
 REFI_FEE_PCT = 1.0
+# Michelle's own example is a 1% GP fee AND a 1% bank fee, which on a
+# $5.2M loan makes both exactly $52,000 -- indistinguishable in any test
+# that compares them. That is the same collision refi_costs_pct had
+# before it moved off 1.0, arriving from the other direction now that the
+# fee base is the gross loan rather than the excess pool.
+#
+# So the fixture prices the bank fee at 0.85% to keep every figure in the
+# scenario distinct, and ONE dedicated test pins the real-world both-at-1%
+# case against her stated $52,000.
+REFI_BANK_FEE_PCT = 0.85
 
 
 def refi(**over):
     kw = dict(refi_year=3, refi_loan=REFI_LOAN, refi_rate=0.06,
               refi_amort_years=30, refi_costs_pct=REFI_COSTS_PCT,
-              refi_fee_pct=REFI_FEE_PCT)
+              refi_fee_pct=REFI_FEE_PCT,
+              refi_bank_fee_pct=REFI_BANK_FEE_PCT)
     kw.update(over)
     return m.refinance(LOAN, RATE, AMORT, HOLD, **kw)
 
@@ -76,29 +87,74 @@ class ExcessProceedsTests(unittest.TestCase):
         self.assertEqual(refi()["refi_costs"],
                          REFI_LOAN * (REFI_COSTS_PCT / 100.0))
 
-    def test_excess_is_the_new_loan_less_payoff_and_costs(self):
+    def test_excess_is_the_new_loan_less_payoff_costs_and_both_fees(self):
         ev = refi()
         self.assertAlmostEqual(
             ev["excess_proceeds"],
-            REFI_LOAN - ev["payoff_balance"] - ev["refi_costs"], places=6)
+            REFI_LOAN - ev["payoff_balance"] - ev["refi_costs"]
+            - ev["bank_fee"] - ev["gp_fee"], places=6)
 
-    def test_the_gp_fee_comes_off_the_excess_pool(self):
-        """The assumption this file's docstring flags."""
+    def test_the_gp_fee_is_a_share_of_the_gross_new_loan(self):
+        """Settled by Michelle, and it reverses the earlier reading.
+
+        The fee used to be charged on the excess pool, which the payout
+        order seemed to force. She confirmed the base is the gross new
+        loan: "the 1% is taken from the new loan amount ... the $5.2M refi
+        loan amount would be $52K in the capital transaction fee."
+        """
         ev = refi()
         self.assertAlmostEqual(ev["gp_fee"],
-                               ev["excess_proceeds"] * (REFI_FEE_PCT / 100.0),
+                               REFI_LOAN * (REFI_FEE_PCT / 100.0), places=6)
+
+    def test_her_stated_example_exactly(self):
+        """$5.2M at 1% is $52,000, in her words and to the cent."""
+        ev = refi(refi_fee_pct=1.0)
+        self.assertAlmostEqual(ev["gp_fee"], 52_000.00, places=2)
+
+    def test_the_bank_loan_fee_is_also_a_share_of_the_gross_new_loan(self):
+        ev = refi()
+        self.assertAlmostEqual(ev["bank_fee"],
+                               REFI_LOAN * (REFI_BANK_FEE_PCT / 100.0),
                                places=6)
 
-    def test_and_is_not_a_share_of_the_gross_new_loan(self):
-        """Pinned so the alternative reading cannot creep in unnoticed."""
+    def test_the_two_fees_are_separate_and_both_deducted(self):
+        """One is the bank's cost of lending, one is the GP's fee. Neither
+        substitutes for the other."""
         ev = refi()
-        self.assertNotAlmostEqual(ev["gp_fee"],
-                                  REFI_LOAN * (REFI_FEE_PCT / 100.0), places=2)
+        self.assertGreater(ev["bank_fee"], 0.0)
+        self.assertGreater(ev["gp_fee"], 0.0)
+        self.assertNotAlmostEqual(ev["bank_fee"], ev["gp_fee"], places=2)
+        self.assertAlmostEqual(
+            ev["proceeds_to_investors"],
+            REFI_LOAN - ev["payoff_balance"] - ev["refi_costs"]
+            - ev["bank_fee"] - ev["gp_fee"], places=6)
 
-    def test_investors_receive_the_excess_less_the_fee(self):
+    def test_both_at_one_percent_are_equal_and_that_is_correct(self):
+        """The real-world case. The fixture keeps them apart only so that
+        tests can tell which is which."""
+        ev = refi(refi_fee_pct=1.0, refi_bank_fee_pct=1.0)
+        self.assertAlmostEqual(ev["gp_fee"], 52_000.00, places=2)
+        self.assertAlmostEqual(ev["bank_fee"], 52_000.00, places=2)
+
+    def test_and_is_not_a_share_of_the_excess_pool(self):
+        """The inverse of what this test used to assert.
+
+        It previously pinned the fee as NOT a share of the gross loan, to
+        stop the alternative reading creeping in. The alternative reading
+        turned out to be the right one, so the guard is inverted rather
+        than deleted -- the wrong base must not creep back either.
+        """
+        ev = refi()
+        self.assertNotAlmostEqual(
+            ev["gp_fee"], ev["excess_proceeds"] * (REFI_FEE_PCT / 100.0),
+            places=2)
+
+    def test_investors_receive_the_whole_excess(self):
+        """Both fees are already out by the time the excess is struck, so
+        there is nothing further to deduct."""
         ev = refi()
         self.assertAlmostEqual(ev["proceeds_to_investors"],
-                               ev["excess_proceeds"] - ev["gp_fee"], places=6)
+                               ev["excess_proceeds"], places=6)
 
     def test_a_zero_fee_sends_everything_to_investors(self):
         ev = refi(refi_fee_pct=0.0)
@@ -117,7 +173,9 @@ class RefusalTests(unittest.TestCase):
         with self.assertRaises(m.ValidationError) as caught:
             refi(refi_loan=small)
         payoff = m.remaining_balance(LOAN, RATE, AMORT, 36)
-        needed = payoff + small * (REFI_COSTS_PCT / 100.0) - small
+        needed = (payoff + small * (REFI_COSTS_PCT / 100.0)
+                  + small * (REFI_BANK_FEE_PCT / 100.0)
+                  + small * (REFI_FEE_PCT / 100.0) - small)
         self.assertIn(f"{needed:,.0f}", str(caught.exception))
 
     def test_a_refinance_in_the_exit_year_is_refused(self):
@@ -134,11 +192,28 @@ class RefusalTests(unittest.TestCase):
             refi(refi_loan=0.0)
 
     def test_break_even_is_allowed(self):
-        """Zero excess is a real structure, not an error."""
+        """Zero excess is a real structure, not an error.
+
+        Break-even now means the new loan covers the payoff AND both
+        fees, not just the payoff -- the fees are a share of the gross
+        loan, so a loan sized to the payoff alone is short by exactly
+        them.
+        """
         payoff = m.remaining_balance(LOAN, RATE, AMORT, 36)
-        ev = refi(refi_loan=payoff, refi_costs_pct=0.0)
+        ev = refi(refi_loan=payoff, refi_costs_pct=0.0,
+                  refi_fee_pct=0.0, refi_bank_fee_pct=0.0)
         self.assertAlmostEqual(ev["excess_proceeds"], 0.0, places=6)
         self.assertAlmostEqual(ev["proceeds_to_investors"], 0.0, places=6)
+
+    def test_break_even_with_fees_needs_a_larger_loan(self):
+        """The same structure, priced honestly: the loan has to cover the
+        fees too, and the shortfall is exactly their sum."""
+        payoff = m.remaining_balance(LOAN, RATE, AMORT, 36)
+        with self.assertRaises(m.ValidationError):
+            refi(refi_loan=payoff, refi_costs_pct=0.0)
+        grossed = payoff / (1 - (REFI_FEE_PCT + REFI_BANK_FEE_PCT) / 100.0)
+        ev = refi(refi_loan=grossed, refi_costs_pct=0.0)
+        self.assertAlmostEqual(ev["excess_proceeds"], 0.0, places=4)
 
 
 class DebtServiceSplicingTests(unittest.TestCase):
@@ -187,7 +262,8 @@ def analyze(**over):
 class EngineTests(unittest.TestCase):
     REFI = dict(refi_year=3, refi_loan_amount=REFI_LOAN, refi_rate_pct=6.0,
                 refi_amort_years=30, refi_costs_pct=REFI_COSTS_PCT,
-                refi_fee_pct=REFI_FEE_PCT)
+                refi_fee_pct=REFI_FEE_PCT,
+                refi_bank_fee_pct=REFI_BANK_FEE_PCT)
 
     def test_absent_refinance_changes_nothing(self):
         plain = analyze()
@@ -402,9 +478,12 @@ class WaterfallTests(InvariantAssertions, unittest.TestCase):
         self.assertInvariantsHold([nine], expect=(9,))
 
     def test_a_thin_refinance_does_not_crash_the_cascade(self):
-        returns = analyze(refi_year=3, refi_loan_amount=4_390_000.0,
+        # Sized to clear the payoff, the costs and both fees by a hair.
+        # It used to only have to clear payoff + costs; the fees are a
+        # share of the gross loan now, so a "thin" refinance is thinner.
+        returns = analyze(refi_year=3, refi_loan_amount=4_490_000.0,
                           refi_rate_pct=6.0, refi_costs_pct=0.2,
-                          refi_fee_pct=1.0)
+                          refi_fee_pct=1.0, refi_bank_fee_pct=1.0)
         self.assertGreaterEqual(
             returns["refinance"]["proceeds_to_investors"], 0.0)
         _, wf = self._run(returns)

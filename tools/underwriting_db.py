@@ -155,7 +155,7 @@ SCENARIO_NUMERIC = (
     # it is edited, beside the amortization it modifies.
     "io_years",
     "refi_year", "refi_loan_amount", "refi_rate_pct", "refi_amort_years",
-    "refi_io_years", "refi_costs_pct", "refi_fee_pct",
+    "refi_io_years", "refi_costs_pct", "refi_fee_pct", "refi_bank_fee_pct",
 )
 
 # Deliberately NOT in SCENARIO_NUMERIC. That tuple drives the assumptions
@@ -221,6 +221,11 @@ _SCENARIO_ADDED_COLUMNS = (
     ("refi_amort_years", "INTEGER"),
     ("refi_io_years", "INTEGER"),
     ("refi_costs_pct", "REAL"),
+    # The bank's own loan fee on the refinance, a share of the gross new
+    # loan. Separate from and additive to the GP capital transaction fee:
+    # one is a cost of borrowing, the other is the GP's compensation for
+    # the transaction, and neither substitutes for the other.
+    ("refi_bank_fee_pct", "REAL"),
     # The GP's capital transaction fee on the refinance. Deliberately NOT
     # capital_transaction_fee_pct, which is the sale-side fee on a
     # different base -- see deal_analyzer_math.refinance().

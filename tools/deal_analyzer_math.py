@@ -177,7 +177,8 @@ def refinance(loan: float, annual_rate: float, amort_years: int,
               refi_year: int, refi_loan: float, refi_rate: float,
               refi_amort_years: int, refi_io_months: int = 0,
               refi_costs_pct: float = 0.0,
-              refi_fee_pct: float = 0.0) -> dict[str, Any]:
+              refi_fee_pct: float = 0.0,
+              refi_bank_fee_pct: float = 0.0) -> dict[str, Any]:
     """One loan replaced by another, part-way through the hold.
 
     A cash-out refinance is the first mid-hold capital EVENT this model
@@ -190,8 +191,8 @@ def refinance(loan: float, annual_rate: float, amort_years: int,
         new loan
           - payoff of the old loan       (IO-aware, at refi_year * 12)
           - refinance costs              (points and closing)
-          = excess proceeds
-          - GP capital transaction fee
+          - bank loan fee                (1% of the new loan)
+          - GP capital transaction fee   (1% of the new loan)
           = what reaches the investors
 
     Preferred return is deliberately absent from that list. It is not
@@ -199,15 +200,34 @@ def refinance(loan: float, annual_rate: float, amort_years: int,
     is still unreturned, which is the whole point of returning capital
     early.
 
-    THE FEE BASE IS AN ASSUMPTION, FLAGGED
+    THE FEE BASE IS SETTLED, AND IT IS THE GROSS NEW LOAN
 
-    refi_fee_pct is charged on the EXCESS PROCEEDS POOL, not on the gross
-    new loan. That is the reading the stated order forces -- the fee sits
-    between the payoff and the return of capital, so it can only be a
-    share of what is left after the payoff. The sale-side fee is charged
-    on the gross sale price instead, so the two bases genuinely differ,
-    and that difference is deliberate rather than an oversight. If
-    Michelle means the gross new loan, this is the one line to change.
+    This was an open question and is now answered. Michelle: "the 1% is
+    taken from the new loan amount. For example, the $5.2M refi loan
+    amount would be $52K in the capital transaction fee. There is also a
+    standard 1% loan fee that the bank takes which would also be deducted
+    from the refi loan amount."
+
+    So BOTH fees are a share of the gross new loan, not of the excess
+    pool. The earlier reading -- fee on the excess, forced by the fee's
+    position in the payout order -- was wrong, and on the test fixture it
+    was wrong by $7,672.83 against $52,000.
+
+    The two fees are separate and additive: the bank's loan fee is a cost
+    of borrowing and the capital transaction fee is the GP's compensation
+    for the transaction. Neither is a substitute for the other.
+
+    WHERE THE BANK FEE SITS, WHICH IS A READING AND NOT A QUOTE
+
+    She said the bank fee is "deducted from the refi loan amount" but did
+    not say where it falls relative to refi_costs or the GP fee. Because
+    all three are computed on the gross new loan rather than on each
+    other's remainders, ORDER DOES NOT CHANGE ANY NUMBER HERE -- the
+    arithmetic is commutative and the investor proceeds are identical
+    whichever sequence is used. It is written above payoff-then-costs-
+    then-bank-then-GP because that is the order money actually leaves a
+    closing table. If a future change ever makes one fee a share of
+    another's remainder, this stops being cosmetic and must be confirmed.
 
     A cash-in refinance -- new loan smaller than the payoff -- is refused
     rather than modelled as a negative distribution.
@@ -224,16 +244,23 @@ def refinance(loan: float, annual_rate: float, amort_years: int,
     payoff = remaining_balance(loan, annual_rate, amort_years, year * 12,
                                io_months=io_months)
     costs = refi_loan * (refi_costs_pct / 100.0)
-    excess = refi_loan - payoff - costs
+    # Both fees are a share of the GROSS NEW LOAN, confirmed by Michelle:
+    # "the 1% is taken from the new loan amount ... $5.2M refi loan amount
+    # would be $52K in the capital transaction fee. There is also a
+    # standard 1% loan fee that the bank takes which would also be
+    # deducted from the refi loan amount."
+    bank_fee = refi_loan * (refi_bank_fee_pct / 100.0)
+    fee = refi_loan * (refi_fee_pct / 100.0)
+    excess = refi_loan - payoff - costs - bank_fee - fee
     if excess < 0:
         raise ValidationError(
             f"This refinance raises ${refi_loan:,.0f} against a payoff of "
-            f"${payoff:,.0f} plus ${costs:,.0f} of costs, so it needs "
-            f"${-excess:,.0f} of cash IN rather than returning any. A "
+            f"${payoff:,.0f} plus ${costs:,.0f} of costs, ${bank_fee:,.0f} of "
+            f"bank loan fee and ${fee:,.0f} of capital transaction fee, so it "
+            f"needs ${-excess:,.0f} of cash IN rather than returning any. A "
             f"cash-in refinance is not modelled here.")
 
-    fee = excess * (refi_fee_pct / 100.0)
-    to_investors = excess - fee
+    to_investors = excess
 
     # Two segments, spliced. The first is simply the original loan's own
     # series truncated at the refinance; the second starts a new loan on
@@ -247,6 +274,7 @@ def refinance(loan: float, annual_rate: float, amort_years: int,
         "refi_year": year,
         "payoff_balance": payoff,
         "refi_costs": costs,
+        "bank_fee": bank_fee,
         "excess_proceeds": excess,
         "gp_fee": fee,
         "proceeds_to_investors": to_investors,
@@ -479,7 +507,8 @@ def analyze_noi_series(inputs: dict[str, Any], noi_series: list[float],
                                        or amort_years)),
             refi_io_months=int(float(inputs.get("refi_io_years") or 0)) * 12,
             refi_costs_pct=float(inputs.get("refi_costs_pct") or 0.0),
-            refi_fee_pct=float(inputs.get("refi_fee_pct") or 0.0))
+            refi_fee_pct=float(inputs.get("refi_fee_pct") or 0.0),
+            refi_bank_fee_pct=float(inputs.get("refi_bank_fee_pct") or 0.0))
     elif refi_year and debt is not None:
         # Multi-loan mode does not naturally apply: a stack has no single
         # loan to replace, and which loan the refinance retires is a term
