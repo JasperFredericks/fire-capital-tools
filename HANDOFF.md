@@ -1,6 +1,6 @@
 # FIRE Capital Tools — handoff
 
-**Written 2026-08-17. Master at `6ba1bad`.**
+**Written 2026-08-17. Master at `aa2be2d`.**
 
 This replaces an earlier handoff that had gone substantially stale. That
 document's errors cost real investigation time: it had the repo under the
@@ -43,8 +43,11 @@ deployed and verified against production before moving on.
 | `b613a76` | **Rate/count fix** in the Site DD capex export |
 | `51275b9` | **Capex export links** on the assessment detail page |
 | `6ba1bad` | **Route-reachability sweep** |
+| `07e746e` | **Properties foundation** — a record that names its deal belongs to it |
+| `e71d382` | **Manual-cost rate fix** — the unit belongs to the item |
+| `aa2be2d` | **Notetaker sections v2** — CapEx Update, Next Steps, prompt v2 |
 
-**Deployed test suite: 1414 tests, OK, 19 skipped.**
+**Deployed test suite: 1450 tests, OK, 19 skipped.**
 
 ### Word export (`9e8fdc5`)
 
@@ -109,7 +112,7 @@ measured-quantity collection.
 
 | branch | head | state |
 |---|---|---|
-| `uw-refi-cashout` | `2c4606a` | **built, rebased, NOT merged.** Parked. |
+| `uw-refi-cashout` | `13c2b7d` | **built, rebased, verified, HELD on a confirmed double-count.** See below. |
 | `notetaker-word-export` | `8bde934` | merged, can be deleted |
 | `dead-reader-sweep` | `df98c64` | merged, can be deleted |
 | `sitedd-rate-fix` | `8a874d4` | merged, can be deleted |
@@ -118,27 +121,67 @@ measured-quantity collection.
 
 ### `uw-refi-cashout` — what it contains and what blocks it
 
-Three commits: the feature, a test-fixture fix, and an invariant-strictness
-fix. Rebased onto `c2029fb`; **it has not been rebased since**, so it is
-now several merges stale and needs rebasing and re-verifying before it
-can land.
+**Rebased onto current master, fully re-verified, and HELD on a
+confirmed double-count.** Do not merge it as it stands.
 
-It implements Michelle's confirmed terms exactly: excess refi proceeds to
-investors, 1% capital transaction fee to the GP, payout order
-loan-payoff → fees → return of capital, no pref paid at the event with
-pref continuing to accrue on the smaller unreturned base. Cash-in refis
-are refused rather than modelled as negative distributions.
+It implements Michelle's confirmed terms: excess refi proceeds to
+investors, a 1% GP capital transaction fee, payout order payoff → fees →
+return of capital, no pref at the event with pref continuing to accrue on
+the smaller unreturned base. Cash-in refis are refused. Invariants 1–11
+all evaluate to True with a refinance present, and the no-refi behaviour
+fingerprint matches master on all five scenarios with its positive
+control confirmed to fire.
 
-**The one blocker is the fee base**, and it is flagged in the code
-itself. `refi_fee_pct` is charged on the **excess proceeds pool**, not on
-the gross new loan — that is what the stated payout order forces, since
-the fee sits between payoff and return of capital. The sale-side fee uses
-gross sale price instead, so the two bases genuinely differ. On the test
-fixture the difference is **$7,672.83 vs $52,000**. If Michelle means the
-gross new loan, it is one line.
+**THE BLOCKER: `refi_costs_pct` ALREADY INCLUDES THE BANK'S POINT**
 
-Invariants 9, 10 and 11 were verified to actually evaluate (not merely
-"not fail") with a refinance present.
+This is the definition that will get rediscovered expensively if it is
+not written down, so it is written down.
+
+`refi_costs_pct` was authored to mean **"points and closing"** — its
+original docstring says exactly that. **A point IS lender origination**,
+priced as a percentage of loan size. Four signals agree:
+
+1. The original docstring: `- refinance costs (points and closing)`.
+2. The form label: "Refinance: Costs (**% of new loan**)". Third-party
+   closing costs — title, appraisal, recording — are flat dollars. A
+   percentage-of-loan field is origination-shaped.
+3. **The acquisition side folds them together the same way.**
+   `DEFAULT_ACQUISITION_COST_CATEGORIES` lists `origination_fee` as one
+   of nine line items *inside* acquisition costs, beside Legal, Appraisal,
+   Lender Legal and Doc Prep. There is no separate loan-fee input anywhere
+   in the app.
+4. The original fixture was exactly 1.0% — $52,000 on $5.2M. Precisely
+   one point, which is precisely a standard bank loan fee.
+
+Michelle then said "there is ALSO a standard 1% loan fee that the bank
+takes". She was answering about the GP fee, so "also" most naturally
+means *in addition to the GP fee* — but the branch as built adds it on
+top of `refi_costs` as well, charging the bank's point twice.
+
+**Cost of the double-count**, at her real 1%/1%/1%:
+
+| | as built | if `refi_costs` already is the bank fee |
+|---|---|---|
+| to investors | $663,282.61 | $715,282.61 |
+| levered IRR | 18.7575% | **19.0902%** |
+| equity multiple | 2.1271 | **2.1472** |
+
+**−0.33 IRR points and −0.02 on the multiple**, on figures she acts on.
+
+**Two resolutions, and the choice is hers:**
+
+- **(a)** Drop `refi_bank_fee_pct`; tell her the bank's point is already
+  inside "Refinance Costs".
+- **(b)** Keep it, and **redefine `refi_costs_pct` as third-party closing
+  costs only**, so the two are disjoint. This matches how she described
+  it and gives her the visibility she asked for.
+
+**(b) is the recommendation**, and it is free right now: production has
+no refi columns at all, so there is no data to migrate. But it changes
+what an existing field means, so it is not a call to make silently.
+
+**The question is with Michelle. Do not implement either until she
+answers.**
 
 ---
 
@@ -255,6 +298,35 @@ produced $13,000,000 of annual debt service on a $2M loan.
 
 ---
 
+## THE STANDING RULE THIS SESSION EARNED
+
+**Check the premise against the code before scoping anything.**
+
+Three separate things were treated as blockers, in some cases for
+several rounds, and each cost nothing once somebody actually looked:
+
+| assumed blocker | reality |
+|---|---|
+| Notetaker section changes cost real OpenAI spend | Production had **zero** transcripts and zero updates. Nothing cached, nothing to regenerate. The bump was free. |
+| `underwriting_scenarios` needs a `deal_id` migration | It **already had one**, in the base schema, with an index, NULL on all ten rows. |
+| A Site DD rent-roll upload needs a new parser | The existing ResMan parser already returns all 152 Oxford Pointe units correctly. It only cannot **open** `.xls`. |
+
+None of these needed cleverness to find. Each needed one query or one
+grep. The pattern is that a plausible-sounding cost estimate hardens into
+a fact the moment it is written down, and nobody re-checks it because it
+already sounds settled.
+
+Two false premises earlier in the same session -- see below -- came from
+exactly the same mechanism, and they cost investigation time rather than
+just delay.
+
+So: before scoping, estimating, or declining anything, spend the one
+minute it takes to check it against the code. Especially when the claim
+came from a previous handoff, and especially when it is the reason
+something is not being done.
+
+---
+
 ## Premises that turned out to be false
 
 Both came from confident statements in the previous handoff or in
@@ -345,8 +417,9 @@ regression of this one. Do not spend further time reconciling it.
 ## Open operational items
 
 - **The repo is public.** `private: false`, 0 forks/stars/watchers.
-- **`uw-refi-cashout` needs rebasing** before it can merge; it is several
-  merges stale.
+- **`uw-refi-cashout` is held on Michelle's answer**, not on staleness.
+  It was rebased and re-verified; the blocker is the fee-base
+  double-count described above.
 - **Five merged branches can be deleted** once you are comfortable.
 - **A cosmetic warning** on every Site DD PDF report:
   `site_dd_report.py:146 UserWarning: No artists with labels found to put
@@ -357,26 +430,72 @@ regression of this one. Do not spend further time reconciling it.
   POST-minted token downloads.
 - **Do not start the Entrata parser seam.**
 
+
+---
+
+## The $15 freeform rate ceiling is provisional
+
+`site_dd_reference_costs.FREEFORM_RATE_CEILING = 15.00` decides whether a
+hand-typed cost on a **freeform** item (one with no reference entry, so no
+unit to inherit) is read as a rate and refused a total, or as a job price
+and multiplied by the instance count.
+
+**The reasoning:** every researched rate in the table is at most $11.50;
+the cheapest researched per-item figure is $195. Nothing occupies that
+seventeenfold gap, so $15 sits just above the rate ceiling and refuses as
+little as possible.
+
+**Why it is a guess, not a derived constant.** That gap is evidence about
+the **36 curated entries**. A freeform item is by definition not one of
+them, so the number is applied to exactly the category it was not
+measured on.
+
+**Known failure mode, asserted in a test:** a freeform "replace one
+outlet cover, $8" is refused. That is a real line item and the
+justification — no capital job costs twelve dollars — is an assumption
+about a field built to hold anything.
+
+The behaviour is still correct: silently multiplying a rate by a headcount
+is the worse error, and a refusal is visible and correctable where a wrong
+total is neither. **The real fix removes the guess**: an explicit
+per-item/per-unit choice on freeform costs. That is a UI control Michelle
+has not asked for, and it is flagged rather than built.
+
+---
+
+## Revised cost estimates (2026-08-17)
+
+Several of these moved once the premise was checked. See the standing rule
+above.
+
+| item | cost today |
+|---|---|
+| **Site DD rent-roll upload** | **Roughly halved.** The original 2–3 session estimate assumed a new parser. The existing ResMan parser already returns all 152 Oxford Pointe units correctly — it needs a **loader branch plus `xlrd`**. Remaining: ~1 session for the parser/Underwriting path, a second for Site DD seeding. The idempotent re-upload reconcile is the expensive part, not the parsing. |
+| **Site DD property header** | **Now small.** The `deals` columns landed in `07e746e`. What remains is a form block and a display block. |
+| **Site DD Lite** | **Small.** `status` exists, is validated, and is displayed in three templates. It is a query filter plus a UI control. It never shipped because nothing consumed the field, not because it was hard. |
+| **Entrata parser seam** | **Deliberately unscoped.** We have never seen an Entrata file, so every estimate would be fabricated. Do not scope it until a sample exists — the Oxford Pointe experience is the argument: the file format decided the answer, not the design. |
+| **`SOURCE_SITE_DD` cleanup** | Trivial: delete a constant and a counter branch, or implement the hand-off. |
+| **Manual freeform UI control** | Small, but unrequested. See the provisional threshold above. |
+
 ---
 
 ## What has not been verified
 
 Stated plainly so it is not mistaken for tested ground.
 
-- **The AI synthesis path** of the notetaker was not exercised end to end
-  this session. Word export, section toggling and reachability were all
-  verified against production using an update inserted directly and then
-  deleted, with the content fingerprint restored exactly — deliberately,
-  to avoid OpenAI spend on a path this work did not change.
+- ~~The AI synthesis path was never exercised.~~ **Now verified.** One
+  authorized generation on 2026-08-17 against a deliberately thin
+  transcript returned all six headings correctly named, and **Next Steps
+  came back empty** rather than inventing a plan — which is the specific
+  failure that section invites. Tagged `investor_notetaker`, counter 1 → 2.
+  Transcript deleted, notes fingerprint restored exactly.
 - **No 2BD rent roll has ever been parsed.** Bedroom derivation is
   designed and unbuilt, and the design rests on a single Appfolio file
   whose units are all `1/1.00`.
 - **The unit-label normalizer is a spec, not code.** The 60% threshold
   for detecting a letter-labelled building is a guess from one file and
   should be revisited the moment a second lettered roll exists.
-- **`is_rate` handling of manual costs is a judgment call.** A figure an
-  inspector types with no reference entry is treated as a per-item job
-  price. If they ever type a per-sqft figure by hand it will be
-  multiplied by an instance count — the original bug, on the manual path.
-  The finding's `measure` column is consulted first, but nothing in the
-  UI sets it.
+- ~~Manual costs could reproduce the rate bug.~~ **Closed in `e71d382`.**
+  The unit is looked up from the item, so a hand-typed figure on
+  walls_ceiling is a rate. Freeform items are covered by the provisional
+  $15 ceiling described above — which is itself the remaining soft spot.
