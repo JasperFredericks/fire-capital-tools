@@ -68,6 +68,10 @@ def build(deals: list[dict[str, Any]],
     aliases = aliases or {}
     entries: list[dict[str, Any]] = []
     by_norm: dict[str, dict[str, Any]] = {}
+    by_deal: dict[Any, dict[str, Any]] = {}
+    # Names contributed by records that named their deal, merged with the
+    # stored aliases below rather than overwritten by them.
+    folded: dict[str, list[str]] = {}
 
     for deal in deals or []:
         label = deal_label(deal)
@@ -80,13 +84,51 @@ def build(deals: list[dict[str, Any]],
             "aliases": [],
         }
         entries.append(entry)
+        by_deal[deal.get("id")] = entry
         for form in (label, entry["address"]):
             norm = matching.normalize(form or "")
             if norm:
                 by_norm.setdefault(norm, entry)
 
-    def absorb(label: str, source: str) -> None:
-        norm = matching.normalize(label)
+    def absorb(item: Any, source: str) -> None:
+        """Fold one tool's record into the registry.
+
+        `item` is a bare label, or a (label, deal_id) pair.
+
+        A RECORD THAT NAMES ITS DEAL FOLDS INTO THAT DEAL, FULL STOP
+
+        Absorption used to work only by normalising the label against a
+        deal's address, which is why Site DD's "19 bay vista drive"
+        merged with Deal Dive's record and "Nabob Hill" did not -- the
+        latter is a building's name, not its address, so it spawned a
+        rival entry for a property that already existed.
+
+        That rivalry is not cosmetic. Adding "Nabob Hill" as an alias of
+        deal:2 while a label:nabob hill entry still existed made BOTH
+        claim the phrase, and the matcher -- correctly refusing to guess
+        between two equal candidates -- then matched nothing at all. A
+        transcript naming the property stopped being assignable.
+
+        So an explicit deal_id wins over any name comparison. It is a
+        person stating that these are the same property, which is better
+        evidence than a string.
+        """
+        label, deal_id = item if isinstance(item, tuple) else (item, None)
+        if deal_id is not None and deal_id in by_deal:
+            existing = by_deal[deal_id]
+            if source not in existing["sources"]:
+                existing["sources"].append(source)
+            # The local name is kept so a transcript that says "Nabob
+            # Hill" reaches the deal it belongs to WITHOUT anyone having
+            # to add an alias row by hand. Held separately because the
+            # stored alias table is assigned wholesale further down.
+            name = (label or "").strip()
+            if name:
+                folded.setdefault(existing["key"], [])
+                if name not in folded[existing["key"]]:
+                    folded[existing["key"]].append(name)
+            return
+        norm = matching.normalize(label or "")
         if not norm:
             return
         existing = by_norm.get(norm)
@@ -112,6 +154,9 @@ def build(deals: list[dict[str, Any]],
 
     for entry in entries:
         entry["aliases"] = list(aliases.get(entry["key"], []))
+        for name in folded.get(entry["key"], []):
+            if name not in entry["aliases"] and name != entry["label"]:
+                entry["aliases"].append(name)
         entry["has_deal"] = entry["deal_id"] is not None
         # Surfaced on the page: a property with no deal record and no
         # aliases is matchable only by its exact label, which is the
