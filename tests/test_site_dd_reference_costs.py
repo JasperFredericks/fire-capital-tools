@@ -234,14 +234,19 @@ class ExportTests(unittest.TestCase):
         s = capex.summarize(lines)
         self.assertEqual(s["unpriced_count"], 1)
         found = next(l for l in lines if l["item_key"] == "foundation")
-        self.assertEqual(found["total"], 0.0)
+        # None rather than 0.0: a zero would sum into the total as though
+        # the work were free.
+        self.assertIsNone(found["total"])
         self.assertTrue(found["reason"])
 
     def test_a_budget_with_nothing_in_it_does_not_divide_by_zero(self):
         from tools import site_dd_capex_export as capex
         s = capex.summarize([])
+        # An empty budget really is zero -- nothing was recorded as
+        # needing work. That is different from lines that exist and
+        # cannot be priced, which report no total at all.
         self.assertEqual(s["total"], 0.0)
-        self.assertEqual(s["researched_pct"], 0.0)
+        self.assertIsNone(s["researched_pct"])
 
 
 if __name__ == "__main__":

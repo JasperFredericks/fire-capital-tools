@@ -105,11 +105,25 @@ class QuantityTests(unittest.TestCase):
         self.assertEqual(summary["by_source"]["manual"], 6_000.0)
 
     def test_an_unpriced_item_still_contributes_nothing(self):
+        """None, not 0.0.
+
+        Zero is a claim that the work is free, and it sums silently into
+        a total that then looks complete. None cannot be added up by
+        accident, which is why summarize() has to route it to the
+        unpriced set rather than into by_source.
+        """
         rows = [finding(id=i) for i in (1, 2, 3)]
         line = capex.build_lines(rows, LABELS)[0]
         self.assertEqual(line["quantity"], 3.0)
         self.assertIsNone(line["unit_cost"])
-        self.assertEqual(line["total"], 0.0)
+        self.assertIsNone(line["total"])
+
+        summary = capex.summarize([line])
+        # None, not 0.0: there IS a line and it could not be priced, so a
+        # zero would read as "this work is free" rather than "unknown".
+        self.assertIsNone(summary["total"])
+        self.assertEqual(summary["unpriced_count"], 1)
+        self.assertEqual(summary["priced_count"], 0)
 
 
 class GroupingBoundaryTests(unittest.TestCase):

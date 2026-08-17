@@ -59,6 +59,42 @@ UNITS = (UNIT_EACH, UNIT_SQFT, UNIT_LF)
 
 UNIT_LABELS = {UNIT_EACH: "each", UNIT_SQFT: "per sq ft", UNIT_LF: "per linear ft"}
 
+# A RATE IS NOT A PRICE, AND THE DIFFERENCE HAD A COST
+#
+# Most of this table is per-item: a range is $1,150, a smoke alarm $260.
+# Seven entries are not. They are rates -- dollars per square foot of
+# floor, per linear foot of run -- and they include the items that
+# dominate a real budget: flooring, interior repaint, roof covering,
+# facade, paving.
+#
+# The capex export multiplied unit cost by quantity, where quantity is
+# the INSTANCE COUNT ("forty toilets"). For a per-item cost that is
+# right. For a rate it multiplies dollars-per-square-foot by a count of
+# things, which is not a quantity of anything. One kitchen recorded as
+# needing repaint came out at $5.75 -- the rate itself, arriving with a
+# count of one -- and the export declared "100% of the total is
+# researched" over the top of it.
+#
+# So rates are named here rather than inferred at the point of use, and a
+# rate with no measured quantity is not priced at all. A confidently
+# wrong number is worse than an honestly missing one.
+RATE_UNITS = (UNIT_SQFT, UNIT_LF)
+
+MEASUREMENT_NEEDED = {
+    UNIT_SQFT: "a measured floor area in square feet",
+    UNIT_LF: "a measured length in linear feet",
+}
+
+
+def is_rate(unit: str | None) -> bool:
+    """True when the figure is per unit of measure, not per item."""
+    return unit in RATE_UNITS
+
+
+def measurement_needed(unit: str | None) -> str:
+    """What has to be measured before a rate can become a total."""
+    return MEASUREMENT_NEEDED.get(unit, "")
+
 
 @dataclass(frozen=True)
 class ReferenceCost:
