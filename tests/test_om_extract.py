@@ -25,10 +25,28 @@ in a docstring, because a docstring does not fail.
 import ast
 import io
 import json
+import os
 import unittest
 from pathlib import Path
 
-import matplotlib
+# Pinned BEFORE matplotlib is imported, because its PDF backend stamps a
+# /CreationDate at save time and that timestamp has one-second
+# resolution. text_pdf() builds a fresh document on every call, so two
+# calls either side of a second boundary produced different bytes and
+# test_identical_bytes_give_an_identical_key failed about one run in
+# five -- a suite that is intermittently red teaches everyone to discount
+# "the full suite passes", which is the sentence the merge discipline
+# rests on.
+#
+# Pinning is the fix rather than reusing one buffer for both halves of
+# the comparison. Reuse would make the test pass by comparing an object
+# with itself, which is to say by no longer testing anything; pinning
+# leaves it genuinely building two documents and asserting that identical
+# input yields identical bytes, which is what its name claims and what
+# the extraction cache actually depends on.
+os.environ.setdefault("SOURCE_DATE_EPOCH", "1700000000")
+
+import matplotlib                                      # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt                        # noqa: E402
 import numpy as np                                     # noqa: E402
