@@ -6,9 +6,10 @@ just API & Service Costs; the blueprint exists as a section rather than a
 one-off route so the next operational page has somewhere obvious to go
 instead of being wedged into Acquisitions or Markets.
 
-Read-only and stateless. No database, no writes, no forms beyond the
-shared feedback component -- so no new storage path and no env var to
-verify, unlike every tool built this cycle.
+Read-only. No writes, no forms beyond the shared feedback component --
+so no new storage path and no env var to verify, unlike every tool built
+this cycle. The feedback page reads an existing database; it does not
+own one.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from flask_login import current_user, login_required
 
 from models import User
 
+from tools import feedback_db
 from tools import market_data_service
 from tools import openai_usage
 from tools import site_dd_capture as capture
@@ -174,5 +176,48 @@ def service_costs_page():
         summary_model=str(
             current_app.config.get("FIRE_METRICS_SUMMARY_MODEL") or ""
         ).strip(),
+        feedback_tool=FEEDBACK_TOOL_NAME,
+    )
+
+
+@admin_bp.route("/feedback")
+@login_required
+def feedback_page():
+    """Everything submitted through the feedback widget, newest first.
+
+    WHY THIS EXISTS
+
+    feedback_db.list_feedback() was written and then never called. The
+    widget appears on every tool page and writes faithfully to
+    /data/feedback.db, but nothing in the app ever read it back -- so the
+    feature was write-only, and three real entries sat unseen, two of
+    them detailed feature requests from the day they were found.
+
+    That is the failure mode this page exists to close: not a missing
+    feature, but a collected one nobody could look at.
+
+    Read-only, like the rest of this blueprint. Nothing here edits,
+    dismisses or deletes an entry -- a feedback list that can be cleared
+    is a feedback list that can lose something before it is acted on.
+    """
+    if not User.matches_admin_user(current_user.get_id() or "", current_app.config):
+        abort(403)
+
+    with feedback_db.get_connection() as conn:
+        entries = feedback_db.list_feedback(conn)
+
+    # Grouped for the summary strip only; the table below stays in one
+    # chronological run, because "what came in most recently" is the
+    # question this page answers first.
+    by_tool: dict[str, int] = {}
+    for entry in entries:
+        by_tool[entry["tool"]] = by_tool.get(entry["tool"], 0) + 1
+
+    return render_template(
+        "admin/feedback.html",
+        entries=entries,
+        total=len(entries),
+        by_tool=dict(sorted(by_tool.items(), key=lambda kv: (-kv[1], kv[0]))),
+        db_path=str(feedback_db.get_db_path()),
         feedback_tool=FEEDBACK_TOOL_NAME,
     )

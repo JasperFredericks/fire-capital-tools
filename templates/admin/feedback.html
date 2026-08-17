@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Feedback - FIRE Capital Tools{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Feedback</h1>
+  <p class="page-subtitle">
+    Everything submitted through the feedback box on any tool page, newest
+    first. Nothing here can be edited or dismissed &mdash; a list that can be
+    cleared is a list that can lose something before it is acted on.
+  </p>
+</div>
+
+<div class="card">
+  <div class="stats-grid" style="margin-bottom:6px;">
+    <div class="stat-box">
+      <div class="stat-box-label">Entries</div>
+      <div class="stat-box-value">{{ total }}</div>
+    </div>
+    {% for tool, count in by_tool.items() %}
+      <div class="stat-box">
+        <div class="stat-box-label">{{ tool }}</div>
+        <div class="stat-box-value">{{ count }}</div>
+      </div>
+    {% endfor %}
+  </div>
+  <p class="stat-box-sub" style="margin-top:10px;">
+    Stored at <code>{{ db_path }}</code>.
+  </p>
+</div>
+
+{% if not entries %}
+  <div class="card">
+    <p class="page-subtitle" style="margin:0;">
+      No feedback has been submitted yet. The box appears at the bottom of
+      every tool page.
+    </p>
+  </div>
+{% else %}
+  {#
+    One card per entry rather than a table. The messages are multi-line
+    and often numbered lists -- a table cell would collapse the line
+    breaks and make a five-point request read as one run-on sentence,
+    which is exactly how a request gets half-actioned.
+  #}
+  {% for e in entries %}
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:baseline;
+                  gap:12px; flex-wrap:wrap;">
+        <div class="scorecard-section-title" style="margin:0;">{{ e.tool }}</div>
+        <div class="stat-box-sub">{{ e.created_at }}</div>
+      </div>
+
+      {# white-space:pre-wrap so numbered lists and blank lines survive. #}
+      <p style="white-space:pre-wrap; margin:12px 0 0; line-height:1.55;">{{ e.message }}</p>
+
+      {% if e.page_url %}
+        <p class="stat-box-sub" style="margin-top:12px;">
+          Submitted from
+          <a href="{{ e.page_url }}">{{ e.page_url }}</a>
+        </p>
+      {% endif %}
+    </div>
+  {% endfor %}
+{% endif %}
+
+{% include "_feedback.html" %}
+{% endblock %}
