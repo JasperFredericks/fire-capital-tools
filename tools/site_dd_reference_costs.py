@@ -102,9 +102,25 @@ def is_rate(unit: str | None) -> bool:
 # dollars. Above it, it is a job price and totals as one.
 #
 # Set just above the observed rate ceiling rather than midway, so it
-# refuses as little as possible. Its failure mode is stated in the tests:
-# a genuine sub-$15 job price is refused and has to be confirmed, which
-# is a trivial loss against silently multiplying a rate by a headcount.
+# refuses as little as possible.
+#
+# PROVISIONAL. THIS IS A REASONED GUESS, NOT A DERIVED CONSTANT.
+#
+# The seventeenfold gap is real, but it is evidence about the 36 CURATED
+# entries in this table -- and a freeform item is by definition not one of
+# them. The number is being applied to exactly the category it was not
+# measured on. A freeform "replace one outlet cover, $8" is a perfectly
+# ordinary line and this refuses it, on the strength of an assumption
+# about a field built to hold anything.
+#
+# The behaviour is still right: silently multiplying a rate by a headcount
+# is the worse error, and a refusal is visible and correctable where a
+# wrong total is neither. But nobody should later treat $15 as though it
+# fell out of the data.
+#
+# Revisit when there is real freeform cost data to look at, and replace it
+# entirely if the explicit per-item/per-unit choice on freeform costs ever
+# gets built -- that removes the need to guess at all.
 FREEFORM_RATE_CEILING = 15.00
 
 

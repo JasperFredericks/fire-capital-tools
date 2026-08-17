@@ -37,6 +37,9 @@ working, which is most of the table.
 """
 
 import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
 
 from tools import site_dd_capex_export as capex
 from tools import site_dd_reference_costs as refcosts
@@ -369,6 +372,20 @@ class TheManualPathIsClosedTooTests(unittest.TestCase):
         each = [e.unit_cost for e in refcosts.REFERENCE_COSTS.values()
                 if not refcosts.is_rate(e.unit)]
         self.assertGreater(min(each), refcosts.FREEFORM_RATE_CEILING)
+
+    def test_the_threshold_is_labelled_provisional(self):
+        """It is a reasoned guess about an uncurated category.
+
+        The seventeenfold gap is evidence about the 36 curated reference
+        entries, and a freeform item is by definition not one of them. The
+        number is applied to exactly the category it was not measured on,
+        so the source must say so or somebody later reads $15 as derived.
+        """
+        src = (ROOT / "tools" / "site_dd_reference_costs.py").read_text(
+            encoding="utf-8")
+        self.assertIn("PROVISIONAL", src)
+        self.assertIn("not a derived constant", src.lower().replace(
+            "NOT A DERIVED CONSTANT", "not a derived constant"))
 
     def test_the_known_false_positive_is_on_the_record(self):
         """A real sub-$15 job price is refused. Stated, not hidden."""
