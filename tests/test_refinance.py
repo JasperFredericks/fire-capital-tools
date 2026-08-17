@@ -245,7 +245,48 @@ class EngineTests(unittest.TestCase):
         self.assertIn("multi-loan", str(caught.exception))
 
 
-class WaterfallTests(unittest.TestCase):
+class InvariantAssertions:
+    """Strict invariant checking, mixed into the waterfall test cases.
+
+    WHY assertIsNot(passed, False) WAS NOT ENOUGH
+
+    check_invariants() and verify_against_source() report each invariant as
+    a dict with "passed" set to True, False, or None. None means the
+    invariant did not apply to this run -- invariant 10 returns it when the
+    property failed to cover a shortfall, because the LP and property
+    vectors cannot match by design in that case.
+
+    `assertIsNot(passed, False)` therefore accepts None as success. An
+    invariant that silently stopped evaluating -- because a key was renamed,
+    a guard inverted, or a branch stopped being reached -- would report None
+    and the assertion would still go green. The suite would claim invariant
+    coverage it did not have.
+
+    These helpers require passed to be exactly True, and separately require
+    that the invariants expected to run actually ran. A not-applicable
+    invariant is legitimate but must be named at the call site, never
+    absorbed silently.
+    """
+
+    def assertInvariantsHold(self, checks, *, expect=None):
+        seen = set()
+        for check in checks:
+            seen.add(check["n"])
+            with self.subTest(invariant=check["n"], name=check["name"]):
+                self.assertIs(
+                    check["passed"], True,
+                    f"invariant {check['n']} ({check['name']}) reported "
+                    f"passed={check['passed']!r}, not True. "
+                    f"None means it never evaluated. {check.get('detail', '')}")
+        self.assertTrue(seen, "no invariants were evaluated at all")
+        if expect is not None:
+            self.assertEqual(
+                seen & set(expect), set(expect),
+                f"expected invariants {sorted(expect)} to be evaluated; "
+                f"saw {sorted(seen)}")
+        return seen
+
+class WaterfallTests(InvariantAssertions, unittest.TestCase):
     """The Investor Report half, and the coordination between them."""
 
     TERMS = {"pref_rate_pct": 8.0, "tiers": [
@@ -317,15 +358,13 @@ class WaterfallTests(unittest.TestCase):
                           refi_rate_pct=6.0, refi_costs_pct=0.5,
                           refi_fee_pct=1.0)
         _, wf = self._run(returns)
-        for check in wm.check_invariants(wf):
-            with self.subTest(invariant=check["n"]):
-                self.assertIsNot(check["passed"], False, check["name"])
+        self.assertInvariantsHold(wm.check_invariants(wf),
+                                  expect=range(1, 9))
 
     def test_every_invariant_holds_with_a_refinance_present(self):
         _, wf = self._run(analyze(**EngineTests.REFI))
-        for check in wm.check_invariants(wf):
-            with self.subTest(invariant=check["n"]):
-                self.assertIsNot(check["passed"], False, check["name"])
+        self.assertInvariantsHold(wm.check_invariants(wf),
+                                  expect=range(1, 9))
 
     def test_invariant_10_still_reproduces_the_property(self):
         """The coordination enforcer, unchanged and still load-bearing.
@@ -348,9 +387,10 @@ class WaterfallTests(unittest.TestCase):
             wf, source_total,
             source_levered_cashflows=returns["levered_cashflows"],
             source_levered_irr=returns["levered_irr"])
-        for check in checks:
-            with self.subTest(invariant=check["n"]):
-                self.assertIsNot(check["passed"], False, check["detail"])
+        # 9 and 10 both, and 10 must have actually evaluated -- with a
+        # refinance present it is the check that proves the split did not
+        # reorder a cent.
+        self.assertInvariantsHold(checks, expect=(9, 10))
 
     def test_invariant_9_conservation_holds(self):
         returns = analyze(**EngineTests.REFI)
@@ -359,7 +399,7 @@ class WaterfallTests(unittest.TestCase):
                            + p["refi_proceeds"] for p in periods)
         nine = next(c for c in wm.verify_against_source(wf, source_total)
                     if c["n"] == 9)
-        self.assertIsNot(nine["passed"], False, nine["detail"])
+        self.assertInvariantsHold([nine], expect=(9,))
 
     def test_a_thin_refinance_does_not_crash_the_cascade(self):
         returns = analyze(refi_year=3, refi_loan_amount=4_390_000.0,
@@ -368,9 +408,8 @@ class WaterfallTests(unittest.TestCase):
         self.assertGreaterEqual(
             returns["refinance"]["proceeds_to_investors"], 0.0)
         _, wf = self._run(returns)
-        for check in wm.check_invariants(wf):
-            with self.subTest(invariant=check["n"]):
-                self.assertIsNot(check["passed"], False, check["name"])
+        self.assertInvariantsHold(wm.check_invariants(wf),
+                                  expect=range(1, 9))
 
     def test_no_refinance_leaves_the_period_shape_as_it_was(self):
         returns = analyze()
