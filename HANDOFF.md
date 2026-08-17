@@ -327,6 +327,21 @@ property.
 
 ---
 
+## Closed, unconfirmed
+
+**Deal Dive search box.** Michelle reported a search problem; asked later
+which screen she meant, she replied *"I CAN'T REMEMBER…"*. The fix that
+went in — `ae19794`, "make the filter box say what it is, and wire up
+Enter" — is live on master and is correct on its own terms: the box now
+labels itself as a filter and Enter submits.
+
+**Closed without confirmation that it was the screen she meant.** Nobody
+has matched the fix to the original report, and nobody now can. If a
+search complaint resurfaces, treat it as a new report rather than a
+regression of this one. Do not spend further time reconciling it.
+
+---
+
 ## Open operational items
 
 - **The repo is public.** `private: false`, 0 forks/stars/watchers.
