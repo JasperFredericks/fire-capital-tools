@@ -31,6 +31,45 @@
   </div>
 {% endif %}
 
+<!-- ── Generated updates ──────────────────────────────────────────────── -->
+{#
+  Every update generated so far, newest first.
+
+  This list is why the page exists in this shape. list_updates() had been
+  in the database layer since the table was created, but nothing called
+  it: an update could be opened by the redirect immediately after it was
+  generated, or by re-running the identical review query and landing on
+  the cache. Navigating away lost it, along with its export buttons --
+  the Word file included. A document you cannot get back to is not a
+  document you have.
+#}
+{% if updates %}
+<div class="card">
+  <div class="scorecard-section-title">Generated updates</div>
+  <p class="page-subtitle" style="margin-bottom:10px;">
+    Open one to read it or download it as Word, PDF or Excel.
+  </p>
+  <table class="data-table">
+    <thead>
+      <tr><th>Property</th><th>Period</th><th>Generated</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for u in updates %}
+        <tr>
+          <td>{{ u.property_label }}</td>
+          <td>{{ u.period_start }} to {{ u.period_end }}</td>
+          <td>{{ u.generated_at[:16] }}</td>
+          <td>
+            <a class="btn btn-ghost"
+               href="{{ url_for('investor_notes.view_update', uid=u.id) }}">Open</a>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 <!-- ── Upload ─────────────────────────────────────────────────────────── -->
 <div class="card">
   <div class="scorecard-section-title">Upload a transcript</div>

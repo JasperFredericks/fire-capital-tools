@@ -138,6 +138,13 @@ def index():
         entries = _property_entries(conn)
         transcripts = notes_db.list_transcripts(conn)
         aliases = notes_db.list_aliases(conn)
+        # Previously generated updates. list_updates() has existed since
+        # the table did, but nothing ever called it -- so an update was
+        # reachable only by the redirect right after generating it, or by
+        # re-running the identical review query and hitting the cache.
+        # Navigate away and the document, and its export buttons, were
+        # gone. Same class of gap as the notetaker having no nav entry.
+        updates = notes_db.list_updates(conn)
     for t in transcripts:
         t["evidence"] = notes_db.evidence_of(t)
     return render_template(
@@ -145,6 +152,7 @@ def index():
         transcripts=transcripts,
         entries=entries,
         aliases=aliases,
+        updates=updates,
         sources=notes_db.SOURCES,
         source_labels=notes_db.SOURCE_LABELS,
         today=datetime.date.today().isoformat(),
@@ -500,9 +508,8 @@ def view_update(uid):
 @investor_notes_bp.route("/notes/update/<int:uid>/export.<fmt>")
 @login_required
 def export_update(uid, fmt):
-    if fmt not in ("pdf", "xlsx"):
-        flash("Only PDF and Excel export are available — Word would need a "
-              "new dependency.", "warning")
+    if fmt not in ("pdf", "xlsx", "docx"):
+        flash("Export is available as PDF, Word or Excel.", "warning")
         return redirect(url_for("investor_notes.view_update", uid=uid))
     with notes_db.get_connection() as conn:
         update = notes_db.get_update(conn, uid)
@@ -513,11 +520,24 @@ def export_update(uid, fmt):
         sources = [t for t in (notes_db.get_transcript(conn, i)
                                for i in notes_db.transcript_ids_of(update)) if t]
 
+    # Which sections to include, chosen per export. Absent means every
+    # section this update has -- not a curated default, which is the fixed
+    # list this design exists to avoid. Order always comes from the update.
+    chosen = [k for k in request.args.getlist("section") if k]
+    sections = export.select_sections(sections, chosen)
+    if not sections:
+        flash("Select at least one section to export.", "warning")
+        return redirect(url_for("investor_notes.view_update", uid=uid))
+
     import tempfile
     out = Path(tempfile.mkdtemp()) / export.suggested_filename(update, fmt)
     if fmt == "pdf":
         export.build_pdf(out, update, sections, sources)
         mime = "application/pdf"
+    elif fmt == "docx":
+        export.build_docx(out, update, sections, sources)
+        mime = ("application/vnd.openxmlformats-officedocument"
+                ".wordprocessingml.document")
     else:
         export.build_xlsx(out, update, sections, sources)
         mime = ("application/vnd.openxmlformats-officedocument"
