@@ -91,6 +91,44 @@ def is_rate(unit: str | None) -> bool:
     return unit in RATE_UNITS
 
 
+# The largest researched RATE is $11.50/sqft (parking_paving) and the
+# cheapest researched PER-ITEM figure is $195 (gfci, co_alarm). Seventeen
+# times apart, with nothing in between.
+#
+# That gap is what lets a hand-typed cost on a FREEFORM item -- an item
+# with no reference entry, so no unit to inherit -- be classified without
+# asking anyone. A capital line priced under this figure is a rate that
+# needs a quantity, not the price of a job; no capital job costs twelve
+# dollars. Above it, it is a job price and totals as one.
+#
+# Set just above the observed rate ceiling rather than midway, so it
+# refuses as little as possible.
+#
+# PROVISIONAL. THIS IS A REASONED GUESS, NOT A DERIVED CONSTANT.
+#
+# The seventeenfold gap is real, but it is evidence about the 36 CURATED
+# entries in this table -- and a freeform item is by definition not one of
+# them. The number is being applied to exactly the category it was not
+# measured on. A freeform "replace one outlet cover, $8" is a perfectly
+# ordinary line and this refuses it, on the strength of an assumption
+# about a field built to hold anything.
+#
+# The behaviour is still right: silently multiplying a rate by a headcount
+# is the worse error, and a refusal is visible and correctable where a
+# wrong total is neither. But nobody should later treat $15 as though it
+# fell out of the data.
+#
+# Revisit when there is real freeform cost data to look at, and replace it
+# entirely if the explicit per-item/per-unit choice on freeform costs ever
+# gets built -- that removes the need to guess at all.
+FREEFORM_RATE_CEILING = 15.00
+
+
+def looks_like_a_rate(unit_cost: float | None) -> bool:
+    """True when a figure on an item with NO known unit reads as a rate."""
+    return unit_cost is not None and 0 < unit_cost < FREEFORM_RATE_CEILING
+
+
 def measurement_needed(unit: str | None) -> str:
     """What has to be measured before a rate can become a total."""
     return MEASUREMENT_NEEDED.get(unit, "")

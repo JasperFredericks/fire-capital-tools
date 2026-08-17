@@ -120,13 +120,39 @@ def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = 
         # from a measured quantity recorded against the finding, and when
         # there is none the line carries its rate, no total, and a reason
         # naming the measurement it needs.
+        # THE UNIT BELONGS TO THE ITEM, NOT TO WHO PRICED IT
+        #
+        # This used to read the unit off the _reference object, which is
+        # attached only when a researched cost was APPLIED. An inspector
+        # typing their own figure on walls_ceiling therefore produced no
+        # _reference, fell through to "each", and got $5.75 multiplied by
+        # an instance count -- the original bug, arriving through the
+        # manual door instead of the researched one.
+        #
+        # walls_ceiling is a per-square-foot item whoever prices it. So
+        # the unit is looked up from the item, and a manual figure on a
+        # rate item is a rate.
         ref = f.get("_reference")
         unit = getattr(ref, "unit", None)
+        if unit is None:
+            known = refcosts.for_item(f.get("item_key"),
+                                      f.get("detail") if f.get("item_key") == "flooring"
+                                      else None)
+            unit = getattr(known, "unit", None)
         if unit is None and described["cost"] is not None:
-            # A figure someone typed is a job price unless the finding
-            # says otherwise; only the units this table knows count.
             measure = (f.get("measure") or "").strip().lower()
-            unit = measure if measure in refcosts.UNITS else refcosts.UNIT_EACH
+            if measure in refcosts.UNITS:
+                unit = measure
+            elif refcosts.looks_like_a_rate(described["cost"]):
+                # A FREEFORM item: nothing in the table describes it, so
+                # there is no unit to inherit. It cannot be assumed to be
+                # an each item merely because it is unknown -- that is the
+                # same assumption, one step further out. A figure below
+                # the rate ceiling is treated as a rate and refused a
+                # total rather than multiplied by a headcount.
+                unit = refcosts.UNIT_SQFT
+            else:
+                unit = refcosts.UNIT_EACH
 
         instances = float(len(group["rows"]))
         measured = [costs.clean_cost(r.get("quantity")) for r in group["rows"]]
