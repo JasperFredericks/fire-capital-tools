@@ -22,14 +22,60 @@
 <div class="card" id="summary">
   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
     <div class="scorecard-section-title">Condition Summary</div>
-    <div style="display:flex; gap:8px;">
-      <a href="{{ url_for('site_dd.download_report', assessment_id=assessment.id) }}" class="btn btn-primary">Download PDF Report</a>
+    {#
+      TWO DIFFERENT DOCUMENTS, AND THE NAMES ARE THE POINT
+
+      The capital budget has been exportable as PDF and Excel since it was
+      built -- route, cost provenance, quantities, reference costs applied
+      at export time, a whole sheet explaining every item it will not
+      price. Nothing linked to it. It was reachable only by typing
+      /assessment/<id>/capex.xlsx, so the feature existed and no inspector
+      could find it.
+
+      Linking it is not just an href, because this page would then offer
+      two PDFs. "Download PDF Report" was unambiguous while it was the
+      only one; beside a capital budget it stops telling you which
+      document you are about to get. So the condition report is named for
+      what it contains, the budget is named for what it contains, and the
+      format is a suffix on both. A link nobody can interpret is the same
+      failure as no link, one step later.
+    #}
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+      <a href="{{ url_for('site_dd.download_report', assessment_id=assessment.id) }}"
+         class="btn btn-primary">Condition Report (PDF)</a>
+      <a href="{{ url_for('site_dd.capex_budget', assessment_id=assessment.id, fmt='xlsx') }}"
+         class="btn btn-ghost">Capital Budget (Excel)</a>
+      <a href="{{ url_for('site_dd.capex_budget', assessment_id=assessment.id, fmt='pdf') }}"
+         class="btn btn-ghost">Capital Budget (PDF)</a>
       <form method="POST" action="{{ url_for('site_dd.delete', assessment_id=assessment.id) }}"
             onsubmit="return confirm('Delete this assessment permanently? This removes its checklist responses and all uploaded photos.');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger">Delete</button>
       </form>
     </div>
+    {#
+      THREE BUCKETS, NAMED, BECAUSE ONE OF THEM IS WHAT SHE WILL ACTUALLY HIT
+
+      The earlier wording promised a priced budget plus a list of things
+      with no cost. That describes two of the three states and omits the
+      one an assessment usually lands in today: a real researched rate --
+      $5.75 per square foot for repaint, say -- with no measured area to
+      apply it to. Nobody records areas on the walk yet, so on a
+      freshly-walked unit that bucket can be ALL of it, and the budget
+      opens with no total.
+
+      That is correct and it is the point of the rate fix. But a person
+      who was promised "prices the items needing work" and gets a budget
+      totalling nothing concludes the tool is broken. So the sentence
+      says all three states plainly, before the file is opened.
+    #}
+    <p class="page-subtitle" style="flex-basis:100%; margin:8px 0 0;">
+      The capital budget covers the items recorded as needing work, and
+      separates three things: what it can price, what has a researched
+      rate but still needs a measurement (an area or a length) before it
+      can be totalled, and what has no researched cost at all. Items in
+      the last two are listed with the reason, and are not in the total.
+    </p>
   </div>
 
   {#
