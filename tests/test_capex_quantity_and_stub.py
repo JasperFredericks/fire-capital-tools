@@ -119,7 +119,9 @@ class QuantityTests(unittest.TestCase):
         self.assertIsNone(line["total"])
 
         summary = capex.summarize([line])
-        self.assertEqual(summary["total"], 0.0)
+        # None, not 0.0: there IS a line and it could not be priced, so a
+        # zero would read as "this work is free" rather than "unknown".
+        self.assertIsNone(summary["total"])
         self.assertEqual(summary["unpriced_count"], 1)
         self.assertEqual(summary["priced_count"], 0)
 

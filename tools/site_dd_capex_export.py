@@ -192,41 +192,103 @@ def summarize(lines: list[dict[str, Any]]) -> dict[str, Any]:
     """
     by_source = {k: 0.0 for k in SOURCE_COLUMN}
     by_category: dict[str, float] = {}
-    unpriced: list[dict[str, Any]] = []
+    priced: list[dict[str, Any]] = []
     unmeasured: list[dict[str, Any]] = []
+    unresearched: list[dict[str, Any]] = []
     for l in lines:
-        # A line with no total contributes nothing to any figure here. It
-        # is not zero -- zero would say the work is free -- it is absent,
-        # and it is reported as absent below.
+        # THREE BUCKETS, AND THEY MUST NOT COLLAPSE INTO TWO
+        #
+        # priced                 a figure and a quantity to apply it to
+        # researched, unmeasured a real researched rate, nothing measured
+        #                        to multiply it by. Needs a tape measure.
+        # unresearched           no figure at all. Needs research that may
+        #                        not exist in published form.
+        #
+        # Merging the last two is the same mistake as multiplying a rate
+        # by a headcount, one level up: it reports "no cost data" for an
+        # item whose cost we know to the cent.
         if l["total"] is not None:
+            priced.append(l)
             by_source[l["source"]] += l["total"]
             if l["total"]:
                 by_category[l["category_name"]] = (
                     by_category.get(l["category_name"], 0.0) + l["total"])
+        elif l.get("is_rate") and l["unit_cost"] is not None:
+            unmeasured.append(l)
         else:
-            unpriced.append(l)
-            if l.get("is_rate") and l["unit_cost"] is not None:
-                unmeasured.append(l)
-    total = sum(by_source.values())
+            unresearched.append(l)
+
+    priced_total = sum(by_source.values())
+    # None, not 0.0, when there are lines and none of them could be
+    # priced. "$0.00" beside an unmeasured line reads as "this costs
+    # nothing" rather than "this cost is not known yet" -- the line
+    # refuses to state a number and the summary must not state one on its
+    # behalf.
+    #
+    # An EMPTY budget is different and really is zero: nothing was
+    # recorded as needing work, which is a finding, not a gap.
+    total = priced_total if (priced or not lines) else None
+    unpriced = unmeasured + unresearched
     return {
         "total": total,
+        "priced_total": priced_total,
+        # True whenever the total describes only part of the work, so a
+        # caller cannot render it as a finished budget by accident.
+        "total_is_partial": bool(unpriced),
         "by_source": by_source,
         "by_category": dict(sorted(by_category.items(),
                                    key=lambda kv: -kv[1])),
+        "priced": priced,
+        "priced_count": len(priced),
         "unpriced": unpriced,
         "unpriced_count": len(unpriced),
-        # Rates that HAVE a researched figure and cannot use it yet,
-        # separated from items with no figure at all. The two are
-        # different problems: one needs a tape measure, the other needs
-        # research that may not exist.
         "unmeasured": unmeasured,
         "unmeasured_count": len(unmeasured),
+        "unresearched": unresearched,
+        "unresearched_count": len(unresearched),
         "line_count": len(lines),
-        "priced_count": sum(1 for l in lines if l["total"] is not None),
-        "researched_pct": (by_source[costs.SOURCE_REFERENCE] / total * 100)
-                          if total else 0.0,
+        # Share OF THE PRICED TOTAL, and None when there is no priced
+        # total. Zero would claim we hold no research, which is false when
+        # every unpriced line is a researched rate waiting on a
+        # measurement.
+        "researched_pct": ((by_source[costs.SOURCE_REFERENCE] / priced_total * 100)
+                           if priced_total else None),
         "researched_on": refcosts.RESEARCHED_ON,
+        "coverage_sentence": coverage_sentence(
+            len(priced), len(lines), len(unmeasured), len(unresearched)),
     }
+
+
+def coverage_sentence(priced: int, total_lines: int, unmeasured: int,
+                      unresearched: int) -> str:
+    """One sentence naming all three buckets, in Michelle's words.
+
+    Written once, here, because the PDF and the XLSX must not be able to
+    describe the same budget differently -- and because the sentence is
+    the part that stops a partial total being read as a finished one.
+    """
+    def lines_(n):
+        return f"{n} line" if n == 1 else f"{n} lines"
+
+    if not total_lines:
+        return "No items were recorded as needing work."
+    if priced == total_lines:
+        return (f"All {lines_(total_lines)} priced. This total is the whole "
+                f"recorded budget.")
+    bits = []
+    if unmeasured:
+        bits.append(f"{lines_(unmeasured)} "
+                    f"{'has' if unmeasured == 1 else 'have'} a researched rate "
+                    f"but nothing measured to apply it to")
+    if unresearched:
+        bits.append(f"{lines_(unresearched)} "
+                    f"{'has' if unresearched == 1 else 'have'} no researched "
+                    f"figure at all")
+    if not priced:
+        return ("Nothing here can be priced yet, so there is NO total: "
+                + " and ".join(bits) + ".")
+    return (f"This total covers {priced} of {lines_(total_lines)} and is NOT "
+            f"the full budget: " + " and ".join(bits) + ".")
 
 
 def _money(value: Any) -> str:
@@ -254,11 +316,16 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
             fig.text(0.06, 0.94, "Capital Budget", fontsize=16,
                      fontweight="bold", color=INK)
             fig.text(0.06, 0.915, label, fontsize=11, color="#4b5563")
-            fig.text(0.94, 0.94, _money(summary["total"]), ha="right",
-                     fontsize=15, fontweight="bold", color=INK)
+            fig.text(0.94, 0.94,
+                     _money(summary["total"]) if summary["total"] is not None
+                     else "no priced lines",
+                     ha="right", fontsize=15, fontweight="bold",
+                     color=INK if summary["total"] is not None else WARN)
             fig.text(0.94, 0.915,
-                     f"{summary['line_count']} items · "
-                     f"{summary['unpriced_count']} unpriced",
+                     (f"{summary['line_count']} items · "
+                      f"{summary['priced_count']} priced · "
+                      f"{summary['unmeasured_count']} need measuring · "
+                      f"{summary['unresearched_count']} unresearched"),
                      ha="right", fontsize=9, color=MUTED)
 
             if page_no == 1:
@@ -266,34 +333,45 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
                 fig.text(0.06, y, "Where these numbers come from",
                          fontsize=10, fontweight="bold", color=INK)
                 y -= 0.028
-                for key in (costs.SOURCE_MANUAL, costs.SOURCE_REFERENCE,
-                            costs.SOURCE_NONE):
-                    amount = summary["by_source"][key]
-                    fig.text(0.06, y, f"{SOURCE_COLUMN[key]}", fontsize=9,
-                             color=BODY)
-                    fig.text(0.34, y, _money(amount) if key != costs.SOURCE_NONE
-                             else f"{summary['unpriced_count']} item(s), not costed",
-                             fontsize=9, color=BODY)
+                # Three buckets, three rows. The last two used to share a
+                # line reading "N item(s), not costed", which said the same
+                # thing about an item priced at $5.75/sqft and an item
+                # nobody has ever researched.
+                have_total = summary["total"] is not None
+                rows = [
+                    (SOURCE_COLUMN[costs.SOURCE_MANUAL],
+                     _money(summary["by_source"][costs.SOURCE_MANUAL])
+                     if have_total else "—", BODY),
+                    (SOURCE_COLUMN[costs.SOURCE_REFERENCE],
+                     _money(summary["by_source"][costs.SOURCE_REFERENCE])
+                     if have_total else "—", BODY),
+                    ("Researched rate, not yet measured",
+                     f"{summary['unmeasured_count']} item(s)", WARN),
+                    ("No researched figure",
+                     f"{summary['unresearched_count']} item(s)", MUTED),
+                ]
+                for name, value, colour in rows:
+                    fig.text(0.06, y, name, fontsize=9, color=BODY)
+                    fig.text(0.42, y, value, fontsize=9, color=colour)
                     y -= 0.024
                 y -= 0.012
-                fig.text(0.06, y,
-                         f"{summary['researched_pct']:.0f}% of this total is "
-                         f"researched national averages ({summary['researched_on']}), "
-                         f"not quotes for this building.",
-                         fontsize=8.5, color=WARN)
-                y -= 0.022
-                fig.text(0.06, y,
-                         f"{summary['priced_count']} of {summary['line_count']} "
-                         f"line(s) are priced; this total covers those only.",
-                         fontsize=8.5, color=MUTED)
-                if summary["unmeasured_count"]:
-                    y -= 0.022
+                for text in textwrap.wrap(summary["coverage_sentence"], 108):
+                    fig.text(0.06, y, text, fontsize=8.5, color=WARN)
+                    y -= 0.020
+                if summary["researched_pct"] is not None:
                     fig.text(0.06, y,
-                             f"{summary['unmeasured_count']} line(s) have a "
-                             f"researched rate but no measured quantity and are "
-                             f"NOT in this total.",
-                             fontsize=8.5, color=WARN)
-                top = y - 0.045
+                             f"{summary['researched_pct']:.0f}% of the priced "
+                             f"subtotal is researched national averages "
+                             f"({summary['researched_on']}), not quotes.",
+                             fontsize=8.5, color=MUTED)
+                else:
+                    fig.text(0.06, y,
+                             f"Researched national averages "
+                             f"({summary['researched_on']}) are used where a "
+                             f"figure exists; none could be applied here.",
+                             fontsize=8.5, color=MUTED)
+                y -= 0.020
+                top = y - 0.035
             else:
                 top = 0.865
 
@@ -367,21 +445,32 @@ def build_xlsx(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
     ws.append([assessment.get("property_label") or ""])
     ws.append([f"Inspected {assessment.get('assessed_on') or '—'}"])
     ws.append([])
-    ws.append(["Total", summary["total"]])
-    for key in (costs.SOURCE_MANUAL, costs.SOURCE_REFERENCE, costs.SOURCE_NONE):
+    # The label carries the caveat, so the number can never be lifted out
+    # of the cell beside it and read as a finished budget.
+    if summary["total"] is None:
+        ws.append(["Total", "No priced lines — see below"])
+    else:
+        ws.append(["Priced subtotal" if summary["total_is_partial"] else "Total",
+                   summary["total"]])
+    for key in (costs.SOURCE_MANUAL, costs.SOURCE_REFERENCE):
+        # Dash, not 0.00, when there is no priced subtotal for them to be
+        # a part of -- the same reason the total itself declines to be a
+        # number here.
         ws.append([SOURCE_COLUMN[key],
-                   summary["by_source"][key] if key != costs.SOURCE_NONE
-                   else f"{summary['unpriced_count']} item(s), not costed"])
-    ws.append([f"{summary['researched_pct']:.0f}% of the total is researched "
-               f"national averages ({summary['researched_on']}), not quotes."])
-    ws.append([f"{summary['priced_count']} of {summary['line_count']} line(s) "
-               f"are priced. This total covers those lines only."])
-    if summary["unmeasured_count"]:
-        # Said at the top, beside the total, because this is the sentence
-        # that stops the figure being read as the cost of the work.
-        ws.append([f"{summary['unmeasured_count']} line(s) have a researched "
-                   f"rate but no measured quantity, so they are NOT in the "
-                   f"total. See the 'Needs measurement' sheet."])
+                   summary["by_source"][key] if summary["total"] is not None
+                   else "—"])
+    ws.append(["Researched rate, not yet measured",
+               f"{summary['unmeasured_count']} item(s)"])
+    ws.append(["No researched figure",
+               f"{summary['unresearched_count']} item(s)"])
+    ws.append([summary["coverage_sentence"]])
+    if summary["researched_pct"] is not None:
+        ws.append([f"{summary['researched_pct']:.0f}% of the priced subtotal is "
+                   f"researched national averages ({summary['researched_on']}), "
+                   f"not quotes."])
+    else:
+        ws.append([f"Researched national averages ({summary['researched_on']}) "
+                   f"are used where a figure exists; none could be applied here."])
     ws.append([])
 
     header = ["Item", "Category", "Scope", "Condition", "Cost source",

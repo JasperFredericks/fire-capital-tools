@@ -185,11 +185,69 @@ class TheSummaryTellsTheTruthTests(unittest.TestCase):
         self.assertEqual(s["unpriced_count"], 1)
         self.assertEqual(s["unmeasured_count"], 0)
 
-    def test_zero_priced_lines_does_not_divide_by_zero(self):
+    def test_zero_priced_lines_reports_no_total_at_all(self):
+        """$0.00 would read as "this costs nothing"."""
         rows = [finding("walls_ceiling", 5.75, unit=refcosts.UNIT_SQFT)]
         s = capex.summarize(capex.build_lines(rows, LABELS))
+        self.assertIsNone(s["total"])
+        self.assertTrue(s["total_is_partial"])
+
+    def test_and_does_not_claim_zero_percent_researched(self):
+        """We HAVE the research -- $5.75/sqft from the real table. What is
+        missing is a measurement. Reporting 0% researched would say we hold
+        no cost data, which is the opposite of true."""
+        rows = [finding("walls_ceiling", 5.75, unit=refcosts.UNIT_SQFT)]
+        s = capex.summarize(capex.build_lines(rows, LABELS))
+        self.assertIsNone(s["researched_pct"])
+        self.assertEqual(s["unmeasured_count"], 1)
+        self.assertEqual(s["unresearched_count"], 0)
+
+    def test_an_empty_budget_really_is_zero(self):
+        """Nothing recorded as needing work is a finding, not a gap."""
+        s = capex.summarize([])
         self.assertEqual(s["total"], 0.0)
-        self.assertEqual(s["researched_pct"], 0.0)
+        self.assertFalse(s["total_is_partial"])
+
+
+class TheCoverageSentenceNamesAllThreeBucketsTests(unittest.TestCase):
+    """The summary must not do, one level up, what the line refuses to do.
+
+    A line that declines to state a total, sitting under a summary that
+    says "$0.00" and "0% researched", has simply moved the false claim
+    from the row to the header. $0.00 reads as free; 0% researched reads
+    as "we hold no cost data" when in fact we hold $5.75/sqft and lack
+    only a tape measure.
+    """
+
+    def sentence(self, priced, total, unmeasured, unresearched):
+        return capex.coverage_sentence(priced, total, unmeasured, unresearched)
+
+    def test_nothing_priced_says_there_is_no_total(self):
+        s = self.sentence(0, 1, 1, 0)
+        self.assertIn("NO total", s)
+        self.assertIn("researched rate", s)
+
+    def test_it_distinguishes_unmeasured_from_unresearched(self):
+        s = self.sentence(1, 3, 1, 1)
+        self.assertIn("researched rate but nothing measured", s)
+        self.assertIn("no researched figure at all", s)
+
+    def test_a_fully_priced_budget_says_so_plainly(self):
+        s = self.sentence(4, 4, 0, 0)
+        self.assertIn("whole recorded budget", s)
+        self.assertNotIn("NOT", s)
+
+    def test_a_partial_budget_says_it_is_not_the_full_one(self):
+        self.assertIn("NOT", self.sentence(2, 3, 1, 0))
+
+    def test_an_empty_budget_is_described_as_empty(self):
+        self.assertIn("No items", self.sentence(0, 0, 0, 0))
+
+    def test_the_summary_carries_the_sentence(self):
+        rows = [finding("walls_ceiling", 5.75, unit=refcosts.UNIT_SQFT)]
+        s = capex.summarize(capex.build_lines(rows, LABELS))
+        self.assertTrue(s["coverage_sentence"])
+        self.assertIn("NO total", s["coverage_sentence"])
 
 
 class BothExportsCarryTheUnitTests(unittest.TestCase):

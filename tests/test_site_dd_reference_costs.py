@@ -242,8 +242,11 @@ class ExportTests(unittest.TestCase):
     def test_a_budget_with_nothing_in_it_does_not_divide_by_zero(self):
         from tools import site_dd_capex_export as capex
         s = capex.summarize([])
+        # An empty budget really is zero -- nothing was recorded as
+        # needing work. That is different from lines that exist and
+        # cannot be priced, which report no total at all.
         self.assertEqual(s["total"], 0.0)
-        self.assertEqual(s["researched_pct"], 0.0)
+        self.assertIsNone(s["researched_pct"])
 
 
 if __name__ == "__main__":
