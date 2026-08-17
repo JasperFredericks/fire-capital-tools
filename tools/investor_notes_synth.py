@@ -48,7 +48,7 @@ from typing import Any
 # Bumped when the prompt or the expected shape changes, so a cached
 # update generated under the old wording is not served as if it were
 # produced by the current one.
-PROMPT_VERSION = "investor_update_v1"
+PROMPT_VERSION = "investor_update_v2"
 
 SECTIONS: tuple[dict[str, str], ...] = (
     {"key": "operations",
@@ -56,7 +56,7 @@ SECTIONS: tuple[dict[str, str], ...] = (
      "brief": "occupancy, leasing, turnovers, staffing, resident issues, "
               "day-to-day management"},
     {"key": "capital_improvements",
-     "name": "Capital Improvements",
+     "name": "CapEx Update",
      "brief": "renovation and capex work: planned, underway or completed"},
     {"key": "financial_update",
      "name": "Financial Update",
@@ -69,6 +69,11 @@ SECTIONS: tuple[dict[str, str], ...] = (
     {"key": "community_events",
      "name": "Community Events",
      "brief": "resident events, community building, engagement"},
+    {"key": "next_steps",
+     "name": "Next Steps",
+     "brief": "what happens next and who is doing it: decisions taken, "
+              "actions agreed, dates committed to. Only what was actually "
+              "said -- never a plan the model thinks would be sensible"},
 )
 
 SECTION_KEYS = tuple(s["key"] for s in SECTIONS)

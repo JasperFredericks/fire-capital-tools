@@ -238,7 +238,10 @@ class ParseTests(unittest.TestCase):
     def test_unparseable_output_yields_empty_sections_not_an_exception(self):
         out = synth.parse_response("the model said something else entirely",
                                    self.TRANSCRIPTS)
-        self.assertEqual(len(out), 5)
+        # Derived, not hardcoded: the section list is a product
+        # decision that changes, and a literal here turns every
+        # such change into an unrelated-looking failure.
+        self.assertEqual(len(out), len(synth.SECTIONS))
         self.assertTrue(all(s["empty"] for s in out))
 
 
@@ -391,3 +394,77 @@ class IsolationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfirmedSectionSetTests(unittest.TestCase):
+    """The section list Michelle confirmed, and the version bump it forces.
+
+    She was asked whether to add Legal Update and Next Steps and to
+    rename two headings. Her answer: "don't worry about the legal update
+    but include a capex update and next steps." Property Update was never
+    mentioned, so Operations keeps its name -- renaming it would be an
+    invention, and the rename is not free.
+
+    IT IS NOT FREE BECAUSE THE NAMES REACH THE MODEL
+
+    build_instructions() interpolates each section's name straight into
+    the prompt, so this is a prompt change and not a display change.
+    cache_key() hashes PROMPT_VERSION rather than the prompt text, which
+    means a rename WITHOUT a version bump would serve results generated
+    under the old headings as though they came from the new ones. The
+    bump is the thing that prevents that, so it is asserted here.
+    """
+
+    def names(self):
+        return [s["name"] for s in synth.SECTIONS]
+
+    def test_capex_update_replaces_capital_improvements(self):
+        self.assertIn("CapEx Update", self.names())
+        self.assertNotIn("Capital Improvements", self.names())
+
+    def test_next_steps_is_present(self):
+        self.assertIn("Next Steps", self.names())
+
+    def test_legal_update_is_absent(self):
+        """She asked for it to be skipped."""
+        self.assertNotIn("Legal Update", self.names())
+
+    def test_operations_keeps_its_name(self):
+        """Property Update was not mentioned; renaming it is unevidenced."""
+        self.assertIn("Operations", self.names())
+
+    def test_the_key_did_not_change_with_the_label(self):
+        """Renaming the heading must not orphan stored sections_json."""
+        self.assertIn("capital_improvements", synth.SECTION_KEYS)
+
+    def test_next_steps_has_a_key_and_a_brief(self):
+        entry = next(s for s in synth.SECTIONS if s["key"] == "next_steps")
+        self.assertTrue(entry["brief"].strip())
+
+    def test_the_brief_forbids_inventing_a_plan(self):
+        """The section most likely to tempt the model into helpfulness."""
+        brief = next(s for s in synth.SECTIONS
+                     if s["key"] == "next_steps")["brief"].lower()
+        self.assertIn("never", brief)
+
+    def test_the_new_names_actually_reach_the_prompt(self):
+        instructions = synth.build_instructions()
+        self.assertIn("CapEx Update", instructions)
+        self.assertIn("Next Steps", instructions)
+        self.assertNotIn("Capital Improvements", instructions)
+
+    def test_the_prompt_version_was_bumped(self):
+        self.assertEqual(synth.PROMPT_VERSION, "investor_update_v2")
+
+    def test_the_bump_invalidates_the_old_cache(self):
+        a = synth.cache_key("deal:1", "2026-04-01", "2026-06-30", [1],
+                            prompt_version="investor_update_v1")
+        b = synth.cache_key("deal:1", "2026-04-01", "2026-06-30", [1],
+                            prompt_version="investor_update_v2")
+        self.assertNotEqual(a, b)
+
+    def test_every_section_still_parses_into_a_result(self):
+        out = synth.parse_response("not json at all", self.TRANSCRIPTS
+                                   if hasattr(self, "TRANSCRIPTS") else [])
+        self.assertEqual(len(out), len(synth.SECTIONS))
+        self.assertTrue(all(s["empty"] for s in out))
