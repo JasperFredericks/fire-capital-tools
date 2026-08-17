@@ -89,8 +89,35 @@ def get_db_path() -> Path:
     return BASE_DIR / "deal_dive.db"
 
 
+# THE DEAL RECORD IS BECOMING THE PROPERTY RECORD
+#
+# Michelle asked for property details "typed once at the beginning",
+# which rules out per-assessment columns: re-inspecting next year would
+# mean retyping them, and two rows could then disagree about what year a
+# building went up.
+#
+# deals already holds address, city, state, zip, property_type and
+# unit_count, and Site DD assessment 11 is now linked to deal 2 -- so the
+# deal record is already acting as the property record. These four
+# columns finish the set rather than starting a rival table.
+#
+# Nullable and additive. NOTHING READS THEM YET: the header UI is a later
+# step and is still blocked on Michelle. Added first so that when it
+# lands there is somewhere to put the data.
+_DEAL_ADDED_COLUMNS = (
+    ("name", "TEXT"),              # "Oxford Pointe" -- deals had no name column
+    ("vintage", "TEXT"),           # TEXT: vintages are written "1972 / renov. 2018"
+    ("building_count", "INTEGER"),
+    ("property_sqft", "REAL"),     # optional, per her answer
+)
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(deals)")}
+    for name, coltype in _DEAL_ADDED_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE deals ADD COLUMN {name} {coltype}")
     conn.commit()
 
 

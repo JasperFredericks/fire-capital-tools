@@ -89,16 +89,18 @@ def _property_entries(conn) -> list[dict]:
         deals = []
     try:
         with underwriting_db.get_connection() as uw:
-            uw_labels = [r[0] for r in uw.execute(
-                "SELECT DISTINCT property_label FROM underwriting_scenarios "
-                "WHERE property_label IS NOT NULL")]
+            # (label, deal_id) pairs: a scenario that names its deal folds
+            # into that deal's entry rather than spawning a rival one.
+            uw_labels = [(r[0], r[1]) for r in uw.execute(
+                "SELECT DISTINCT property_label, deal_id "
+                "FROM underwriting_scenarios WHERE property_label IS NOT NULL")]
     except Exception:
         uw_labels = []
     try:
         with site_dd_db.get_connection() as sd:
-            sd_labels = [r[0] for r in sd.execute(
-                "SELECT DISTINCT property_label FROM site_dd_assessments "
-                "WHERE property_label IS NOT NULL")]
+            sd_labels = [(r[0], r[1]) for r in sd.execute(
+                "SELECT DISTINCT property_label, deal_id "
+                "FROM site_dd_assessments WHERE property_label IS NOT NULL")]
     except Exception:
         sd_labels = []
     return properties.build(deals, uw_labels, sd_labels,
