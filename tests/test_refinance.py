@@ -39,10 +39,21 @@ AMORT = 30
 HOLD = 5
 EQUITY = 2_688_848.65
 
+# The refinance fixture's own numbers, named so that assertions derive from
+# them rather than restating them. refi_costs_pct is deliberately NOT 1.0:
+# at 1.0 the costs came to $52,000, which is also 1% of the $5.2M gross new
+# loan -- so 'costs' and 'a gross-loan fee' were the same number, and the
+# expression `5_200_000.0 * 0.01` appeared in two tests meaning two
+# different things. Any test that compared them could pass by coincidence.
+REFI_LOAN = 5_200_000.0
+REFI_COSTS_PCT = 1.37
+REFI_FEE_PCT = 1.0
+
 
 def refi(**over):
-    kw = dict(refi_year=3, refi_loan=5_200_000.0, refi_rate=0.06,
-              refi_amort_years=30, refi_costs_pct=1.0, refi_fee_pct=1.0)
+    kw = dict(refi_year=3, refi_loan=REFI_LOAN, refi_rate=0.06,
+              refi_amort_years=30, refi_costs_pct=REFI_COSTS_PCT,
+              refi_fee_pct=REFI_FEE_PCT)
     kw.update(over)
     return m.refinance(LOAN, RATE, AMORT, HOLD, **kw)
 
@@ -62,24 +73,27 @@ class ExcessProceedsTests(unittest.TestCase):
                          m.remaining_balance(LOAN, RATE, AMORT, 36, io_months=24))
 
     def test_costs_are_a_share_of_the_new_loan(self):
-        self.assertEqual(refi()["refi_costs"], 5_200_000.0 * 0.01)
+        self.assertEqual(refi()["refi_costs"],
+                         REFI_LOAN * (REFI_COSTS_PCT / 100.0))
 
     def test_excess_is_the_new_loan_less_payoff_and_costs(self):
         ev = refi()
         self.assertAlmostEqual(
             ev["excess_proceeds"],
-            5_200_000.0 - ev["payoff_balance"] - ev["refi_costs"], places=6)
+            REFI_LOAN - ev["payoff_balance"] - ev["refi_costs"], places=6)
 
     def test_the_gp_fee_comes_off_the_excess_pool(self):
         """The assumption this file's docstring flags."""
         ev = refi()
-        self.assertAlmostEqual(ev["gp_fee"], ev["excess_proceeds"] * 0.01,
+        self.assertAlmostEqual(ev["gp_fee"],
+                               ev["excess_proceeds"] * (REFI_FEE_PCT / 100.0),
                                places=6)
 
     def test_and_is_not_a_share_of_the_gross_new_loan(self):
         """Pinned so the alternative reading cannot creep in unnoticed."""
         ev = refi()
-        self.assertNotAlmostEqual(ev["gp_fee"], 5_200_000.0 * 0.01, places=2)
+        self.assertNotAlmostEqual(ev["gp_fee"],
+                                  REFI_LOAN * (REFI_FEE_PCT / 100.0), places=2)
 
     def test_investors_receive_the_excess_less_the_fee(self):
         ev = refi()
@@ -99,9 +113,12 @@ class RefusalTests(unittest.TestCase):
         self.assertIn("cash IN", str(caught.exception))
 
     def test_the_message_says_how_much_would_be_needed(self):
+        small = 1_000_000.0
         with self.assertRaises(m.ValidationError) as caught:
-            refi(refi_loan=1_000_000.0)
-        self.assertIn("3,390,717", str(caught.exception))
+            refi(refi_loan=small)
+        payoff = m.remaining_balance(LOAN, RATE, AMORT, 36)
+        needed = payoff + small * (REFI_COSTS_PCT / 100.0) - small
+        self.assertIn(f"{needed:,.0f}", str(caught.exception))
 
     def test_a_refinance_in_the_exit_year_is_refused(self):
         with self.assertRaises(m.ValidationError) as caught:
@@ -168,8 +185,9 @@ def analyze(**over):
 
 
 class EngineTests(unittest.TestCase):
-    REFI = dict(refi_year=3, refi_loan_amount=5_200_000.0, refi_rate_pct=6.0,
-                refi_amort_years=30, refi_costs_pct=1.0, refi_fee_pct=1.0)
+    REFI = dict(refi_year=3, refi_loan_amount=REFI_LOAN, refi_rate_pct=6.0,
+                refi_amort_years=30, refi_costs_pct=REFI_COSTS_PCT,
+                refi_fee_pct=REFI_FEE_PCT)
 
     def test_absent_refinance_changes_nothing(self):
         plain = analyze()
