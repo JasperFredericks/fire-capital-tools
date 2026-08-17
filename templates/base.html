@@ -125,12 +125,26 @@
       {% if can_access_admin %}
       <div class="nav-section">
         <span class="nav-section-label">Admin</span>
+        {# endpoint, not blueprint: with two admin pages, matching on the
+           blueprint would light up both links at once. #}
         <a href="{{ url_for('admin.service_costs_page') }}"
-           class="nav-link {% if request.blueprint == 'admin' %}active{% endif %}">
+           class="nav-link {% if request.endpoint == 'admin.service_costs_page' %}active{% endif %}">
           <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
             <path fill-rule="evenodd" d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4zM18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clip-rule="evenodd"/>
           </svg>
           API &amp; Service Costs
+        </a>
+        {#
+          Feedback needs its own nav entry, not a link buried on another
+          page: the whole reason it was invisible for three entries is
+          that nothing surfaced it.
+        #}
+        <a href="{{ url_for('admin.feedback_page') }}"
+           class="nav-link {% if request.endpoint == 'admin.feedback_page' %}active{% endif %}">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15">
+            <path fill-rule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.84 8.84 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7z" clip-rule="evenodd"/>
+          </svg>
+          Feedback
         </a>
       </div>
       {% endif %}
