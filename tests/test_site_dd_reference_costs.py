@@ -234,7 +234,9 @@ class ExportTests(unittest.TestCase):
         s = capex.summarize(lines)
         self.assertEqual(s["unpriced_count"], 1)
         found = next(l for l in lines if l["item_key"] == "foundation")
-        self.assertEqual(found["total"], 0.0)
+        # None rather than 0.0: a zero would sum into the total as though
+        # the work were free.
+        self.assertIsNone(found["total"])
         self.assertTrue(found["reason"])
 
     def test_a_budget_with_nothing_in_it_does_not_divide_by_zero(self):

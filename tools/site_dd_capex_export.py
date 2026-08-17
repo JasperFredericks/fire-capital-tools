@@ -108,6 +108,45 @@ def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = 
         group = groups[key]
         f, described = group["first"], group["described"]
         cat = costs.capex_category(f)
+
+        # WHICH KIND OF QUANTITY THIS LINE TAKES
+        #
+        # A per-item figure is multiplied by the instance count, which is
+        # what the grouping above produced and is unchanged.
+        #
+        # A rate -- dollars per square foot, per linear foot -- cannot be.
+        # Multiplying $5.75/sqft by "one wall" yields $5.75, which is the
+        # rate wearing a total's clothing. Rates are therefore priced only
+        # from a measured quantity recorded against the finding, and when
+        # there is none the line carries its rate, no total, and a reason
+        # naming the measurement it needs.
+        ref = f.get("_reference")
+        unit = getattr(ref, "unit", None)
+        if unit is None and described["cost"] is not None:
+            # A figure someone typed is a job price unless the finding
+            # says otherwise; only the units this table knows count.
+            measure = (f.get("measure") or "").strip().lower()
+            unit = measure if measure in refcosts.UNITS else refcosts.UNIT_EACH
+
+        instances = float(len(group["rows"]))
+        measured = [costs.clean_cost(r.get("quantity")) for r in group["rows"]]
+        measured = [m for m in measured if m is not None]
+        if refcosts.is_rate(unit):
+            quantity = sum(measured) if measured else None
+        else:
+            quantity = instances
+
+        needs = ""
+        if refcosts.is_rate(unit) and quantity is None:
+            # A whole sentence, because this lands in a "Why no estimate"
+            # cell that has to be readable on its own: it must say what
+            # the figure is, that it is a rate, and what to go and
+            # measure.
+            needs = (f"Priced at ${described['cost']:,.2f} "
+                     f"{refcosts.UNIT_LABELS.get(unit, unit)}. Needs "
+                     f"{refcosts.measurement_needed(unit)} before it can be "
+                     f"totalled; an instance count is not a measurement.")
+
         line = {
             "item_key": f.get("item_key"),
             "label": (f.get("instance_label")
@@ -118,18 +157,28 @@ def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = 
             "condition": f.get("condition"),
             "scope": f.get("scope"),
             "unit_cost": described["cost"],
+            "unit": unit,
+            "unit_label": refcosts.UNIT_LABELS.get(unit, ""),
+            "is_rate": refcosts.is_rate(unit),
+            "instances": instances,
             "source": described["source"],
             "source_label": SOURCE_COLUMN[described["source"]],
-            "quantity": float(len(group["rows"])),
+            "quantity": quantity,
             # Left None on purpose: line_total() below derives it. Kept on
             # the row so this line has the same shape as an Underwriting
             # capex line, where an explicit total legitimately overrides
             # quantity x unit cost.
             "total_cost": None,
             "reason": (refcosts.reason(f.get("item_key"))
-                       if described["cost"] is None else ""),
+                       if described["cost"] is None else needs),
         }
-        line["total"] = ucx.line_total(line)
+        # None, not 0.0, when it cannot be computed honestly. A zero would
+        # sum into the total as though the work were free; None keeps the
+        # line visible, keeps its rate on screen, and sends it to the
+        # unpriced set where summarize() will report it.
+        line["total"] = (ucx.line_total(line)
+                         if described["cost"] is not None and quantity is not None
+                         else None)
         out.append(line)
     return out
 
@@ -144,13 +193,20 @@ def summarize(lines: list[dict[str, Any]]) -> dict[str, Any]:
     by_source = {k: 0.0 for k in SOURCE_COLUMN}
     by_category: dict[str, float] = {}
     unpriced: list[dict[str, Any]] = []
+    unmeasured: list[dict[str, Any]] = []
     for l in lines:
-        by_source[l["source"]] += l["total"]
-        if l["total"]:
-            by_category[l["category_name"]] = (
-                by_category.get(l["category_name"], 0.0) + l["total"])
-        if l["unit_cost"] is None:
+        # A line with no total contributes nothing to any figure here. It
+        # is not zero -- zero would say the work is free -- it is absent,
+        # and it is reported as absent below.
+        if l["total"] is not None:
+            by_source[l["source"]] += l["total"]
+            if l["total"]:
+                by_category[l["category_name"]] = (
+                    by_category.get(l["category_name"], 0.0) + l["total"])
+        else:
             unpriced.append(l)
+            if l.get("is_rate") and l["unit_cost"] is not None:
+                unmeasured.append(l)
     total = sum(by_source.values())
     return {
         "total": total,
@@ -159,7 +215,14 @@ def summarize(lines: list[dict[str, Any]]) -> dict[str, Any]:
                                    key=lambda kv: -kv[1])),
         "unpriced": unpriced,
         "unpriced_count": len(unpriced),
+        # Rates that HAVE a researched figure and cannot use it yet,
+        # separated from items with no figure at all. The two are
+        # different problems: one needs a tape measure, the other needs
+        # research that may not exist.
+        "unmeasured": unmeasured,
+        "unmeasured_count": len(unmeasured),
         "line_count": len(lines),
+        "priced_count": sum(1 for l in lines if l["total"] is not None),
         "researched_pct": (by_source[costs.SOURCE_REFERENCE] / total * 100)
                           if total else 0.0,
         "researched_on": refcosts.RESEARCHED_ON,
@@ -218,6 +281,18 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
                          f"researched national averages ({summary['researched_on']}), "
                          f"not quotes for this building.",
                          fontsize=8.5, color=WARN)
+                y -= 0.022
+                fig.text(0.06, y,
+                         f"{summary['priced_count']} of {summary['line_count']} "
+                         f"line(s) are priced; this total covers those only.",
+                         fontsize=8.5, color=MUTED)
+                if summary["unmeasured_count"]:
+                    y -= 0.022
+                    fig.text(0.06, y,
+                             f"{summary['unmeasured_count']} line(s) have a "
+                             f"researched rate but no measured quantity and are "
+                             f"NOT in this total.",
+                             fontsize=8.5, color=WARN)
                 top = y - 0.045
             else:
                 top = 0.865
@@ -225,11 +300,15 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
             # Quantity earns a column now that it can be more than 1: a
             # $600 unit cost beside a $24,000 total is unreadable without
             # the 40 that connects them.
-            cols = (0.06, 0.28, 0.46, 0.60, 0.74, 0.82, 0.94)
-            heads = ("Item", "Category", "Condition", "Source", "Unit",
-                     "Qty", "Total")
+            # "Per" is the unit of measure and it is not decoration. A
+            # $5.75 rate beside a blank total only makes sense once the
+            # column says "per sq ft"; without it the reader sees a cheap
+            # item that failed to add up.
+            cols = (0.06, 0.26, 0.42, 0.54, 0.68, 0.76, 0.87, 0.94)
+            heads = ("Item", "Category", "Condition", "Source", "Rate",
+                     "Per", "Qty", "Total")
             for x, head, align in zip(cols, heads,
-                                      ("left",) * 6 + ("right",)):
+                                      ("left",) * 7 + ("right",)):
                 fig.text(x, top, head, fontsize=8.5, fontweight="bold",
                          color=MUTED, ha=align)
             y = top - 0.024
@@ -248,16 +327,21 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
                          else (MUTED if row["source"] == costs.SOURCE_NONE else BODY))
                 fig.text(cols[4], y, _money(row["unit_cost"]), fontsize=8.5,
                          color=BODY)
-                fig.text(cols[5], y, _qty(row["quantity"]), fontsize=8.5,
-                         color=BODY if row["quantity"] > 1 else MUTED)
-                fig.text(cols[6], y, _money(row["total"]) if row["total"] else "—",
+                fig.text(cols[5], y, row["unit_label"] or "—", fontsize=8,
+                         color=WARN if row["is_rate"] else MUTED)
+                qty = row["quantity"]
+                fig.text(cols[6], y, _qty(qty), fontsize=8.5,
+                         color=BODY if (qty or 0) > 1 else MUTED)
+                fig.text(cols[7], y,
+                         _money(row["total"]) if row["total"] is not None else "—",
                          fontsize=8.5, color=BODY, ha="right")
                 y -= 0.026
 
             fig.text(0.06, 0.05,
                      "Researched averages are national figures for budgeting, "
-                     "not quotes. Items with no estimate are listed but "
-                     "contribute nothing to the total.",
+                     "not quotes. Items with no estimate, and rates with no "
+                     "measured quantity, are listed but contribute nothing to "
+                     "the total.",
                      fontsize=7.5, color=MUTED)
             fig.text(0.94, 0.05, f"Page {page_no} of {len(pages)}",
                      ha="right", fontsize=8, color=MUTED)
@@ -290,10 +374,18 @@ def build_xlsx(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
                    else f"{summary['unpriced_count']} item(s), not costed"])
     ws.append([f"{summary['researched_pct']:.0f}% of the total is researched "
                f"national averages ({summary['researched_on']}), not quotes."])
+    ws.append([f"{summary['priced_count']} of {summary['line_count']} line(s) "
+               f"are priced. This total covers those lines only."])
+    if summary["unmeasured_count"]:
+        # Said at the top, beside the total, because this is the sentence
+        # that stops the figure being read as the cost of the work.
+        ws.append([f"{summary['unmeasured_count']} line(s) have a researched "
+                   f"rate but no measured quantity, so they are NOT in the "
+                   f"total. See the 'Needs measurement' sheet."])
     ws.append([])
 
     header = ["Item", "Category", "Scope", "Condition", "Cost source",
-              "Unit cost", "Qty", "Total", "Why no estimate"]
+              "Unit cost", "Unit", "Qty", "Total", "Why no estimate"]
     ws.append(header)
     for cell in ws[ws.max_row]:
         cell.font = bold
@@ -301,13 +393,29 @@ def build_xlsx(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
     for l in lines:
         ws.append([l["label"], l["category_name"], l["scope"],
                    (l["condition"] or ""), l["source_label"],
-                   l["unit_cost"], l["quantity"],
-                   l["total"] or None, l["reason"]])
+                   l["unit_cost"], l["unit_label"], l["quantity"],
+                   l["total"], l["reason"]])
 
-    for col, width in zip("ABCDEFGHI", (30, 26, 10, 12, 20, 12, 6, 12, 60)):
+    for col, width in zip("ABCDEFGHIJ", (30, 26, 10, 12, 20, 12, 13, 8, 12, 60)):
         ws.column_dimensions[col].width = width
-    for row in ws.iter_rows(min_row=11, min_col=9, max_col=9):
+    for row in ws.iter_rows(min_row=11, min_col=10, max_col=10):
         row[0].alignment = Alignment(wrap_text=True, vertical="top")
+
+    # Rates that have a researched figure and no measurement to apply it
+    # to. Its own sheet rather than a footnote: these are the lines a
+    # walk can turn into real money, and each one names what to measure.
+    if summary["unmeasured"]:
+        nm = wb.create_sheet("Needs measurement")
+        nm.append(["Item", "Where", "Rate", "Unit", "What is needed"])
+        for cell in nm[1]:
+            cell.font = bold
+        for l in summary["unmeasured"]:
+            nm.append([l["label"], l["scope"], l["unit_cost"],
+                       l["unit_label"], l["reason"]])
+        for col, width in zip("ABCDE", (30, 12, 12, 14, 60)):
+            nm.column_dimensions[col].width = width
+        for row in nm.iter_rows(min_row=2, min_col=5, max_col=5):
+            row[0].alignment = Alignment(wrap_text=True, vertical="top")
 
     # The reference table itself, so a reader can audit any figure that
     # appeared above without leaving the file.
