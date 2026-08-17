@@ -408,7 +408,14 @@
   let pendingCurrentCityPreview = { cityKey: "", panMap: false };
   let lastObservedRefreshAt = initialLastRefreshAt;
   let wasRefreshRunning = Boolean(initiallyRunning);
-  let creLoadingVisible = Boolean(aiCreStatus && !aiCreStatus.hidden);
+  const CRE_UI_STATES = Object.freeze({
+    IDLE: "idle",
+    LOADING: "loading",
+    SUCCESS: "success",
+    NO_DATA: "no_data",
+    FAILURE: "failure",
+  });
+  let creUiState = CRE_UI_STATES.IDLE;
   const explicitCreIntent = "explicit_city_selection";
 
   function clearPersistedComparisonStorage() {
@@ -673,10 +680,7 @@
       summaryRequestController.abort();
       summaryRequestController = null;
     }
-    if (creRequestController) {
-      creRequestController.abort();
-      creRequestController = null;
-    }
+    invalidateCreRequest("clear_overview");
     clearOverview();
   }
 
@@ -1984,33 +1988,55 @@
     aiCreBody.textContent = text;
   }
 
-  function setCreLoadingVisible(visible) {
-    if (!aiCreStatus) return;
-    creLoadingVisible = Boolean(visible);
-    aiCreStatus.hidden = !creLoadingVisible;
-  }
-
   function clearCreSources() {
     if (!aiOverviewSources) return;
     aiOverviewSources.innerHTML = "";
     aiOverviewSources.style.display = "none";
   }
 
-  function setCreIdle() {
-    setCreLoadingVisible(false);
-    setCreBody("Institutional research loads after explicit city selection.");
+  function setCreState(nextState, payload = {}) {
+    creUiState = nextState;
+    const isLoading = nextState === CRE_UI_STATES.LOADING;
+
+    if (aiCreStatus) {
+      aiCreStatus.hidden = !isLoading;
+      aiCreStatus.style.display = isLoading ? "inline-flex" : "none";
+    }
+
+    if (nextState === CRE_UI_STATES.SUCCESS) {
+      const summaryText = String(payload.cre_summary || "").trim();
+      setCreBody(summaryText || "No relevant research from approved sources.");
+      renderCreSources(payload.research_sources || []);
+      return;
+    }
+
     clearCreSources();
+    if (nextState === CRE_UI_STATES.IDLE) {
+      setCreBody("Institutional research loads after explicit city selection.");
+      return;
+    }
+    if (nextState === CRE_UI_STATES.LOADING) {
+      setCreBody("");
+      return;
+    }
+    if (nextState === CRE_UI_STATES.NO_DATA) {
+      setCreBody("No relevant research from approved sources.");
+      return;
+    }
+    setCreBody("Institutional research is temporarily unavailable.");
   }
 
-  function setCreLoading() {
-    setCreLoadingVisible(true);
-    setCreBody("Searching approved institutional research…");
-    clearCreSources();
+  function invalidateCreRequest(reason = "") {
+    if (creRequestController) {
+      creRequestController.abort();
+      creRequestController = null;
+    }
+    creRequestSequence += 1;
   }
 
   function clearOverview() {
     setOverviewBody("Search a city to generate a screening overview.");
-    setCreIdle();
+    setCreState(CRE_UI_STATES.IDLE);
     setOverviewMeta("AI-generated screening overview based on current FIRE Metrics data.");
   }
 
@@ -2092,40 +2118,34 @@
     setCreLoadingVisible(false);
     const status = String(payload?.cre_status || "").trim().toLowerCase();
     if (status === "success") {
-      setCreBody(String(payload.cre_summary || ""));
-      renderCreSources(payload.research_sources || []);
+      setCreState(CRE_UI_STATES.SUCCESS, payload || {});
       return;
     }
     if (status === "no_data") {
-      setCreBody("No relevant research from approved sources.");
-      clearCreSources();
+      setCreState(CRE_UI_STATES.NO_DATA);
       return;
     }
     if (status === "failure") {
-      setCreBody("Institutional research is temporarily unavailable.");
-      clearCreSources();
+      setCreState(CRE_UI_STATES.FAILURE);
       return;
     }
-    setCreIdle();
+    setCreState(CRE_UI_STATES.IDLE);
   }
 
   async function requestCreResearch(city, options = {}) {
     if (!city) {
-      setCreIdle();
+      invalidateCreRequest("missing_city");
+      setCreState(CRE_UI_STATES.IDLE);
       return;
     }
 
-    if (creRequestController) {
-      creRequestController.abort();
-    }
-
+    invalidateCreRequest("new_city");
     creRequestController = new AbortController();
-    creRequestSequence += 1;
     const mySequence = creRequestSequence;
     const creSelectionSource = String(options.creSelectionSource || "").trim();
     const creGenerationIntent = creSelectionSource ? explicitCreIntent : "";
 
-    setCreLoading();
+    setCreState(CRE_UI_STATES.LOADING);
 
     try {
       const res = await fetch(citySummaryCreUrl, {
@@ -2154,11 +2174,10 @@
         return;
       }
       if (mySequence !== creRequestSequence) return;
-      setCreBody("Institutional research is temporarily unavailable.");
-      clearCreSources();
+      setCreState(CRE_UI_STATES.FAILURE);
     } finally {
-      if (mySequence === creRequestSequence) {
-        setCreLoadingVisible(false);
+      if (mySequence === creRequestSequence && creRequestController) {
+        creRequestController = null;
       }
     }
   }
@@ -2178,7 +2197,7 @@
     const mySequence = summaryRequestSequence;
     const creSelectionSource = String(options.creSelectionSource || "").trim();
     if (!creSelectionSource) {
-      setCreIdle();
+      setCreState(CRE_UI_STATES.IDLE);
     }
 
     setOverviewLoading();

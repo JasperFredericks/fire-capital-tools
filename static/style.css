@@ -1826,6 +1826,10 @@ hr.divider {
   color: #334155;
 }
 
+.fire-ai-cre-status[hidden] {
+  display: none !important;
+}
+
 .fire-ai-cre-spinner {
   width: 14px;
   height: 14px;
