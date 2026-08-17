@@ -290,3 +290,89 @@ class BothExportsCarryTheUnitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheManualPathIsClosedTooTests(unittest.TestCase):
+    """The same bug, arriving through a different door.
+
+    build_lines() used to read the unit off the _reference object, which
+    is attached only when a RESEARCHED cost was applied. An inspector
+    typing their own $5.75 on walls_ceiling produced no _reference, fell
+    through to "each", and got the rate multiplied by an instance count.
+
+    The unit belongs to the item. walls_ceiling is per-square-foot
+    whoever prices it.
+
+    FREEFORM ITEMS ARE THE NARROWER CASE, AND THEY ARE NOT ASSUMED
+
+    An item with no reference entry has no unit to inherit. Treating it
+    as "each" because nothing describes it is the same assumption one
+    step further out, so a figure below FREEFORM_RATE_CEILING is read as
+    a rate and refused a total.
+
+    The threshold is grounded, not invented: every researched rate is at
+    most $11.50 and the cheapest researched per-item figure is $195.
+    Its failure mode is a genuine sub-$15 job price being refused, which
+    is asserted below so the trade is on the record rather than implied.
+    """
+
+    def line(self, item, cost, source="manual", **kw):
+        row = {"id": 1, "item_key": item, "area_id": 1, "room_id": 1,
+               "scope": "room", "condition": "repair", "est_unit_cost": cost,
+               "est_cost_source": source, "quantity": None, "measure": None,
+               "instance_label": ""}
+        row.update(kw)
+        return capex.build_lines([row], LABELS)[0]
+
+    def test_a_manual_figure_on_a_rate_item_is_a_rate(self):
+        l = self.line("walls_ceiling", 5.75)
+        self.assertTrue(l["is_rate"])
+        self.assertEqual(l["unit"], refcosts.UNIT_SQFT)
+        self.assertIsNone(l["total"])
+
+    def test_it_is_never_the_bare_rate_as_a_total(self):
+        self.assertNotEqual(self.line("walls_ceiling", 5.75)["total"], 5.75)
+
+    def test_all_seven_rate_items_are_closed_on_the_manual_path(self):
+        for key, entry in refcosts.REFERENCE_COSTS.items():
+            if not refcosts.is_rate(entry.unit):
+                continue
+            with self.subTest(item=key):
+                l = self.line(key, entry.unit_cost)
+                self.assertTrue(l["is_rate"])
+                self.assertIsNone(l["total"])
+
+    def test_each_items_are_completely_unaffected(self):
+        for key, entry in refcosts.REFERENCE_COSTS.items():
+            if refcosts.is_rate(entry.unit):
+                continue
+            with self.subTest(item=key):
+                l = self.line(key, entry.unit_cost)
+                self.assertFalse(l["is_rate"])
+                self.assertEqual(l["total"], entry.unit_cost)
+
+    def test_a_freeform_job_price_still_totals(self):
+        """The common, legitimate case must not regress."""
+        self.assertEqual(self.line("replace_gate", 800.0)["total"], 800.0)
+
+    def test_a_freeform_rate_is_refused_a_total(self):
+        l = self.line("replace_gate", 5.75)
+        self.assertTrue(l["is_rate"])
+        self.assertIsNone(l["total"])
+
+    def test_the_threshold_sits_above_every_researched_rate(self):
+        rates = [e.unit_cost for e in refcosts.REFERENCE_COSTS.values()
+                 if refcosts.is_rate(e.unit)]
+        self.assertLess(max(rates), refcosts.FREEFORM_RATE_CEILING)
+
+    def test_and_below_every_researched_per_item_figure(self):
+        each = [e.unit_cost for e in refcosts.REFERENCE_COSTS.values()
+                if not refcosts.is_rate(e.unit)]
+        self.assertGreater(min(each), refcosts.FREEFORM_RATE_CEILING)
+
+    def test_the_known_false_positive_is_on_the_record(self):
+        """A real sub-$15 job price is refused. Stated, not hidden."""
+        l = self.line("replace_gate", 12.00)
+        self.assertIsNone(l["total"],
+                          "a genuine $12 job price is refused; the trade is "
+                          "that no capital job costs twelve dollars")

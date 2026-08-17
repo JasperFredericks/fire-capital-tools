@@ -91,6 +91,28 @@ def is_rate(unit: str | None) -> bool:
     return unit in RATE_UNITS
 
 
+# The largest researched RATE is $11.50/sqft (parking_paving) and the
+# cheapest researched PER-ITEM figure is $195 (gfci, co_alarm). Seventeen
+# times apart, with nothing in between.
+#
+# That gap is what lets a hand-typed cost on a FREEFORM item -- an item
+# with no reference entry, so no unit to inherit -- be classified without
+# asking anyone. A capital line priced under this figure is a rate that
+# needs a quantity, not the price of a job; no capital job costs twelve
+# dollars. Above it, it is a job price and totals as one.
+#
+# Set just above the observed rate ceiling rather than midway, so it
+# refuses as little as possible. Its failure mode is stated in the tests:
+# a genuine sub-$15 job price is refused and has to be confirmed, which
+# is a trivial loss against silently multiplying a rate by a headcount.
+FREEFORM_RATE_CEILING = 15.00
+
+
+def looks_like_a_rate(unit_cost: float | None) -> bool:
+    """True when a figure on an item with NO known unit reads as a rate."""
+    return unit_cost is not None and 0 < unit_cost < FREEFORM_RATE_CEILING
+
+
 def measurement_needed(unit: str | None) -> str:
     """What has to be measured before a rate can become a total."""
     return MEASUREMENT_NEEDED.get(unit, "")
