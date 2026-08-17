@@ -17,12 +17,45 @@
     {{ update.period_end }} &middot; generated {{ update.generated_at[:16] }}
     {% if update.model %}&middot; {{ update.model }}{% endif %}
   </p>
-  <div style="margin-top:10px;">
-    <a class="btn btn-ghost"
-       href="{{ url_for('investor_notes.export_update', uid=update.id, fmt='pdf') }}">Download PDF</a>
-    <a class="btn btn-ghost"
-       href="{{ url_for('investor_notes.export_update', uid=update.id, fmt='xlsx') }}">Download Excel</a>
-  </div>
+  {#
+    Sections are chosen per export, because her real updates carried a
+    different set each time. Every box starts ticked -- that is "all", not
+    a default subset, and unticking is how the choice gets made. The
+    document keeps the order shown on this page regardless of tick order.
+
+    One GET form, three formats via formaction, so the same ticks apply to
+    whichever button is pressed rather than three lists drifting apart.
+  #}
+  <form method="GET"
+        action="{{ url_for('investor_notes.export_update', uid=update.id, fmt='pdf') }}"
+        style="margin-top:12px;">
+    <div style="font-size:12px; color:#6b7280; margin-bottom:6px;">
+      Sections to include
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:10px 16px; margin-bottom:10px;">
+      {% for section in sections %}
+        <label style="display:inline-flex; align-items:center; gap:5px;
+                      font-size:13px; cursor:pointer;">
+          <input type="checkbox" name="section" value="{{ section.key }}" checked>
+          {{ section.name }}{% if section.empty %}
+            <span style="color:#9ca3af;">(not discussed)</span>
+          {% endif %}
+        </label>
+      {% endfor %}
+    </div>
+    <button type="submit" class="btn btn-primary"
+            formaction="{{ url_for('investor_notes.export_update', uid=update.id, fmt='docx') }}">
+      Download Word
+    </button>
+    <button type="submit" class="btn btn-ghost"
+            formaction="{{ url_for('investor_notes.export_update', uid=update.id, fmt='pdf') }}">
+      Download PDF
+    </button>
+    <button type="submit" class="btn btn-ghost"
+            formaction="{{ url_for('investor_notes.export_update', uid=update.id, fmt='xlsx') }}">
+      Download Excel
+    </button>
+  </form>
 </div>
 
 {% for section in sections %}

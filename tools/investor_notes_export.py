@@ -5,17 +5,27 @@ PDF via matplotlib PdfPages and XLSX via openpyxl, the same two
 mechanisms every other export in this app uses. Both libraries are
 already dependencies.
 
-WORD IS NOT OFFERED, AND THAT IS A DEPENDENCY DECISION
+WORD IS OFFERED, AND THE DEPENDENCY WAS APPROVED
 
-Michelle asked for Word. python-docx is NOT installed and is not in
-requirements.txt, so a .docx export would mean a new dependency. It is a
-small, pure-Python, well-maintained one and adding it would be
-reasonable -- but adding a dependency is a decision for a person, not
-something to slip into a feature branch. Flagged rather than assumed.
+Michelle asked for Word. python-docx was escalated rather than slipped
+into a feature branch, and the escalation came back approved: MIT
+licensed, pure Python, no system libraries. It is pinned in
+requirements.txt.
 
-Meanwhile the PDF is the shareable artifact and the XLSX carries the
-same content as text a reader can paste into Word themselves, which
-covers the need without the decision.
+Word is the format she actually forwards to investors, so .docx is a
+first-class export here rather than a conversion of the PDF.
+
+SECTIONS ARE CHOSEN PER UPDATE, NOT FIXED
+
+Her real updates used a different set of sections each time, so nothing
+here mandates a section list. build_docx() renders exactly the sections
+it is handed, in the order it is handed them. select_sections() filters
+an update's sections down to a caller's chosen keys without reordering.
+
+There is deliberately no default subset. A caller that passes no
+selection gets every section the update has -- "all" rather than a
+curated few, because a hardcoded default is the fixed list this design
+exists to avoid.
 
 WHY THE PDF WRAPS TEXT BY HAND
 
@@ -186,6 +196,92 @@ def build_xlsx(path, update: dict[str, Any], sections: list[dict[str, Any]],
     note.column_dimensions["A"].width = 100
 
     wb.save(str(path))
+    return path
+
+
+
+def select_sections(sections: list[dict[str, Any]],
+                    keys: Any = None) -> list[dict[str, Any]]:
+    """The sections a caller asked for, in the update's own order.
+
+    `keys` None or empty means every section -- "all", not a default
+    subset. Order comes from `sections` and never from `keys`, so a
+    caller cannot reorder the document by reordering its request, and an
+    unknown key is ignored rather than inventing an empty section.
+    """
+    if not keys:
+        return list(sections)
+    wanted = {str(k) for k in keys}
+    return [s for s in sections if str(s.get("key")) in wanted]
+
+
+def build_docx(path, update: dict[str, Any], sections: list[dict[str, Any]],
+               transcripts: list[dict[str, Any]]) -> Path:
+    """The same document the PDF renders, as a real Word file.
+
+    Mirrors build_pdf()/build_xlsx(): same heading, same section order,
+    same per-point attribution, same closing disclaimer. It is a separate
+    renderer rather than a conversion because python-docx has flow layout
+    and matplotlib does not -- this one gets real headings and real
+    bullets that reflow when Michelle edits the file, which is the entire
+    reason Word was asked for.
+
+    An empty section is written with its "not discussed" line intact and
+    visible. Nothing is generated to fill it.
+    """
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+
+    path = Path(path)
+    label = update.get("property_label") or "Property"
+    period = f"{update.get('period_start')} to {update.get('period_end')}"
+    generated = (update.get("generated_at") or "")[:10]
+
+    doc = Document()
+
+    title = doc.add_heading("Investor Update", level=0)
+    sub = doc.add_paragraph()
+    sub.add_run(label).bold = True
+    sub.add_run("\n" + period)
+    meta = sub.add_run(f"\nGenerated {generated}")
+    meta.font.size = Pt(8.5)
+    meta.font.color.rgb = RGBColor(0x6b, 0x72, 0x80)
+
+    for section in sections:
+        doc.add_heading(section["name"], level=1)
+        if section.get("empty"):
+            # Visibly empty. Never filled in -- a section Michelle enabled
+            # and nobody discussed has to read as "nobody discussed it".
+            run = doc.add_paragraph().add_run(
+                section.get("empty_text") or "Not discussed.")
+            run.italic = True
+            run.font.color.rgb = RGBColor(0x6b, 0x72, 0x80)
+            continue
+        for point in section["points"]:
+            doc.add_paragraph(point["text"], style="List Bullet")
+            cite = doc.add_paragraph()
+            cite_run = cite.add_run(
+                f"— {point.get('title')}, {point.get('date')}")
+            cite_run.italic = True
+            cite_run.font.size = Pt(8)
+            cite_run.font.color.rgb = RGBColor(0x6b, 0x72, 0x80)
+
+    doc.add_heading("Sources", level=1)
+    for tr in transcripts:
+        doc.add_paragraph(
+            f"{tr.get('transcript_date')}  "
+            f"{tr.get('title') or tr.get('original_name') or 'Untitled'}",
+            style="List Bullet")
+
+    note = doc.add_paragraph()
+    note_run = note.add_run(
+        "Every statement above is drawn from the meetings listed. Figures "
+        "mentioned are as discussed on those calls and are not accounting "
+        "records.")
+    note_run.font.size = Pt(8.5)
+    note_run.font.color.rgb = RGBColor(0x6b, 0x72, 0x80)
+
+    doc.save(str(path))
     return path
 
 
