@@ -29,6 +29,24 @@
   #}
 </div>
 
+{#
+  The two tools share a URL prefix and nothing else said so. Michelle
+  asked for a transcript-upload section while standing on this page,
+  because from here there was no way to know the notetaker existed.
+#}
+<div class="card" style="display:flex; justify-content:space-between; align-items:center;
+                         gap:14px; flex-wrap:wrap;">
+  <div>
+    <div class="scorecard-section-title" style="margin:0;">Meeting notes for these properties</div>
+    <p class="page-subtitle" style="margin:6px 0 0;">
+      Upload Fathom or Otter transcripts for a date range and turn them into
+      an investor update. Add a property there too, if it is not underwritten
+      yet.
+    </p>
+  </div>
+  <a href="{{ url_for('investor_notes.index') }}" class="btn btn-secondary">Open Notetaker</a>
+</div>
+
 <!-- ── Deal picker ────────────────────────────────────────────────────── -->
 <div class="card">
   <div class="scorecard-section-title">Choose a Deal</div>
