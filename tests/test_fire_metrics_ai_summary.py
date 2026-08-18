@@ -2172,6 +2172,9 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("if (mySequence === creRequestSequence && creRequestController)", template)
         self.assertIn("if (!creSelectionSource) {", template)
         self.assertIn("setCreState(CRE_UI_STATES.IDLE);", template)
+        self.assertIn("function renderCrePayload(payload)", template)
+        self.assertIn("const status = String(payload?.cre_status || \"\").trim().toLowerCase();", template)
+        self.assertNotIn("setCreLoadingVisible(", template)
 
     def test_frontend_city_analytics_export_controls_present(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")

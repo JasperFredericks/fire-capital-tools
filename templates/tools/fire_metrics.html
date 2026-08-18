@@ -2115,7 +2115,6 @@
   }
 
   function renderCrePayload(payload) {
-    setCreLoadingVisible(false);
     const status = String(payload?.cre_status || "").trim().toLowerCase();
     if (status === "success") {
       setCreState(CRE_UI_STATES.SUCCESS, payload || {});
