@@ -197,7 +197,22 @@ def run_waterfall(contributions: list[dict[str, Any]],
 
     for p in periods:
         cash = to_cents(p.get("operating_cash")) + to_cents(p.get("sale_proceeds"))
-        cash_in = cash
+        # A refinance pays down capital and nothing else.
+        #
+        # Michelle's stated order at the event is payoff, then fees, then
+        # return of capital -- pref is deliberately absent from it. So the
+        # refi pool runs the return-of-capital tier alone, BEFORE the
+        # normal cascade, and any part of it beyond the capital still
+        # outstanding falls through into the ordinary pool for the period
+        # rather than being trapped (invariant 1 requires every cent
+        # received to be distributed).
+        #
+        # Pref is untouched here on purpose. It is not paid at the event;
+        # it goes on accruing in every later period on whatever capital is
+        # still unreturned -- which is now smaller, which is the entire
+        # point of returning capital early.
+        refi_cents = to_cents(p.get("refi_proceeds"))
+        cash_in = cash + refi_cents
 
         # Accrue on unreturned capital PLUS unpaid pref -- the unpaid
         # balance compounds. See the module docstring: without this,
@@ -211,7 +226,29 @@ def run_waterfall(contributions: list[dict[str, Any]],
                 unpaid_pref[i] += a
 
         row = {"year": p.get("year"), "cash_available": cash_in,
-               "accrued_pref": sum(accrued), "tiers": [], "lp": [0] * n, "gp": 0}
+               "accrued_pref": sum(accrued), "tiers": [], "lp": [0] * n,
+               "gp": 0, "refi_proceeds": refi_cents, "refi_return_of_capital": 0}
+
+        if refi_cents > 0:
+            payable = min(refi_cents, sum(unreturned))
+            shares = split_pro_rata(payable, unreturned)
+            for i, share in enumerate(shares):
+                unreturned[i] -= share
+                lp_received[i] += share
+                row["lp"][i] += share
+            # setdefault, not indexing: tier_totals is built from the
+            # CONFIGURED tiers, and a structure with no return-of-capital
+            # tier is legal. A refinance still returns capital in that
+            # case, so the bucket has to be able to appear.
+            tier_totals.setdefault(TIER_RETURN_OF_CAPITAL,
+                                   {"lp": 0, "gp": 0})["lp"] += payable
+            row["refi_return_of_capital"] = payable
+            row["tiers"].append({"tier_type": TIER_RETURN_OF_CAPITAL,
+                                 "lp": payable, "gp": 0, "paid": payable,
+                                 "from_refinance": True})
+            # Whatever the refinance raised beyond the outstanding capital
+            # joins the period's ordinary cash and takes the normal route.
+            cash += refi_cents - payable
 
         for tier in tiers:
             ttype = tier["tier_type"]
@@ -332,6 +369,12 @@ def _assemble(lps, contrib_cents, periods, period_rows, tier_totals, lp_received
             # reader sees WHY a year distributed nothing rather than being
             # left to infer it from a zero.
             "shortfall": to_dollars(r["shortfall"]),
+            # The refinance, if this period had one. Carried out of the
+            # cascade rather than left inside it: a reader looking at a
+            # year where unreturned capital dropped needs to see that a
+            # capital event caused it, not infer it from the tier rows.
+            "refi_proceeds": to_dollars(r.get("refi_proceeds", 0)),
+            "refi_return_of_capital": to_dollars(r.get("refi_return_of_capital", 0)),
             "lp": [to_dollars(x) for x in r["lp"]],
             "lp_total": to_dollars(sum(r["lp"])),
             "gp": to_dollars(r["gp"]),
@@ -627,9 +670,29 @@ def periods_from_underwriting(returns: dict[str, Any]) -> list[dict[str, Any]]:
     sale = returns.get("net_sale_proceeds") or 0.0
     out = []
     for idx, y in enumerate(years):
+        # A refinance is a third kind of money and arrives as its own
+        # component. operating_cash is the year's cash flow NET of it, so
+        # the two cannot double-count: analyze_noi_series() adds the refi
+        # into cash_flow, and it is taken back out here.
+        refi = y.get("refi_proceeds") or 0.0
+        # Split in CENTS, not dollars. The cascade converts each component
+        # separately, so `to_cents(a) + to_cents(b)` has to equal
+        # `to_cents(a + b)` or the year is off by a cent -- and invariant
+        # 10 compares the LP vector against the property's cent for cent,
+        # exactly, with no tolerance. Subtracting in dollars and letting
+        # each half round independently loses that cent about half the
+        # time, which is how this was found.
+        #
+        # Applied only when there IS a refinance. With none, the original
+        # expression is used untouched, so every scenario that predates
+        # this carries the same unrounded float it always did.
+        cash_flow = y.get("cash_flow") or 0.0
+        operating = (to_dollars(to_cents(cash_flow) - to_cents(refi))
+                     if refi else cash_flow)
         out.append({
             "year": y.get("year", idx + 1),
-            "operating_cash": y.get("cash_flow") or 0.0,
+            "operating_cash": operating,
             "sale_proceeds": sale if idx == len(years) - 1 else 0.0,
+            "refi_proceeds": refi,
         })
     return out

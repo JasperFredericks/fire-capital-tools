@@ -154,6 +154,8 @@ SCENARIO_NUMERIC = (
     # SCENARIO_PARTIAL_ONLY because the assumptions form is exactly where
     # it is edited, beside the amortization it modifies.
     "io_years",
+    "refi_year", "refi_loan_amount", "refi_rate_pct", "refi_amort_years",
+    "refi_io_years", "refi_costs_pct", "refi_fee_pct", "refi_bank_fee_pct",
 )
 
 # Deliberately NOT in SCENARIO_NUMERIC. That tuple drives the assumptions
@@ -210,6 +212,24 @@ _SCENARIO_ADDED_COLUMNS = (
     # is every scenario that predates this column -- so the migration
     # cannot move a stored result.
     ("io_years", "INTEGER"),
+    # Cash-out refinance. All nullable; refi_year NULL means no refinance
+    # and every figure below is ignored, so every scenario that predates
+    # these columns is unchanged.
+    ("refi_year", "INTEGER"),
+    ("refi_loan_amount", "REAL"),
+    ("refi_rate_pct", "REAL"),
+    ("refi_amort_years", "INTEGER"),
+    ("refi_io_years", "INTEGER"),
+    ("refi_costs_pct", "REAL"),
+    # The bank's own loan fee on the refinance, a share of the gross new
+    # loan. Separate from and additive to the GP capital transaction fee:
+    # one is a cost of borrowing, the other is the GP's compensation for
+    # the transaction, and neither substitutes for the other.
+    ("refi_bank_fee_pct", "REAL"),
+    # The GP's capital transaction fee on the refinance. Deliberately NOT
+    # capital_transaction_fee_pct, which is the sale-side fee on a
+    # different base -- see deal_analyzer_math.refinance().
+    ("refi_fee_pct", "REAL"),
 )
 
 

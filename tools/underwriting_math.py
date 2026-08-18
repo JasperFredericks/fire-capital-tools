@@ -629,6 +629,17 @@ def _engine_inputs(scenario: dict[str, Any],
         # 0 and the debt-service series collapses to the level payment.
         # Ignored in multi-loan mode, where each loan carries its own.
         "io_years": int(scenario.get("io_years") or 0),
+        # Cash-out refinance. Absent on every scenario that predates the
+        # columns and on every Deal Analyzer call, where refi_year is 0
+        # and the engine takes the path it always did.
+        "refi_year": int(scenario.get("refi_year") or 0),
+        "refi_loan_amount": _f(scenario.get("refi_loan_amount")),
+        "refi_rate_pct": scenario.get("refi_rate_pct"),
+        "refi_amort_years": scenario.get("refi_amort_years"),
+        "refi_io_years": scenario.get("refi_io_years"),
+        "refi_costs_pct": _f(scenario.get("refi_costs_pct")),
+        "refi_fee_pct": _f(scenario.get("refi_fee_pct")),
+        "refi_bank_fee_pct": _f(scenario.get("refi_bank_fee_pct")),
         "noi_year1": 1.0,
         "noi_growth_pct": 0.0,
     }
