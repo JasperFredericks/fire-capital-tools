@@ -143,6 +143,35 @@
                    placeholder="Cost to put right"
                    aria-label="{{ item.label }} estimated cost">
             {#
+              Per job or per square foot, chosen rather than inferred.
+              Michelle: "it's worth the extra click to ensure the data is
+              accurate."
+
+              There is deliberately NO pre-selected option. A default
+              would silently decide the thing the toggle exists to ask,
+              and "per job" happens to be the assumption that produced the
+              $5.75 repaint bug in the first place. Unset stays unset and
+              the export falls back to the magnitude heuristic, which is
+              what stored rows already rely on.
+
+              This select sits AFTER the cost input and before the
+              provenance note, never inside a <form> nested in another --
+              tests/test_template_structure.py asserts the DOM a browser
+              actually builds here.
+            #}
+            <label class="form-label" style="margin-top:8px; font-size:12px;"
+                   for="measure_{{ item.key }}{{ sfx }}">This cost is</label>
+            <select class="form-input sdd-touch" style="padding:5px 8px; font-size:12px;"
+                    id="measure_{{ item.key }}{{ sfx }}"
+                    name="measure_{{ item.key }}{{ sfx }}"
+                    aria-label="{{ item.label }} cost unit">
+              <option value=""{% if not est.measure %} selected{% endif %}>Not specified</option>
+              {% for value, label in cost_units %}
+                <option value="{{ value }}"{% if est.measure == value %} selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+
+            {#
               Shown every single time a figure can be entered or read.
               An inspector's guess and a priced line item look identical
               once they are both a number in a column, and only this

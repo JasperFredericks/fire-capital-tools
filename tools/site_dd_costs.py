@@ -215,6 +215,9 @@ def describe(row: Any) -> dict[str, Any]:
         "short": SOURCE_SHORT.get(source, ""),
         "is_estimate": source == SOURCE_MANUAL,
         "has_cost": cost is not None,
+        # Which unit the typed cost is in, when somebody chose one.
+        # None is a real state: the toggle was not answered.
+        "measure": ((row or {}).get("measure") or None),
     }
 
 

@@ -104,6 +104,19 @@ def is_rate(unit: str | None) -> bool:
 # Set just above the observed rate ceiling rather than midway, so it
 # refuses as little as possible.
 #
+# FALLBACK ONLY, AS OF THE PER-JOB / PER-SQ-FT TOGGLE.
+#
+# Michelle approved the explicit choice -- "yes, please add the toggle for
+# 'per sq ft' or 'per job'. It's worth the extra click to ensure the data
+# is accurate." -- and an answered toggle now decides the unit outright.
+# This threshold is consulted ONLY when a row carries no unit: findings
+# stored before the toggle existed, and saves where nobody answered it.
+#
+# It is deliberately not deleted. Those rows are real and still have to be
+# priced somehow, and refusing to total them all would be a worse answer
+# than a heuristic that is right about the shape of the data. But it is no
+# longer the primary path and should not grow new callers.
+#
 # PROVISIONAL. THIS IS A REASONED GUESS, NOT A DERIVED CONSTANT.
 #
 # The seventeenfold gap is real, but it is evidence about the 36 CURATED

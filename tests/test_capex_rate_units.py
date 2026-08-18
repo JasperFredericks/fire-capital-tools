@@ -373,6 +373,27 @@ class TheManualPathIsClosedTooTests(unittest.TestCase):
                 if not refcosts.is_rate(e.unit)]
         self.assertGreater(min(each), refcosts.FREEFORM_RATE_CEILING)
 
+    def test_an_answered_toggle_beats_the_threshold(self):
+        """The primary path now. A $5.75 cost explicitly marked per job is
+        a job price, whatever its magnitude says."""
+        l = self.line("replace_gate", 5.75, measure="each")
+        self.assertFalse(l["is_rate"])
+        self.assertEqual(l["total"], 5.75)
+
+    def test_and_an_expensive_cost_marked_per_sqft_is_a_rate(self):
+        """The other direction: magnitude does not override the answer."""
+        l = self.line("replace_gate", 900.0, measure="sqft")
+        self.assertTrue(l["is_rate"])
+        self.assertIsNone(l["total"])
+
+    def test_the_threshold_is_only_the_fallback_now(self):
+        """Consulted when the toggle was not answered -- rows stored before
+        it existed, and saves where nobody chose."""
+        unanswered = self.line("replace_gate", 5.75)
+        self.assertTrue(unanswered["is_rate"], "falls back to magnitude")
+        answered = self.line("replace_gate", 5.75, measure="each")
+        self.assertFalse(answered["is_rate"], "the answer wins")
+
     def test_the_threshold_is_labelled_provisional(self):
         """It is a reasoned guess about an uncurated category.
 
@@ -384,6 +405,7 @@ class TheManualPathIsClosedTooTests(unittest.TestCase):
         src = (ROOT / "tools" / "site_dd_reference_costs.py").read_text(
             encoding="utf-8")
         self.assertIn("PROVISIONAL", src)
+        self.assertIn("FALLBACK ONLY", src)
         self.assertIn("not a derived constant", src.lower().replace(
             "NOT A DERIVED CONSTANT", "not a derived constant"))
 

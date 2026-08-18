@@ -250,6 +250,8 @@ def save(assessment_id):
                 "condition": raw if cond.is_valid(raw) else None,
                 "est_unit_cost": est_cost,
                 "est_cost_source": est_source,
+                "measure": _kept_measure(request.form, key, suffix,
+                                         existing.get(key), n),
                 "note": (request.form.get(f"note_{key}{suffix}") or "").strip() or None,
             })
 
@@ -527,6 +529,7 @@ def area_detail(assessment_id, area_id):
         added_by_room=added_by_room, added_unit=unit_added)
     return render_template(
         "tools/site_dd_area.html",
+        cost_units=COST_UNITS,
         assessment=_load(assessment_id), area=area, rooms=rooms,
         room_types=uc.ROOM_TYPES, room_type_labels=uc.ROOM_TYPE_LABELS,
         unit_items=unit_catalogue, added_items=unit_added, unit_rows=unit_rows,
@@ -695,6 +698,7 @@ def room_detail(assessment_id, area_id, room_id):
     idx = order.index(room_id) if room_id in order else 0
     return render_template(
         "tools/site_dd_room.html",
+        cost_units=COST_UNITS,
         assessment=_load(assessment_id), area=area, room=room, rooms=rooms,
         items=catalogue, added_items=added, rows=rows,
         bank_groups=_bank_picker(bank.SCOPE_ROOM, room["room_type"],
@@ -850,7 +854,12 @@ def _collect(form, items, *, scope, area_id, room_id, existing=None):
                 "condition": raw_condition if cond.is_valid(raw_condition) else None,
                 "detail": raw_detail if uc.is_valid_option(item, raw_detail) else None,
                 "quantity": quantity if item["kind"] == uc.KIND_NUMBER else None,
-                "measure": item["measure"] if item["kind"] == uc.KIND_NUMBER else None,
+                # A KIND_NUMBER item's measure describes the reading
+                # itself (years, gallons); everything else carries the
+                # unit of the typed COST, if one was chosen.
+                "measure": (item["measure"] if item["kind"] == uc.KIND_NUMBER
+                            else _kept_measure(form, key, suffix,
+                                               existing.get(key), n)),
                 "est_unit_cost": est_cost,
                 "est_cost_source": est_source,
                 "note": (form.get(f"note_{key}{suffix}") or "").strip() or None,
@@ -899,6 +908,37 @@ def _kept_cost(form, key, suffix, existing_rows, n):
         return (None, costs.SOURCE_NONE)
     value = costs.clean_cost(form.get(field))
     return (value, costs.source_for(value))
+
+
+# The two states Michelle asked for: "yes, please add the toggle for 'per
+# sq ft' or 'per job'. It's worth the extra click to ensure the data is
+# accurate."
+COST_UNITS = (("each", "per job"), ("sqft", "per sq ft"))
+COST_UNIT_VALUES = {v for v, _ in COST_UNITS}
+
+
+def _kept_measure(form, key, suffix, existing_rows, n):
+    """Which unit the typed cost is in, after this save.
+
+    UNSET IS A REAL STATE AND IS NOT QUIETLY RESOLVED
+
+    She asked for an explicit choice, so an unanswered toggle must not
+    silently become "per job" -- that is the assumption the toggle exists
+    to remove. It stays None, and the export falls back to the provisional
+    magnitude heuristic exactly as it does for rows stored before this
+    existed.
+
+    Absent from the form means unchanged, the same rule _kept_cost uses
+    and for the same reason: most saves do not mention most items.
+    """
+    field = f"measure_{key}{suffix}"
+    if field not in form:
+        for row in existing_rows or ():
+            if int(row.get("instance_no") or 1) == n:
+                return row.get("measure")
+        return None
+    value = (form.get(field) or "").strip().lower()
+    return value if value in COST_UNIT_VALUES else None
 
 
 def _posted_instances(form, key, existing_rows):
