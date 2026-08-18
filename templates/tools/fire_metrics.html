@@ -2223,7 +2223,12 @@
       if (mySequence !== summaryRequestSequence) return;
       renderOverviewPayload(payload);
       if (creSelectionSource) {
-        requestCreResearch(city, { creSelectionSource });
+        const creStatus = String(payload?.cre_status || "").trim().toLowerCase();
+        if (creStatus === "success" || creStatus === "no_data" || creStatus === "failure") {
+          renderCrePayload(payload);
+        } else {
+          requestCreResearch(city, { creSelectionSource });
+        }
       }
     } catch (err) {
       if (err && err.name === "AbortError") {

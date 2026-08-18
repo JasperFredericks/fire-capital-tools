@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 import io
 import json
+import subprocess
 from pathlib import Path
 
 from flask import Flask
@@ -2185,6 +2186,195 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn(".filter((src) => src && src.url && src.publisher)", template)
         self.assertIn("const key = String(src.publisher || \"\").trim().toLowerCase();", template)
 
+    def test_frontend_cre_runtime_success_payload_and_stale_overlap_do_not_fallback_to_failure(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        start = template.find("function setCreBody(text) {")
+        end = template.find("async function requestCityOverview(city, options = {})")
+        self.assertNotEqual(start, -1)
+        self.assertNotEqual(end, -1)
+        cre_runtime_block = template[start:end]
+
+        success_payload = {
+            "cre_status": "success",
+            "cre_summary": "Major institutions are signaling improving CRE leasing activity.",
+            "research_sources": [
+                {
+                    "publisher": "CBRE",
+                    "title": "U.S. Office Figures Q1",
+                    "published_date": "2026-04-01",
+                    "url": "https://example.com/cbre-q1",
+                },
+                {
+                    "publisher": "JLL",
+                    "title": "Capital Markets Update",
+                    "published_date": "2026-04-02",
+                    "url": "https://example.com/jll-update",
+                },
+            ],
+        }
+
+        harness = f"""
+const snippet = {json.dumps(cre_runtime_block)};
+const successPayload = {json.dumps(success_payload)};
+
+class Element {{
+    constructor(tagName) {{
+        this.tagName = String(tagName || "").toUpperCase();
+        this.textContent = "";
+        this._innerHTML = "";
+        this.children = [];
+        this.style = {{ display: "" }};
+        this.hidden = false;
+        this.className = "";
+        this.href = "";
+        this.target = "";
+        this.rel = "";
+    }}
+    appendChild(child) {{
+        this.children.push(child);
+        return child;
+    }}
+    setAttribute() {{}}
+    get innerHTML() {{
+        return this._innerHTML;
+    }}
+    set innerHTML(value) {{
+        this._innerHTML = String(value || "");
+        this.children = [];
+    }}
+}}
+
+const document = {{
+    createElement(tagName) {{
+        return new Element(tagName);
+    }},
+}};
+
+const aiOverviewBody = new Element("div");
+const aiCreBody = new Element("div");
+const aiCreStatus = new Element("div");
+const aiOverviewSources = new Element("div");
+
+const CRE_UI_STATES = Object.freeze({{
+    IDLE: "idle",
+    LOADING: "loading",
+    SUCCESS: "success",
+    NO_DATA: "no_data",
+    FAILURE: "failure",
+}});
+let creUiState = CRE_UI_STATES.IDLE;
+let creRequestController = null;
+let creRequestSequence = 0;
+
+const explicitCreIntent = "explicit_city_selection";
+const citySummaryCreUrl = "/tools/fire-metrics/api/city-summary-cre";
+const csrfToken = "test-token";
+
+function getCityField(city) {{
+    return String(city?.city || "").trim();
+}}
+
+function normalizeStateToken(state) {{
+    return String(state || "").trim().toUpperCase();
+}}
+
+function getStateField(city) {{
+    return String(city?.state || "").trim();
+}}
+
+const pending = [];
+globalThis.fetch = (url, options = {{}}) => new Promise((resolve, reject) => {{
+    const entry = {{
+        url,
+        options,
+        settled: false,
+        respond(payload) {{
+            if (this.settled) return;
+            this.settled = true;
+            resolve({{ json: async () => payload }});
+        }},
+    }};
+
+    const signal = options && options.signal;
+    if (signal && typeof signal.addEventListener === "function") {{
+        signal.addEventListener("abort", () => {{
+            if (entry.settled) return;
+            entry.settled = true;
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+        }});
+    }}
+
+    pending.push(entry);
+}});
+
+eval(snippet);
+
+function snapshot() {{
+    return {{
+        creBody: aiCreBody.textContent,
+        statusHidden: aiCreStatus.hidden,
+        statusDisplay: aiCreStatus.style.display,
+        sourcesDisplay: aiOverviewSources.style.display,
+        sourcesChildren: aiOverviewSources.children.length,
+        hasFailureCopy: aiCreBody.textContent.includes("Institutional research is temporarily unavailable."),
+    }};
+}}
+
+(async () => {{
+    const city = {{ city_key: "new york|NY", city: "New York", state: "NY" }};
+
+    const requestA = requestCreResearch(city, {{ creSelectionSource: "main_city_search" }});
+    const requestB = requestCreResearch(city, {{ creSelectionSource: "main_city_search" }});
+
+    if (pending.length !== 2) {{
+        throw new Error(`Expected 2 pending requests, got ${{pending.length}}`);
+    }}
+
+    pending[1].respond(successPayload);
+    await requestB;
+
+    const afterSuccess = snapshot();
+    if (afterSuccess.creBody !== successPayload.cre_summary) {{
+        throw new Error(`Expected success summary in body, got: ${{afterSuccess.creBody}}`);
+    }}
+    if (afterSuccess.statusHidden !== true || afterSuccess.statusDisplay !== "none") {{
+        throw new Error(`Expected loading indicator hidden after success, got hidden=${{afterSuccess.statusHidden}} display=${{afterSuccess.statusDisplay}}`);
+    }}
+    if (afterSuccess.sourcesDisplay !== "block" || afterSuccess.sourcesChildren < 2) {{
+        throw new Error(`Expected rendered sources after success, got display=${{afterSuccess.sourcesDisplay}} children=${{afterSuccess.sourcesChildren}}`);
+    }}
+    if (afterSuccess.hasFailureCopy) {{
+        throw new Error("Failure copy rendered after success payload");
+    }}
+
+    pending[0].respond({{ cre_status: "failure" }});
+    await Promise.allSettled([requestA]);
+
+    const afterStaleAttempt = snapshot();
+    if (afterStaleAttempt.creBody !== successPayload.cre_summary) {{
+        throw new Error(`Stale request overwrote success summary: ${{afterStaleAttempt.creBody}}`);
+    }}
+    if (afterStaleAttempt.hasFailureCopy) {{
+        throw new Error("Stale request overwrote success with failure copy");
+    }}
+
+    console.log("CRE_RUNTIME_HARNESS_OK");
+}})().catch((err) => {{
+    console.error(err && err.stack ? err.stack : String(err));
+    process.exit(1);
+}});
+"""
+
+        result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+        if result.returncode != 0:
+            self.fail(
+                "Node runtime harness failed for CRE success payload path:\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+        self.assertIn("CRE_RUNTIME_HARNESS_OK", result.stdout)
+
     def test_frontend_city_analytics_export_controls_present(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
         self.assertIn('id="download-comparison-excel-btn"', template)
@@ -2413,6 +2603,12 @@ class FireMetricsAISummaryTests(unittest.TestCase):
             }
         )
         self.assertEqual(summary.count_sentences(combined), 3)
+
+    def test_frontend_overview_cre_terminal_status_short_circuits_second_cre_request(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn('const creStatus = String(payload?.cre_status || "").trim().toLowerCase();', template)
+        self.assertIn('if (creStatus === "success" || creStatus === "no_data" || creStatus === "failure") {', template)
+        self.assertIn("renderCrePayload(payload);", template)
 
 
 if __name__ == "__main__":
