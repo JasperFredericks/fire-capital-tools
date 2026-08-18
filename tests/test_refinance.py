@@ -162,6 +162,62 @@ class ExcessProceedsTests(unittest.TestCase):
         self.assertEqual(ev["proceeds_to_investors"], ev["excess_proceeds"])
 
 
+class TheThreeDeductionsAreDisjointTests(unittest.TestCase):
+    """refi_costs_pct no longer contains the lender's point.
+
+    It used to mean "points and closing", and a point IS origination
+    priced as a percentage of the loan. Adding refi_bank_fee_pct on top
+    therefore charged the bank's point twice -- $52,000 on Michelle's real
+    numbers, 0.33 of an IRR point.
+
+    She chose to split them: "let's go with option (b) and split them out
+    so the bank's fees are a separate line item." So the three deductions
+    are disjoint by definition now, and the definition lives in three
+    places -- the docstring, the payout order, and the form label -- which
+    have to move together.
+    """
+
+    def test_all_three_deductions_are_taken(self):
+        ev = refi()
+        for k in ("refi_costs", "bank_fee", "gp_fee"):
+            with self.subTest(k):
+                self.assertGreater(ev[k], 0.0)
+
+    def test_none_of_them_are_the_same_number(self):
+        """The collision this fixture has recreated twice already."""
+        ev = refi()
+        vals = [round(ev[k], 2) for k in ("refi_costs", "bank_fee", "gp_fee")]
+        self.assertEqual(len(vals), len(set(vals)), vals)
+
+    def test_the_excess_is_the_loan_less_all_three_and_the_payoff(self):
+        ev = refi()
+        self.assertAlmostEqual(
+            ev["excess_proceeds"],
+            ev["loan_amount"] - ev["payoff_balance"] - ev["refi_costs"]
+            - ev["bank_fee"] - ev["gp_fee"], places=6)
+
+    def test_the_source_no_longer_claims_costs_include_points(self):
+        """Three places held the old definition; all three had to move."""
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        engine = (root / "tools" / "deal_analyzer_math.py").read_text(encoding="utf-8")
+        tpl = (root / "templates" / "tools" /
+               "underwriting_detail.html").read_text(encoding="utf-8")
+        # The payout order must name third-party costs, not points.
+        self.assertIn("THIRD-PARTY ONLY", engine)
+        # The form must say so too, or she reads the old meaning off the page.
+        self.assertIn("Third-Party Costs", tpl)
+        self.assertIn("Not</strong> the lender", tpl)
+
+    def test_the_acquisition_inconsistency_is_flagged_not_hidden(self):
+        """The acquisition side still folds origination in. Different tool,
+        not changed, but recorded where someone will find it."""
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        engine = (root / "tools" / "deal_analyzer_math.py").read_text(encoding="utf-8")
+        self.assertIn("ACQUISITION SIDE", engine.upper())
+
+
 class RefusalTests(unittest.TestCase):
     def test_a_cash_in_refinance_is_refused(self):
         with self.assertRaises(m.ValidationError) as caught:

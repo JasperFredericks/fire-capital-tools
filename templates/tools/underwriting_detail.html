@@ -685,7 +685,7 @@
           ('refi_rate_pct','Refinance: Rate (%)'),
           ('refi_amort_years','Refinance: Amortization (yrs)'),
           ('refi_io_years','Refinance: Interest-Only (yrs)'),
-          ('refi_costs_pct','Refinance: Costs (% of new loan)'),
+          ('refi_costs_pct','Refinance: Third-Party Costs (% of new loan)'),
           ('refi_fee_pct','Refinance: GP Capital Transaction Fee (% of new loan)'),
           ('refi_bank_fee_pct','Refinance: Bank Loan Fee (% of new loan)'),
           ('exit_cap_pct','Exit Cap Rate (%)'), ('selling_costs_pct','Selling Costs (%)'),
@@ -701,6 +701,15 @@
               A cash-out refinance part-way through the hold. Blank means
               none. Rate and amortization fall back to the existing loan's
               own terms when left blank.
+            </span>
+          {% endif %}
+          {% if key == 'refi_costs_pct' %}
+            <span class="stat-box-sub">
+              Third-party closing costs only &mdash; title, appraisal,
+              legal, recording. <strong>Not</strong> the lender's points or
+              origination: those are the bank loan fee below. The two are
+              deliberately separate so the bank's fee is visible as its own
+              line rather than buried in a costs percentage.
             </span>
           {% endif %}
           {% if key == 'refi_fee_pct' %}

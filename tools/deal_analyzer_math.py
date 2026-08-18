@@ -190,7 +190,8 @@ def refinance(loan: float, annual_rate: float, amort_years: int,
 
         new loan
           - payoff of the old loan       (IO-aware, at refi_year * 12)
-          - refinance costs              (points and closing)
+          - refinance costs              (THIRD-PARTY ONLY: title,
+                                          appraisal, legal, recording)
           - bank loan fee                (1% of the new loan)
           - GP capital transaction fee   (1% of the new loan)
           = what reaches the investors
@@ -199,6 +200,33 @@ def refinance(loan: float, annual_rate: float, amort_years: int,
     paid at the event; it keeps accruing afterwards on whatever capital
     is still unreturned, which is the whole point of returning capital
     early.
+
+    WHAT refi_costs_pct MEANS, WHICH CHANGED
+
+    It used to mean "points and closing" -- and a point IS lender
+    origination, priced as a percentage of loan size. So when the bank's
+    loan fee was added as its own input, the bank's point was being
+    charged twice: once inside refi_costs and once as refi_bank_fee_pct.
+    On Michelle's real 1%/1%/1% that was $52,000 of double-count, worth
+    0.33 of an IRR point.
+
+    She chose to split them: "let's go with option (b) and split them out
+    so the bank's fees are a separate line item."
+
+    So refi_costs_pct is now THIRD-PARTY CLOSING COSTS ONLY -- title,
+    appraisal, legal, recording -- and carries no origination. The
+    lender's point lives in refi_bank_fee_pct where she can see it. The
+    two are disjoint by definition, and the definition is stated in three
+    places that must move together: here, the payout order above, and the
+    form label with its help text.
+
+    NOTE FOR WHOEVER TOUCHES THE ACQUISITION SIDE NEXT: it still folds
+    origination in. DEFAULT_ACQUISITION_COST_CATEGORIES carries
+    origination_fee as one of nine line items inside acquisition costs,
+    which is now the opposite convention from the refinance side. That is
+    a different tool, Michelle was not asked about it, and it has not been
+    changed -- but the inconsistency is real and is flagged rather than
+    left to be discovered.
 
     THE FEE BASE IS SETTLED, AND IT IS THE GROSS NEW LOAN
 
