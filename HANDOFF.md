@@ -1,6 +1,6 @@
 # FIRE Capital Tools — handoff
 
-**Written 2026-08-17. Master at `aa2be2d`.**
+**Written 2026-08-17, updated 2026-08-18. Master at `66b2d1e`.**
 
 This replaces an earlier handoff that had gone substantially stale. That
 document's errors cost real investigation time: it had the repo under the
@@ -298,6 +298,36 @@ produced $13,000,000 of annual debt service on a $2M loan.
 
 ---
 
+## Paresh's inspection forms exist, and the previous handoff said they did not
+
+**The correction.** An earlier handoff recorded that Paresh could not
+provide his inspection script or form, and that **no reference
+implementation had ever existed**. That is false. On 2026-08-18 he sent
+four mature production instruments, in real use before our rebuild:
+
+| file | what it is |
+|---|---|
+| `The_View_Inspection_XLSForm_v7.xlsx` | KoboToolbox unit inspection, 344 survey rows, 35 choice lists |
+| `The_View_Building_Exterior_Inspection_v5.xlsx` | exterior inspection, 672 survey rows |
+| `rent_roll.csv` | 84 units, bed/bath **pre-derived** into separate columns |
+| `property_config.csv` | 3 rows of per-property settings driving question relevance |
+
+**That entry was load-bearing: it is why Site DD was rebuilt from
+scratch.** The rebuild happened without them, and the rebuilt tool is not
+wrong -- its repeatable-items design is structurally better than the
+exterior form's 672 hardcoded rows, where a four-floor building needs a
+whole new form. But the checklist *content* in those files is mature in
+ways ours is not, and none of it informed the rebuild.
+
+Version numbers are the tell we missed: **v7 and v5**. Those are not
+drafts. Somebody iterated on them in production for a long time.
+
+Files are in the user's Downloads folder as of 2026-08-18. **Get them
+into durable storage** -- a Downloads folder is not where the only copy
+of a reference instrument should live.
+
+---
+
 ## THE STANDING RULE THIS SESSION EARNED
 
 **Check the premise against the code before scoping anything.**
@@ -310,11 +340,27 @@ several rounds, and each cost nothing once somebody actually looked:
 | Notetaker section changes cost real OpenAI spend | Production had **zero** transcripts and zero updates. Nothing cached, nothing to regenerate. The bump was free. |
 | `underwriting_scenarios` needs a `deal_id` migration | It **already had one**, in the base schema, with an index, NULL on all ten rows. |
 | A Site DD rent-roll upload needs a new parser | The existing ResMan parser already returns all 152 Oxford Pointe units correctly. It only cannot **open** `.xls`. |
+| Paresh could not provide his inspection form; no reference implementation ever existed | He sent four, on being asked. v7 and v5, in production use. **Nobody re-asked for eight months.** |
 
-None of these needed cleverness to find. Each needed one query or one
-grep. The pattern is that a plausible-sounding cost estimate hardens into
-a fact the moment it is written down, and nobody re-checks it because it
-already sounds settled.
+The first three needed one query or one grep apiece. The fourth needed an
+email. The pattern is that a plausible-sounding claim hardens into a fact
+the moment it is written down, and nobody re-checks it because it already
+sounds settled.
+
+**THE SHARPENED FORM: an unavailable resource is worth re-asking for, not
+just re-checking in the code.**
+
+The first three were premises about our own code, and a grep settles
+those. The fourth was a premise about a **person** -- what somebody could
+or would provide -- and no amount of reading the codebase could ever have
+falsified it. It stayed true-sounding for eight months and it caused a
+from-scratch rebuild.
+
+Availability is a fact about a moment, not a property of a resource.
+People find files, change jobs, change their minds, or were asked
+badly the first time. When a "cannot be obtained" is load-bearing --
+when it is the reason something is being built the hard way -- re-ask
+before committing to the expensive path.
 
 Two false premises earlier in the same session -- see below -- came from
 exactly the same mechanism, and they cost investigation time rather than
@@ -356,6 +402,24 @@ write". Production holds 4 capex lines, all `source='manual'`.
 Consequence, verified: **Site DD capex does not reach Underwriting**, so
 the rate bug never touched equity, IRR or equity multiple. It wants a
 cleanup pass, or an implementation.
+
+**The acquisition and refinance sides now disagree about origination, on
+purpose.** `refi_costs_pct` means third-party closing costs ONLY -- title,
+appraisal, legal, recording -- because Michelle chose to split the
+lender's point into its own visible line
+(`refi_bank_fee_pct`). `DEFAULT_ACQUISITION_COST_CATEGORIES` still folds
+`origination_fee` in as one of nine line items inside acquisition costs.
+
+So the same word means different things in two tools. That is recorded in
+`deal_analyzer_math.refinance()`'s docstring and pinned by a test, and it
+is deliberate: **Michelle was asked about the refinance side and was not
+asked about the acquisition side**, so changing acquisition would have
+been inventing an answer.
+
+Someone will find this and think it is a bug. It is not. It is an
+unasked question. The fix, if she wants one, is to split acquisition the
+same way -- but that is her call and it touches a tool she did not raise.
+
 
 **The route sweep cannot see a self-referential cluster.** Pages that
 link only to each other all look referenced while the group has no way
