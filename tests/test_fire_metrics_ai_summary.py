@@ -2171,10 +2171,19 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("invalidateCreRequest(\"missing_city\");", template)
         self.assertIn("creRequestSequence += 1;", template)
         self.assertIn("if (mySequence === creRequestSequence && creRequestController)", template)
-        self.assertIn("if (!creSelectionSource) {", template)
-        self.assertIn("setCreState(CRE_UI_STATES.IDLE);", template)
+        self.assertIn("function requestCityOverviewAndCre(city, options = {})", template)
         self.assertIn("function renderCrePayload(payload)", template)
         self.assertIn("const status = String(payload?.cre_status || \"\").trim().toLowerCase();", template)
+        self.assertIn("const overviewPromise = requestCityOverview(city);", template)
+        self.assertIn("? requestCreResearch(city, { creSelectionSource })", template)
+        overview_start = template.find("async function requestCityOverview(city)")
+        self.assertNotEqual(overview_start, -1)
+        render_city_start = template.find("function renderCity(city)", overview_start)
+        self.assertNotEqual(render_city_start, -1)
+        overview_block = template[overview_start:render_city_start]
+        self.assertNotIn("renderCrePayload(payload)", overview_block)
+        self.assertNotIn("requestCreResearch(city", overview_block)
+        self.assertNotIn("payload?.cre_status", overview_block)
         self.assertNotIn("setCreLoadingVisible(", template)
 
     def test_frontend_cre_success_payload_uses_cre_summary_and_sources_not_failure(self):
@@ -2189,7 +2198,7 @@ class FireMetricsAISummaryTests(unittest.TestCase):
     def test_frontend_cre_runtime_success_payload_and_stale_overlap_do_not_fallback_to_failure(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
         start = template.find("function setCreBody(text) {")
-        end = template.find("async function requestCityOverview(city, options = {})")
+        end = template.find("async function requestCityOverview(city)")
         self.assertNotEqual(start, -1)
         self.assertNotEqual(end, -1)
         cre_runtime_block = template[start:end]
@@ -2604,11 +2613,395 @@ function snapshot() {{
         )
         self.assertEqual(summary.count_sentences(combined), 3)
 
-    def test_frontend_overview_cre_terminal_status_short_circuits_second_cre_request(self):
+    def test_frontend_overview_and_cre_are_single_authority_runtime_matrix(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
-        self.assertIn('const creStatus = String(payload?.cre_status || "").trim().toLowerCase();', template)
-        self.assertIn('if (creStatus === "success" || creStatus === "no_data" || creStatus === "failure") {', template)
-        self.assertIn("renderCrePayload(payload);", template)
+        start = template.find("function setOverviewBody(text) {")
+        end = template.find("function renderCity(city) {")
+        self.assertNotEqual(start, -1)
+        self.assertNotEqual(end, -1)
+        runtime_block = template[start:end]
+
+        harness = f"""
+const snippet = {json.dumps(runtime_block)};
+
+class Element {{
+    constructor(tagName) {{
+        this.tagName = String(tagName || "div").toUpperCase();
+        this.textContent = "";
+        this._innerHTML = "";
+        this.children = [];
+        this.style = {{ display: "none" }};
+        this.hidden = false;
+        this.className = "";
+        this.href = "";
+        this.target = "";
+        this.rel = "";
+    }}
+    appendChild(child) {{
+        this.children.push(child);
+        return child;
+    }}
+    setAttribute() {{}}
+    get innerHTML() {{
+        return this._innerHTML;
+    }}
+    set innerHTML(value) {{
+        this._innerHTML = String(value || "");
+        this.children = [];
+    }}
+}}
+
+const document = {{
+    createElement(tagName) {{
+        return new Element(tagName);
+    }},
+}};
+
+const aiOverviewBody = new Element("div");
+const aiOverviewMeta = new Element("div");
+const aiCreBody = new Element("div");
+const aiCreStatus = new Element("div");
+const aiOverviewSources = new Element("div");
+
+const CRE_UI_STATES = Object.freeze({{
+    IDLE: "idle",
+    LOADING: "loading",
+    SUCCESS: "success",
+    NO_DATA: "no_data",
+    FAILURE: "failure",
+}});
+let creUiState = CRE_UI_STATES.IDLE;
+let creRequestController = null;
+let creRequestSequence = 0;
+let summaryRequestController = null;
+let summaryRequestSequence = 0;
+
+const explicitCreIntent = "explicit_city_selection";
+const citySummaryUrl = "/tools/fire-metrics/api/city-summary";
+const citySummaryCreUrl = "/tools/fire-metrics/api/city-summary-cre";
+const csrfToken = "test-token";
+
+function getCityField(city) {{
+    return String(city?.city || "").trim();
+}}
+
+function normalizeStateToken(state) {{
+    return String(state || "").trim().toUpperCase();
+}}
+
+function getStateField(city) {{
+    return String(city?.state || "").trim();
+}}
+
+const requestLog = [];
+const pending = [];
+
+globalThis.fetch = (url, options = {{}}) => new Promise((resolve, reject) => {{
+    const asString = String(url || "");
+    const kind = asString.includes("/api/city-summary-cre") ? "cre" : "overview";
+    let parsedBody = {{}};
+    try {{
+        parsedBody = JSON.parse(options?.body || "{{}}");
+    }} catch (_err) {{
+        parsedBody = {{}};
+    }}
+
+    requestLog.push({{ kind, body: parsedBody }});
+    const entry = {{
+        kind,
+        body: parsedBody,
+        settled: false,
+        respond(payload) {{
+            if (this.settled) return;
+            this.settled = true;
+            resolve({{
+                ok: true,
+                status: 200,
+                json: async () => payload,
+            }});
+        }},
+        fail(name, message) {{
+            if (this.settled) return;
+            this.settled = true;
+            const err = new Error(message || name || "failed");
+            err.name = name || "Error";
+            reject(err);
+        }},
+    }};
+
+    const signal = options?.signal;
+    if (signal && typeof signal.addEventListener === "function") {{
+        signal.addEventListener("abort", () => {{
+            if (entry.settled) return;
+            entry.settled = true;
+            const err = new Error("aborted");
+            err.name = "AbortError";
+            reject(err);
+        }});
+    }}
+
+    pending.push(entry);
+}});
+
+eval(snippet);
+
+function assert(condition, message) {{
+    if (!condition) throw new Error(message);
+}}
+
+function pendingFor(kind) {{
+    return pending.filter((entry) => !entry.settled && entry.kind === kind);
+}}
+
+function respondNext(kind, payload) {{
+    const entry = pending.find((item) => !item.settled && item.kind === kind);
+    if (!entry) throw new Error(`No pending ${{kind}} request to resolve`);
+    entry.respond(payload);
+}}
+
+function countRequests(kind) {{
+    return requestLog.filter((row) => row.kind === kind).length;
+}}
+
+function city(cityKey, cityName, stateCode) {{
+    return {{ city_key: cityKey, city: cityName, state: stateCode }};
+}}
+
+function collectText(node) {{
+    if (!node) return "";
+    let out = String(node.textContent || "");
+    for (const child of node.children || []) {{
+        out += collectText(child);
+    }}
+    return out;
+}}
+
+async function flush() {{
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+}}
+
+function resetRuntime() {{
+    if (summaryRequestController) {{
+        summaryRequestController.abort();
+        summaryRequestController = null;
+    }}
+    if (creRequestController) {{
+        creRequestController.abort();
+        creRequestController = null;
+    }}
+    summaryRequestSequence = 0;
+    creRequestSequence = 0;
+    requestLog.length = 0;
+    pending.length = 0;
+    aiOverviewBody.textContent = "";
+    aiOverviewMeta.textContent = "";
+    aiCreBody.textContent = "";
+    aiCreStatus.hidden = true;
+    aiCreStatus.style.display = "none";
+    aiOverviewSources.innerHTML = "";
+    aiOverviewSources.style.display = "none";
+    clearOverview();
+}}
+
+function beginSelection(selectedCity, source) {{
+    if (summaryRequestController) {{
+        summaryRequestController.abort();
+        summaryRequestController = null;
+    }}
+    invalidateCreRequest("selection");
+    clearOverview();
+    return requestCityOverviewAndCre(selectedCity, {{ creSelectionSource: source }});
+}}
+
+function assertCreLoading() {{
+    assert(aiCreStatus.hidden === false, "CRE loading indicator should be visible");
+    assert(aiCreStatus.style.display === "inline-flex", "CRE loading indicator display should be inline-flex");
+    assert(aiCreBody.textContent === "", "CRE body should be cleared while loading");
+}}
+
+function assertCreSuccess(expectedSummary, expectedPublisher) {{
+    assert(aiCreBody.textContent === expectedSummary, `Expected CRE summary '$${{expectedSummary}}', got '$${{aiCreBody.textContent}}'`);
+    assert(aiCreStatus.hidden === true, "CRE loading indicator should be hidden after terminal status");
+    assert(aiCreStatus.style.display === "none", "CRE loading indicator should be display:none after terminal status");
+    assert(aiOverviewSources.style.display === "block", "CRE sources should be shown on success");
+    assert((aiOverviewSources.children || []).length >= 2, "CRE sources should render label and list");
+    const sourceText = collectText(aiOverviewSources);
+    assert(sourceText.includes(expectedPublisher), `Expected source publisher '$${{expectedPublisher}}' in '$${{sourceText}}'`);
+    assert(!aiCreBody.textContent.includes("Institutional research is temporarily unavailable."), "Failure copy must not be present on success");
+}}
+
+(async () => {{
+    // 12) Page load must trigger zero CRE requests.
+    resetRuntime();
+    assert(countRequests("cre") === 0, "Page load should not trigger CRE requests");
+
+    // 11) Quick Rankings (non-explicit CRE source) triggers overview only.
+    resetRuntime();
+    const rankingRun = requestCityOverviewAndCre(city("ranked|TX", "Ranked", "TX"), {{ creSelectionSource: "" }});
+    assert(pendingFor("overview").length === 1, "Ranking flow should issue one overview request");
+    assert(pendingFor("cre").length === 0, "Ranking flow should issue zero CRE requests");
+    respondNext("overview", {{ status: "ready", summary: "Ranking overview", cre_status: "failure" }});
+    await Promise.allSettled([rankingRun.overviewPromise, rankingRun.crePromise]);
+    assert(countRequests("cre") === 0, "Ranking flow should keep CRE request count at zero");
+
+    // 1/2/3/4/5) Overview stale CRE metadata must be ignored while canonical CRE controls state.
+    for (const staleStatus of ["success", "failure", "no_data"]) {{
+        resetRuntime();
+        const selection = beginSelection(city(`stale-${{staleStatus}}|NY`, "New York", "NY"), "main_city_search");
+        assert(pendingFor("overview").length === 1, `Expected one overview request for staleStatus=$${{staleStatus}}`);
+        assert(pendingFor("cre").length === 1, `Expected one CRE request for staleStatus=$${{staleStatus}}`);
+        assertCreLoading();
+
+        respondNext("overview", {{
+            status: "ready",
+            summary: "Normal deterministic overview",
+            cre_status: staleStatus,
+            cre_summary: "STALE_OVERVIEW_CRE",
+            research_sources: [{{ publisher: "Stale Source", title: "", published_date: "", url: "https://stale.example" }}],
+        }});
+        await flush();
+
+        assert(aiOverviewBody.textContent === "Normal deterministic overview", "Overview text should render independently");
+        assertCreLoading();
+
+        const canonicalSummary = `Valid institutional research for ${{staleStatus}}.`;
+        respondNext("cre", {{
+            status: "ready",
+            cre_status: "success",
+            cre_summary: canonicalSummary,
+            research_sources: [{{ publisher: "CBRE", title: "", published_date: "", url: "https://www.cbre.com/example" }}],
+        }});
+
+        await Promise.allSettled([selection.overviewPromise, selection.crePromise]);
+        assertCreSuccess(canonicalSummary, "CBRE");
+        assert(countRequests("cre") === 1, "One explicit selection should issue exactly one CRE request");
+    }}
+
+    // 6) Canonical cached success still renders success UI.
+    resetRuntime();
+    const cachedSelection = beginSelection(city("cached|IL", "Chicago", "IL"), "main_city_search");
+    respondNext("overview", {{ status: "ready", summary: "Overview for cached success", cre_status: "failure" }});
+    respondNext("cre", {{
+        status: "ready",
+        cre_status: "success",
+        cre_summary: "Cached institutional research.",
+        cached: true,
+        research_sources: [{{ publisher: "JLL", title: "", published_date: "", url: "https://www.jll.com/example" }}],
+    }});
+    await Promise.allSettled([cachedSelection.overviewPromise, cachedSelection.crePromise]);
+    assertCreSuccess("Cached institutional research.", "JLL");
+
+    // 7) Canonical CRE no_data controls terminal no-data UI.
+    resetRuntime();
+    const noDataSelection = beginSelection(city("nodata|AZ", "Phoenix", "AZ"), "city_analytics");
+    respondNext("overview", {{ status: "ready", summary: "Overview no-data", cre_status: "success" }});
+    respondNext("cre", {{ status: "ready", cre_status: "no_data", cre_summary: "", research_sources: [] }});
+    await Promise.allSettled([noDataSelection.overviewPromise, noDataSelection.crePromise]);
+    assert(aiCreBody.textContent === "No relevant research from approved sources.", "CRE no_data should render no-data copy");
+    assert(aiOverviewSources.style.display === "none", "CRE no_data should hide sources");
+    assert(aiCreStatus.style.display === "none", "CRE no_data should hide spinner");
+
+    // 8) Canonical CRE failure/backoff controls terminal failure UI.
+    resetRuntime();
+    const failureSelection = beginSelection(city("failure|CA", "Los Angeles", "CA"), "city_analytics");
+    respondNext("overview", {{ status: "ready", summary: "Overview failure", cre_status: "success" }});
+    respondNext("cre", {{ status: "ready", cre_status: "failure", cre_summary: "", research_sources: [] }});
+    await Promise.allSettled([failureSelection.overviewPromise, failureSelection.crePromise]);
+    assert(aiCreBody.textContent === "Institutional research is temporarily unavailable.", "CRE failure should render failure copy");
+    assert(aiOverviewSources.style.display === "none", "CRE failure should hide sources");
+    assert(aiCreStatus.style.display === "none", "CRE failure should hide spinner");
+
+    // 9) One explicit city selection -> exactly one CRE endpoint request.
+    resetRuntime();
+    const oneSelection = beginSelection(city("one|FL", "Miami", "FL"), "main_city_search");
+    assert(pendingFor("cre").length === 1, "Expected one pending CRE request for one explicit selection");
+    respondNext("overview", {{ status: "ready", summary: "One selection overview" }});
+    respondNext("cre", {{
+        status: "ready",
+        cre_status: "success",
+        cre_summary: "One selection CRE",
+        research_sources: [{{ publisher: "CBRE", title: "", published_date: "", url: "https://www.cbre.com/example" }}],
+    }});
+    await Promise.allSettled([oneSelection.overviewPromise, oneSelection.crePromise]);
+    assert(countRequests("cre") === 1, "Exactly one CRE request should be issued for one explicit selection");
+
+    // 10) City A cannot overwrite City B.
+    resetRuntime();
+    const cityASelection = beginSelection(city("city-a|TX", "Austin", "TX"), "main_city_search");
+    const cityBSelection = beginSelection(city("city-b|WA", "Seattle", "WA"), "main_city_search");
+    respondNext("overview", {{ status: "ready", summary: "Overview B" }});
+    respondNext("cre", {{
+        status: "ready",
+        cre_status: "success",
+        cre_summary: "Research for Seattle only.",
+        research_sources: [{{ publisher: "CBRE", title: "", published_date: "", url: "https://www.cbre.com/example" }}],
+    }});
+    await Promise.allSettled([
+        cityASelection.overviewPromise,
+        cityASelection.crePromise,
+        cityBSelection.overviewPromise,
+        cityBSelection.crePromise,
+    ]);
+    assert(aiOverviewBody.textContent === "Overview B", "Final overview should be City B");
+    assert(aiCreBody.textContent === "Research for Seattle only.", "Final CRE should be City B");
+    assert(!aiCreBody.textContent.includes("temporarily unavailable"), "City A must not overwrite City B CRE output");
+
+    // 13) Multi-search auto-selection -> only active auto-selected city gets one CRE request.
+    resetRuntime();
+    const multiAutoSelection = beginSelection(city("auto|CO", "Denver", "CO"), "multi_city_search_auto");
+    assert(countRequests("cre") === 1, "Multi-search auto-selection should issue one CRE request for active city");
+    respondNext("overview", {{ status: "ready", summary: "Auto overview" }});
+    respondNext("cre", {{
+        status: "ready",
+        cre_status: "success",
+        cre_summary: "Auto-selected CRE",
+        research_sources: [{{ publisher: "CBRE", title: "", published_date: "", url: "https://www.cbre.com/example" }}],
+    }});
+    await Promise.allSettled([multiAutoSelection.overviewPromise, multiAutoSelection.crePromise]);
+
+    // 14) Clicking another analytics city -> one CRE request for each selected city.
+    resetRuntime();
+    const analyticsA = beginSelection(city("analytics-a|GA", "Atlanta", "GA"), "city_analytics");
+    respondNext("overview", {{ status: "ready", summary: "Analytics A" }});
+    respondNext("cre", {{
+        status: "ready",
+        cre_status: "success",
+        cre_summary: "Analytics A CRE",
+        research_sources: [{{ publisher: "CBRE", title: "", published_date: "", url: "https://www.cbre.com/example" }}],
+    }});
+    await Promise.allSettled([analyticsA.overviewPromise, analyticsA.crePromise]);
+
+    const analyticsB = beginSelection(city("analytics-b|NC", "Charlotte", "NC"), "city_analytics");
+    respondNext("overview", {{ status: "ready", summary: "Analytics B" }});
+    respondNext("cre", {{
+        status: "ready",
+        cre_status: "success",
+        cre_summary: "Analytics B CRE",
+        research_sources: [{{ publisher: "CBRE", title: "", published_date: "", url: "https://www.cbre.com/example" }}],
+    }});
+    await Promise.allSettled([analyticsB.overviewPromise, analyticsB.crePromise]);
+
+    const analyticsCreRequests = requestLog.filter((row) => row.kind === "cre" && row.body && row.body.cre_selection_source === "city_analytics");
+    assert(analyticsCreRequests.length === 2, "Analytics city clicks should issue one CRE request per selected city");
+    const analyticsCityKeys = analyticsCreRequests.map((row) => String(row.body.city_key || ""));
+    assert(analyticsCityKeys.includes("analytics-a|GA"), "Expected CRE request for analytics city A");
+    assert(analyticsCityKeys.includes("analytics-b|NC"), "Expected CRE request for analytics city B");
+
+    console.log("CRE_SINGLE_AUTHORITY_RUNTIME_MATRIX_OK");
+}})().catch((err) => {{
+    console.error(err && err.stack ? err.stack : String(err));
+    process.exit(1);
+}});
+"""
+
+        result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+        if result.returncode != 0:
+            self.fail(
+                "Node runtime harness failed for CRE single-authority matrix:\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+        self.assertIn("CRE_SINGLE_AUTHORITY_RUNTIME_MATRIX_OK", result.stdout)
 
 
 if __name__ == "__main__":

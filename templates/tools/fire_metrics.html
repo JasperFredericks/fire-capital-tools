@@ -971,7 +971,7 @@
 
     if (options.requestOverview !== false) {
       clearOverviewImmediate();
-      requestCityOverview(currentCity, {
+      requestCityOverviewAndCre(currentCity, {
         creSelectionSource: String(options.creSelectionSource || ""),
       });
     }
@@ -2131,6 +2131,15 @@
     setCreState(CRE_UI_STATES.IDLE);
   }
 
+  function requestCityOverviewAndCre(city, options = {}) {
+    const creSelectionSource = String(options.creSelectionSource || "").trim();
+    const overviewPromise = requestCityOverview(city);
+    const crePromise = creSelectionSource
+      ? requestCreResearch(city, { creSelectionSource })
+      : Promise.resolve();
+    return { overviewPromise, crePromise };
+  }
+
   async function requestCreResearch(city, options = {}) {
     if (!city) {
       invalidateCreRequest("missing_city");
@@ -2181,7 +2190,7 @@
     }
   }
 
-  async function requestCityOverview(city, options = {}) {
+  async function requestCityOverview(city) {
     if (!city) {
       clearOverview();
       return;
@@ -2194,10 +2203,6 @@
     summaryRequestController = new AbortController();
     summaryRequestSequence += 1;
     const mySequence = summaryRequestSequence;
-    const creSelectionSource = String(options.creSelectionSource || "").trim();
-    if (!creSelectionSource) {
-      setCreState(CRE_UI_STATES.IDLE);
-    }
 
     setOverviewLoading();
 
@@ -2222,14 +2227,6 @@
       const payload = await res.json();
       if (mySequence !== summaryRequestSequence) return;
       renderOverviewPayload(payload);
-      if (creSelectionSource) {
-        const creStatus = String(payload?.cre_status || "").trim().toLowerCase();
-        if (creStatus === "success" || creStatus === "no_data" || creStatus === "failure") {
-          renderCrePayload(payload);
-        } else {
-          requestCreResearch(city, { creSelectionSource });
-        }
-      }
     } catch (err) {
       if (err && err.name === "AbortError") {
         return;
@@ -2245,7 +2242,7 @@
     renderActiveCityMeta(currentCity);
 
     syncComparisonAddButton();
-    requestCityOverview(currentCity, { creSelectionSource: "" });
+    requestCityOverview(currentCity);
     renderMapPoints();
   }
 
@@ -2641,7 +2638,7 @@
     const refreshJustCompleted = previousRunning && !nextRunning;
     const refreshBecameNewer = Boolean(nextRefreshAt) && nextRefreshAt !== previousRefreshAt;
     if (refreshJustCompleted && refreshBecameNewer && currentCity) {
-      requestCityOverview(currentCity, { creSelectionSource: "" });
+      requestCityOverview(currentCity);
     }
   }
 
