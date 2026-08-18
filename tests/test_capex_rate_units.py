@@ -354,13 +354,25 @@ class TheManualPathIsClosedTooTests(unittest.TestCase):
                 self.assertFalse(l["is_rate"])
                 self.assertEqual(l["total"], entry.unit_cost)
 
-    def test_a_freeform_job_price_still_totals(self):
-        """The common, legitimate case must not regress."""
-        self.assertEqual(self.line("replace_gate", 800.0)["total"], 800.0)
+    def test_a_freeform_job_price_totals_once_it_is_declared(self):
+        """The common, legitimate case. It now needs one click to say so.
+
+        It used to total on magnitude alone -- $800 reads like a job
+        price, so it was treated as one. That inference is what the
+        toggle replaced, so the declaration is what totals it now.
+        """
+        self.assertEqual(
+            self.line("replace_gate", 800.0, measure="each")["total"], 800.0)
+
+    def test_and_is_not_totalled_while_undeclared(self):
+        self.assertIsNone(self.line("replace_gate", 800.0)["total"])
 
     def test_a_freeform_rate_is_refused_a_total(self):
+        """Undeclared: no unit, no quantity, no total, in either
+        direction. The magnitude no longer classifies it."""
         l = self.line("replace_gate", 5.75)
-        self.assertTrue(l["is_rate"])
+        self.assertIsNone(l["unit"])
+        self.assertFalse(l["is_rate"])
         self.assertIsNone(l["total"])
 
     def test_the_threshold_sits_above_every_researched_rate(self):
@@ -386,13 +398,55 @@ class TheManualPathIsClosedTooTests(unittest.TestCase):
         self.assertTrue(l["is_rate"])
         self.assertIsNone(l["total"])
 
-    def test_the_threshold_is_only_the_fallback_now(self):
-        """Consulted when the toggle was not answered -- rows stored before
-        it existed, and saves where nobody chose."""
+    def test_an_unspecified_unit_is_never_totalled(self):
+        """The whole point of the rework.
+
+        A hand-typed cost on a freeform item with the toggle unanswered
+        used to be classified by magnitude and then totalled on that
+        basis. Now it is not totalled at all, in either direction.
+        """
+        for cost in (5.75, 800.0):
+            with self.subTest(cost=cost):
+                l = self.line("replace_gate", cost)
+                self.assertIsNone(l["unit"])
+                self.assertIsNone(l["quantity"])
+                self.assertIsNone(l["total"])
+
+    def test_it_says_the_unit_is_what_is_missing(self):
+        reason = self.line("replace_gate", 800.0)["reason"]
+        self.assertIn("unit not specified", reason.lower())
+        self.assertIn("not included in the total", reason.lower())
+
+    def test_the_magnitude_survives_only_as_a_hint(self):
+        """It tells the inspector which answer is likely. It decides
+        nothing."""
+        self.assertIn("looks like a rate",
+                      self.line("replace_gate", 5.75)["reason"])
+        self.assertIn("looks like a job price",
+                      self.line("replace_gate", 800.0)["reason"])
+
+    def test_the_hint_never_becomes_a_total(self):
+        """Both hints, both unpriced. The hint has no arithmetic power."""
+        for cost in (5.75, 800.0):
+            with self.subTest(cost=cost):
+                self.assertIsNone(self.line("replace_gate", cost)["total"])
+
+    def test_an_unspecified_line_lands_in_the_unpriced_bucket(self):
+        s = capex.summarize(capex.build_lines(
+            [{"id": 1, "item_key": "replace_gate", "area_id": 1, "room_id": 1,
+              "scope": "room", "condition": "repair", "est_unit_cost": 800.0,
+              "est_cost_source": "manual", "quantity": None, "measure": None,
+              "instance_label": ""}], LABELS))
+        self.assertIsNone(s["total"])
+        self.assertEqual(s["unpriced_count"], 1)
+        self.assertEqual(s["priced_count"], 0)
+
+    def test_the_threshold_decides_no_total_at_all_now(self):
+        """It survives as wording in a reason, nothing more."""
         unanswered = self.line("replace_gate", 5.75)
-        self.assertTrue(unanswered["is_rate"], "falls back to magnitude")
+        self.assertIsNone(unanswered["total"])
         answered = self.line("replace_gate", 5.75, measure="each")
-        self.assertFalse(answered["is_rate"], "the answer wins")
+        self.assertEqual(answered["total"], 5.75, "the answer wins")
 
     def test_the_threshold_is_labelled_provisional(self):
         """It is a reasoned guess about an uncurated category.
@@ -405,7 +459,7 @@ class TheManualPathIsClosedTooTests(unittest.TestCase):
         src = (ROOT / "tools" / "site_dd_reference_costs.py").read_text(
             encoding="utf-8")
         self.assertIn("PROVISIONAL", src)
-        self.assertIn("FALLBACK ONLY", src)
+        self.assertIn("NOT A DECISION", src)
         self.assertIn("not a derived constant", src.lower().replace(
             "NOT A DERIVED CONSTANT", "not a derived constant"))
 

@@ -104,7 +104,22 @@ def is_rate(unit: str | None) -> bool:
 # Set just above the observed rate ceiling rather than midway, so it
 # refuses as little as possible.
 #
-# FALLBACK ONLY, AS OF THE PER-JOB / PER-SQ-FT TOGGLE.
+# A HINT NOW, NOT A DECISION. IT NO LONGER DECIDES ANY TOTAL.
+#
+# This number used to classify a hand-typed cost on a freeform item:
+# under it a rate, over it a job price, and the line was totalled on that
+# basis. That is the guess the per-job / per-sq-ft toggle replaced.
+#
+# Its sole remaining caller is the unpriced REASON on such a line -- "it
+# looks like a rate" / "it looks like a job price" -- which tells the
+# inspector which answer is likely without letting the likelihood become
+# a number. No total anywhere depends on it.
+#
+# It was checked against production before being demoted: there are ZERO
+# findings with any stored cost at all, so nothing recorded was relying
+# on the old behaviour and nothing changed value.
+#
+# WAS: FALLBACK ONLY, AS OF THE PER-JOB / PER-SQ-FT TOGGLE.
 #
 # Michelle approved the explicit choice -- "yes, please add the toggle for
 # 'per sq ft' or 'per job'. It's worth the extra click to ensure the data

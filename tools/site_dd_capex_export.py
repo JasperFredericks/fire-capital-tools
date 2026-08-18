@@ -143,27 +143,51 @@ def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = 
             measure = (f.get("measure") or "").strip().lower()
             if measure in refcosts.UNITS:
                 unit = measure
-            elif refcosts.looks_like_a_rate(described["cost"]):
-                # A FREEFORM item: nothing in the table describes it, so
-                # there is no unit to inherit. It cannot be assumed to be
-                # an each item merely because it is unknown -- that is the
-                # same assumption, one step further out. A figure below
-                # the rate ceiling is treated as a rate and refused a
-                # total rather than multiplied by a headcount.
-                unit = refcosts.UNIT_SQFT
             else:
-                unit = refcosts.UNIT_EACH
+                # A FREEFORM item with a hand-typed cost and no answer to
+                # the per-job / per-sq-ft toggle.
+                #
+                # Nothing in the table describes the item, so there is no
+                # unit to inherit, and the toggle -- which exists to ask
+                # exactly this -- was left blank. The honest answer is
+                # that we do not know what the number means, so the line
+                # is not totalled at all.
+                #
+                # It used to be classified by magnitude: under $15 it was
+                # called a rate, over $15 a job price. That guess is what
+                # the toggle replaces. Guessing and then silently
+                # totalling is the failure this whole line of work exists
+                # to remove -- a $5.75 that means "per sq ft" became a
+                # $5.75 repaint budget for a whole kitchen.
+                unit = None
 
         instances = float(len(group["rows"]))
         measured = [costs.clean_cost(r.get("quantity")) for r in group["rows"]]
         measured = [m for m in measured if m is not None]
         if refcosts.is_rate(unit):
             quantity = sum(measured) if measured else None
+        elif unit is None and described["cost"] is not None:
+            # A cost in unstated units. There is no quantity that means
+            # anything here: multiplying by the instance count would
+            # assume "per job", which is the assumption the toggle exists
+            # to stop being made silently.
+            quantity = None
         else:
             quantity = instances
 
         needs = ""
-        if refcosts.is_rate(unit) and quantity is None:
+        if described["cost"] is not None and unit is None:
+            # Priced by a person, in units nobody stated. The magnitude
+            # hint is a HINT: it tells the inspector which answer is
+            # likely without letting that likelihood become a total.
+            hint = ("It looks like a rate" if refcosts.looks_like_a_rate(described["cost"])
+                    else "It looks like a job price")
+            needs = (f"Cost entered, unit not specified. ${described['cost']:,.2f} "
+                     f"could be a price for the whole job or a rate per square "
+                     f"foot, and those differ by orders of magnitude. {hint}, "
+                     f"but say so on the finding rather than leaving it to be "
+                     f"guessed. Not included in the total until then.")
+        elif refcosts.is_rate(unit) and quantity is None:
             # A whole sentence, because this lands in a "Why no estimate"
             # cell that has to be readable on its own: it must say what
             # the figure is, that it is a rate, and what to go and
