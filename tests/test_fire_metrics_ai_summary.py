@@ -2176,6 +2176,15 @@ class FireMetricsAISummaryTests(unittest.TestCase):
         self.assertIn("const status = String(payload?.cre_status || \"\").trim().toLowerCase();", template)
         self.assertNotIn("setCreLoadingVisible(", template)
 
+    def test_frontend_cre_success_payload_uses_cre_summary_and_sources_not_failure(self):
+        template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
+        self.assertIn('if (status === "success") {', template)
+        self.assertIn("setCreState(CRE_UI_STATES.SUCCESS, payload || {});", template)
+        self.assertIn("const summaryText = String(payload.cre_summary || \"\").trim();", template)
+        self.assertIn("renderCreSources(payload.research_sources || []);", template)
+        self.assertIn(".filter((src) => src && src.url && src.publisher)", template)
+        self.assertIn("const key = String(src.publisher || \"\").trim().toLowerCase();", template)
+
     def test_frontend_city_analytics_export_controls_present(self):
         template = Path("templates/tools/fire_metrics.html").read_text(encoding="utf-8")
         self.assertIn('id="download-comparison-excel-btn"', template)
