@@ -372,6 +372,26 @@ FLOORING_SOURCES = ("HomeGuide", "RealCostIQ", "CostToRenovate", "ProjectCostPro
 # absent.
 
 UNPRICED: dict[str, str] = {
+    # ── Added with the v7 checklist items ────────────────────────────────
+    #
+    # No figure is invented for any of these. Each is a real repair with a
+    # real cost; none has a published national average that would survive
+    # being quoted back to a contractor.
+    "mold": (
+        "Remediation is priced from the affected area and the source of "
+        "the moisture, and a suspected finding needs testing before any "
+        "scope exists. Published figures span $500 to $30,000 for the "
+        "same words, so none of them is usable as a default."),
+    "thermostat": (
+        "A swap for a like-for-like unit and a smart-thermostat upgrade "
+        "differ by an order of magnitude, and which one applies is a "
+        "decision about the property rather than an observation about "
+        "the thermostat. Enter the figure for the unit actually chosen."),
+    "fire_extinguisher": (
+        "An out-of-date tag needs a service visit; a missing extinguisher "
+        "needs a unit and a bracket. The two are priced differently and "
+        "the checklist deliberately records which applies, so pricing "
+        "them with one figure would discard that."),
     # Electrical — GFCI is priced, plain devices are not
     "outlets_switches": (
         "No consistent published figure for replacing a standard outlet or "
@@ -485,6 +505,12 @@ UNPRICED: dict[str, str] = {
 # them sitting on the "needs pricing" list forever.
 
 NOT_A_COST_ITEM: dict[str, str] = {
+    # Which species, not what to do about it. The work and its cost hang
+    # off pest_evidence; this records what was found so the treatment can
+    # be specified. Pricing it would double-count the same job.
+    "pest_type": (
+        "Identifies the pest rather than the work. The remediation cost "
+        "belongs to pest_evidence."),
     "flooring_type": "Records what the floor is, not work on it.",
     "water_heater_gal": "A capacity measurement.",
     "water_heater_age": "An age measurement.",

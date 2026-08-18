@@ -124,6 +124,19 @@ CATEGORIES_BY_ITEM: dict[str, str] = {
     # here because it secures the dwelling, and that is what a failing one
     # costs money to put right.
     "entry_door": "life_safety",
+    # Added from the v7 form.
+    #
+    # Mold and pests are environmental findings, not interior finishes.
+    # Remediating either is a specialist scope with its own contractor,
+    # and burying them under "Interior & Units" would put them in the same
+    # budget line as repainting a bedroom.
+    "mold": "access_environmental",
+    "pest_evidence": "access_environmental",
+    "pest_type": "access_environmental",
+    # A thermostat is the control end of the HVAC. (gfci already had a
+    # category; it already existed as a kitchen and bathroom item.)
+    "thermostat": "mep",
+    "fire_extinguisher": "life_safety",
 }
 
 
@@ -210,9 +223,78 @@ EQUIPMENT_STATES = (
 )
 
 
+# ── States taken from Paresh's v7 form ───────────────────────────────────
+#
+# His forms turned up after the Site DD rebuild, having been in
+# production use throughout it. The CONTENT is what is valuable: items a
+# mature instrument asks about that ours never did.
+#
+# The shape is ours, not his. Where a thing wears, it takes our five-state
+# condition scale so the rollup and completion percentage still work.
+# Where a thing is present or not, it is a choice -- the distinction this
+# file already draws for alarms, and the reason it draws it is unchanged:
+# "missing" is not a position on a wear scale.
+
+# Mold gets three values, not yes/no. An inspector who is unsure needs
+# somewhere to put that, and "Suspected" is the state that actually
+# triggers a specialist rather than a work order.
+MOLD_STATES = (
+    ("none", "None seen"),
+    ("suspected", "Suspected"),
+    ("present", "Present"),
+)
+
+# Evidence first, species second. Droppings and live pests are different
+# urgencies, and damage without either is a different finding again.
+PEST_EVIDENCE = (
+    ("none", "None seen"),
+    ("droppings", "Droppings"),
+    ("live", "Live pests"),
+    ("damage", "Damage"),
+)
+
+PEST_TYPE = (
+    ("rodents", "Rodents"),
+    ("roaches", "Roaches"),
+    ("bed_bugs", "Bed bugs"),
+    ("other", "Other / unsure"),
+)
+
+# Whether the extinguisher's inspection is CURRENT, which is a compliance
+# fact with a date behind it, not a judgement about the extinguisher.
+EXTINGUISHER_STATES = (
+    ("current", "Inspected, in date"),
+    ("expired", "Inspection out of date"),
+    ("missing", "Missing"),
+)
+
+# NOTE ON GFCI, WHICH IS ALREADY HERE
+#
+# It was on the "missing from our checklist" list and it should not have
+# been: gfci already exists as a kitchen and bathroom item, scoped to the
+# wet areas where the protection is actually required. Paresh's form asks
+# it once per unit; per wet room is the better question and we already
+# ask it.
+#
+# There IS a real difference, and it is a `detail` question rather than a
+# new item: ours records presence (present / hookup only / not there),
+# his records whether it TRIPS (Working / Not Working / Missing). An
+# outlet that is present and does not trip is the dangerous case and
+# neither set catches it alone. Carried into the detail proposal.
+
+
 # ── Items in every room ──────────────────────────────────────────────────
 
 EVERY_ROOM = (
+    # Added from the v7 form. Per room, because mold and pests are found
+    # in a place, and "which room" is the first thing anyone asks.
+    _item("mold", "Mold", KIND_CHOICE, MOLD_STATES, with_condition=False,
+          hint="Suspected is a real answer. It triggers a specialist, not a work order."),
+    _item("pest_evidence", "Pest evidence", KIND_CHOICE, PEST_EVIDENCE,
+          with_condition=False),
+    _item("pest_type", "Pest type", KIND_CHOICE, PEST_TYPE,
+          with_condition=False,
+          hint="Only if there is evidence above."),
     _item("flooring_type", "Flooring type", KIND_CHOICE, FLOORING_TYPES,
           hint="What it is — separate from what condition it is in.",
           with_condition=False),
@@ -307,6 +389,13 @@ UNIT_WIDE = (
     _item("hvac", "HVAC", KIND_CHOICE, EQUIPMENT_STATES),
     _item("hvac_age", "HVAC age", KIND_NUMBER, measure="yr"),
     _item("entry_door", "Entry door & lock"),
+    # Added from the v7 form.
+    # A thermostat wears and gets replaced, so it takes the condition
+    # scale rather than a presence set.
+    _item("thermostat", "Thermostat"),
+    _item("fire_extinguisher", "Fire extinguisher", KIND_CHOICE,
+          EXTINGUISHER_STATES, with_condition=False,
+          hint="Check the inspection tag date, not the gauge."),
 )
 
 
