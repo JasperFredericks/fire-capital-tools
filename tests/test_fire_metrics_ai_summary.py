@@ -2,6 +2,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 import io
 import json
@@ -253,6 +254,58 @@ class FireMetricsAISummaryTests(unittest.TestCase):
             response = result
             status_code = response.status_code
         return status_code, response
+
+    def _upsert_cre_cache_row(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        city: str,
+        state: str,
+        model_name: str,
+        result_type: str,
+        cre_generated_at: str,
+        cre_sentences_text: str,
+        research_sources: list[dict],
+        cre_failure_category: str | None = None,
+        cre_failure_code: str | None = None,
+        cre_failure_param: str | None = None,
+    ) -> None:
+        selected = db_module.fetch_city_by_identity(conn, city, state)
+        assert selected is not None, f"Missing seeded city {city}, {state}"
+        all_cities = db_module.fetch_all_included_cities(conn)
+        benchmarks = summary.compute_benchmarks(selected, all_cities)
+        fingerprint = summary.build_fingerprint(
+            summary.fingerprint_payload(
+                selected_city=selected,
+                benchmarks=benchmarks,
+                model_name=model_name,
+                refresh_last_at=None,
+            )
+        )
+        db_module.upsert_city_summary_cache(
+            conn,
+            {
+                "city": selected["city"],
+                "state": selected["state"],
+                "city_key": summary.city_key(selected),
+                "data_fingerprint": fingerprint,
+                "model_name": model_name,
+                "prompt_version": summary.PROMPT_VERSION,
+                "summary_text": "Cached strength sentence. Cached weakness sentence. Cached comparison sentence.",
+                "strength_sentence": "Cached strength sentence.",
+                "weakness_sentence": "Cached weakness sentence.",
+                "comparison_sentence": "Cached comparison sentence.",
+                "generated_at": summary.utc_now_iso(),
+                "cre_sentences_text": cre_sentences_text,
+                "research_sources_json": json.dumps(research_sources),
+                "cre_generated_at": cre_generated_at,
+                "cre_research_version": summary.CRE_RESEARCH_VERSION,
+                "cre_result_type": result_type,
+                "cre_failure_category": cre_failure_category,
+                "cre_failure_code": cre_failure_code,
+                "cre_failure_param": cre_failure_param,
+            },
+        )
 
     def _seed_top_cities_fixture(self, conn: sqlite3.Connection) -> None:
         rows = [
@@ -1627,6 +1680,552 @@ class FireMetricsAISummaryTests(unittest.TestCase):
                 self.assertEqual(payload.get("cre_failure_code"), "invalid_request_error")
                 self.assertEqual(payload.get("cre_failure_param"), "tools[0].filters.allowed_domains[0]")
                 self.assertNotEqual(payload.get("cre_summary"), "No relevant research from approved sources.")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_city_summary_cre_failure_backoff_less_than_30_minutes_skips_openai_call(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=True,
+            FIRE_METRICS_SUMMARY_MODEL="model-a",
+            OPENAI_API_KEY="test-key",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cre-failure-backoff-fresh-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+                    fresh_failure_ts = (
+                        datetime.now(timezone.utc)
+                        - timedelta(days=summary.CRE_RESEARCH_TTL_DAYS)
+                        + timedelta(minutes=max(1, summary.CRE_FAILURE_BACKOFF_MINUTES - 1))
+                    ).isoformat()
+                    self._upsert_cre_cache_row(
+                        conn,
+                        city="Alpha",
+                        state="AA",
+                        model_name="model-a",
+                        result_type="failure",
+                        cre_generated_at=fresh_failure_ts,
+                        cre_sentences_text="",
+                        research_sources=[],
+                        cre_failure_category="network_error",
+                        cre_failure_code="api_status_500",
+                        cre_failure_param=None,
+                    )
+
+                with patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    side_effect=AssertionError("Failure backoff should suppress OpenAI CRE call"),
+                ):
+                    status_code, payload = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload.get("cre_status"), "failure")
+                self.assertEqual(payload.get("cre_failure_category"), "network_error")
+                self.assertEqual(payload.get("cre_failure_code"), "api_status_500")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_city_summary_cre_failure_backoff_older_than_30_minutes_allows_retry(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=True,
+            FIRE_METRICS_SUMMARY_MODEL="model-a",
+            OPENAI_API_KEY="test-key",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        mock_cre = {
+            "cre_sentences": "Fresh retry succeeded.",
+            "research_sources": [{
+                "publisher": "CBRE",
+                "title": "Retry Report",
+                "published_date": "",
+                "url": "https://example.com/retry",
+            }],
+            "cre_generated_at": summary.utc_now_iso(),
+            "cre_research_version": summary.CRE_RESEARCH_VERSION,
+            "result_type": "success",
+        }
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cre-failure-backoff-stale-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+                    stale_failure_ts = (
+                        datetime.now(timezone.utc)
+                        - timedelta(days=summary.CRE_RESEARCH_TTL_DAYS)
+                        - timedelta(minutes=1)
+                    ).isoformat()
+                    self._upsert_cre_cache_row(
+                        conn,
+                        city="Alpha",
+                        state="AA",
+                        model_name="model-a",
+                        result_type="failure",
+                        cre_generated_at=stale_failure_ts,
+                        cre_sentences_text="",
+                        research_sources=[],
+                        cre_failure_category="network_error",
+                    )
+
+                with patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    return_value=mock_cre,
+                ) as cre_mock:
+                    status_code, payload = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload.get("cre_status"), "success")
+                self.assertIn("Fresh retry succeeded.", payload.get("cre_summary", ""))
+                cre_mock.assert_called_once()
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_city_summary_cre_no_data_backoff_window_and_retry_boundary(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=True,
+            FIRE_METRICS_SUMMARY_MODEL="model-a",
+            OPENAI_API_KEY="test-key",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        mock_cre = {
+            "cre_sentences": "Fresh no-data retry succeeded.",
+            "research_sources": [{
+                "publisher": "CBRE",
+                "title": "Update",
+                "published_date": "",
+                "url": "https://example.com/no-data-retry",
+            }],
+            "cre_generated_at": summary.utc_now_iso(),
+            "cre_research_version": summary.CRE_RESEARCH_VERSION,
+            "result_type": "success",
+        }
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cre-no-data-window-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+                    fresh_no_data_ts = (
+                        datetime.now(timezone.utc)
+                        - timedelta(days=summary.CRE_RESEARCH_TTL_DAYS)
+                        + timedelta(hours=max(1, summary.CRE_NEGATIVE_CACHE_TTL_HOURS - 1))
+                    ).isoformat()
+                    self._upsert_cre_cache_row(
+                        conn,
+                        city="Alpha",
+                        state="AA",
+                        model_name="model-a",
+                        result_type="no_data",
+                        cre_generated_at=fresh_no_data_ts,
+                        cre_sentences_text="No relevant research from approved sources.",
+                        research_sources=[],
+                    )
+
+                with patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    side_effect=AssertionError("No-data backoff should suppress OpenAI CRE call"),
+                ):
+                    status_code_fresh, payload_fresh = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code_fresh, 200)
+                self.assertEqual(payload_fresh.get("cre_status"), "no_data")
+
+                with db_module.get_connection() as conn:
+                    stale_no_data_ts = (
+                        datetime.now(timezone.utc)
+                        - timedelta(days=summary.CRE_RESEARCH_TTL_DAYS)
+                        - timedelta(minutes=1)
+                    ).isoformat()
+                    self._upsert_cre_cache_row(
+                        conn,
+                        city="Alpha",
+                        state="AA",
+                        model_name="model-a",
+                        result_type="no_data",
+                        cre_generated_at=stale_no_data_ts,
+                        cre_sentences_text="No relevant research from approved sources.",
+                        research_sources=[],
+                    )
+
+                with patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    return_value=mock_cre,
+                ) as cre_mock:
+                    status_code_stale, payload_stale = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code_stale, 200)
+                self.assertEqual(payload_stale.get("cre_status"), "success")
+                cre_mock.assert_called_once()
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_city_summary_cre_success_cache_window_and_retry_boundary(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=True,
+            FIRE_METRICS_SUMMARY_MODEL="model-a",
+            OPENAI_API_KEY="test-key",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        refreshed_cre = {
+            "cre_sentences": "Fresh success after TTL expiry.",
+            "research_sources": [{
+                "publisher": "JLL",
+                "title": "TTL Refresh",
+                "published_date": "",
+                "url": "https://example.com/ttl-refresh",
+            }],
+            "cre_generated_at": summary.utc_now_iso(),
+            "cre_research_version": summary.CRE_RESEARCH_VERSION,
+            "result_type": "success",
+        }
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cre-success-window-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+                    fresh_success_ts = (
+                        datetime.now(timezone.utc)
+                        - timedelta(days=summary.CRE_RESEARCH_TTL_DAYS)
+                        + timedelta(minutes=1)
+                    ).isoformat()
+                    self._upsert_cre_cache_row(
+                        conn,
+                        city="Alpha",
+                        state="AA",
+                        model_name="model-a",
+                        result_type="success",
+                        cre_generated_at=fresh_success_ts,
+                        cre_sentences_text="Fresh cached success.",
+                        research_sources=[{
+                            "publisher": "CBRE",
+                            "title": "Cached",
+                            "published_date": "",
+                            "url": "https://example.com/cached",
+                        }],
+                    )
+
+                with patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    side_effect=AssertionError("Fresh success cache should suppress OpenAI CRE call"),
+                ):
+                    status_code_fresh, payload_fresh = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code_fresh, 200)
+                self.assertEqual(payload_fresh.get("cre_status"), "success")
+                self.assertIn("Fresh cached success.", payload_fresh.get("cre_summary", ""))
+
+                with db_module.get_connection() as conn:
+                    stale_success_ts = (
+                        datetime.now(timezone.utc)
+                        - timedelta(days=summary.CRE_RESEARCH_TTL_DAYS)
+                        - timedelta(minutes=1)
+                    ).isoformat()
+                    self._upsert_cre_cache_row(
+                        conn,
+                        city="Alpha",
+                        state="AA",
+                        model_name="model-a",
+                        result_type="success",
+                        cre_generated_at=stale_success_ts,
+                        cre_sentences_text="Stale cached success.",
+                        research_sources=[{
+                            "publisher": "CBRE",
+                            "title": "Stale",
+                            "published_date": "",
+                            "url": "https://example.com/stale",
+                        }],
+                    )
+
+                with patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    return_value=refreshed_cre,
+                ) as cre_mock:
+                    status_code_stale, payload_stale = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code_stale, 200)
+                self.assertEqual(payload_stale.get("cre_status"), "success")
+                self.assertIn("Fresh success after TTL expiry.", payload_stale.get("cre_summary", ""))
+                cre_mock.assert_called_once()
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_city_summary_cre_missing_api_key_allows_cached_success_but_fails_uncached_city(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=True,
+            FIRE_METRICS_SUMMARY_MODEL="model-a",
+            OPENAI_API_KEY="",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cre-mixed-config-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+                    fresh_success_ts = (
+                        datetime.now(timezone.utc)
+                        - timedelta(days=summary.CRE_RESEARCH_TTL_DAYS)
+                        + timedelta(minutes=1)
+                    ).isoformat()
+                    self._upsert_cre_cache_row(
+                        conn,
+                        city="Alpha",
+                        state="AA",
+                        model_name="model-a",
+                        result_type="success",
+                        cre_generated_at=fresh_success_ts,
+                        cre_sentences_text="Cached success remains available.",
+                        research_sources=[{
+                            "publisher": "CBRE",
+                            "title": "Cached City",
+                            "published_date": "",
+                            "url": "https://example.com/cached-city",
+                        }],
+                    )
+
+                with patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    side_effect=AssertionError("Missing API key must not trigger OpenAI call"),
+                ):
+                    alpha_code, alpha_payload = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+                    beta_code, beta_payload = self._call_city_summary_cre(
+                        app,
+                        city="Beta",
+                        state="BB",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(alpha_code, 200)
+                self.assertEqual(alpha_payload.get("cre_status"), "success")
+                self.assertIn("Cached success remains available.", alpha_payload.get("cre_summary", ""))
+
+                self.assertEqual(beta_code, 200)
+                self.assertEqual(beta_payload.get("cre_status"), "failure")
+                self.assertEqual(beta_payload.get("cre_failure_category"), "config_error")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_city_summary_cre_runs_when_summary_flag_disabled_if_api_key_present(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=False,
+            FIRE_METRICS_SUMMARY_MODEL="",
+            OPENAI_API_KEY="test-key",
+        )
+
+        # This explicit config shape is the branch that used to fail before
+        # the fix because the old condition was: `if not _summary_enabled() or not api_key`.
+        old_condition_would_fail = (not app.config["FIRE_METRICS_AI_SUMMARIES_ENABLED"]) or (not app.config["OPENAI_API_KEY"])
+        self.assertTrue(old_condition_would_fail)
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        mock_cre = {
+            "cre_sentences": "CRE remains available when overview AI summaries are disabled.",
+            "research_sources": [{
+                "publisher": "CBRE",
+                "title": "Decoupled CRE",
+                "published_date": "",
+                "url": "https://example.com/decoupled-cre",
+            }],
+            "cre_generated_at": summary.utc_now_iso(),
+            "cre_research_version": summary.CRE_RESEARCH_VERSION,
+            "result_type": "success",
+        }
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cre-summary-flag-disabled-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+
+                with patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    return_value=mock_cre,
+                ) as cre_mock:
+                    status_code, payload = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload.get("cre_status"), "success")
+                self.assertIn("CRE remains available", payload.get("cre_summary", ""))
+                cre_mock.assert_called_once()
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_city_summary_cre_missing_api_key_with_summary_flag_disabled_returns_config_error(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=False,
+            FIRE_METRICS_SUMMARY_MODEL="",
+            OPENAI_API_KEY="",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cre-summary-flag-disabled-no-key-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+
+                with patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    side_effect=AssertionError("Missing API key must block OpenAI call"),
+                ):
+                    status_code, payload = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload.get("cre_status"), "failure")
+                self.assertEqual(payload.get("cre_failure_category"), "config_error")
+        finally:
+            if original_db_path is None:
+                os.environ.pop("FIRE_METRICS_DB_PATH", None)
+            else:
+                os.environ["FIRE_METRICS_DB_PATH"] = original_db_path
+
+    def test_city_summary_cre_cached_success_with_summary_flag_disabled_skips_openai(self):
+        app = Flask(__name__)
+        app.config.update(
+            FIRE_METRICS_AI_SUMMARIES_ENABLED=False,
+            FIRE_METRICS_SUMMARY_MODEL="model-a",
+            OPENAI_API_KEY="test-key",
+        )
+
+        original_db_path = os.environ.get("FIRE_METRICS_DB_PATH")
+        try:
+            with tempfile.TemporaryDirectory(prefix="fire-metrics-cre-summary-flag-disabled-cached-success-") as tmp:
+                os.environ["FIRE_METRICS_DB_PATH"] = os.path.join(tmp, "audit.db")
+                with db_module.get_connection() as conn:
+                    self._seed_cities_table(conn)
+                    fresh_success_ts = (
+                        datetime.now(timezone.utc)
+                        - timedelta(days=summary.CRE_RESEARCH_TTL_DAYS)
+                        + timedelta(minutes=1)
+                    ).isoformat()
+                    self._upsert_cre_cache_row(
+                        conn,
+                        city="Alpha",
+                        state="AA",
+                        model_name="model-a",
+                        result_type="success",
+                        cre_generated_at=fresh_success_ts,
+                        cre_sentences_text="Cached CRE success with summary flag disabled.",
+                        research_sources=[{
+                            "publisher": "CBRE",
+                            "title": "Cached Success",
+                            "published_date": "",
+                            "url": "https://example.com/cached-success",
+                        }],
+                    )
+
+                with patch.object(
+                    fire_metrics_routes.ai_summary,
+                    "openai_cre_research",
+                    side_effect=AssertionError("Fresh CRE success cache should suppress OpenAI call"),
+                ):
+                    status_code, payload = self._call_city_summary_cre(
+                        app,
+                        city="Alpha",
+                        state="AA",
+                        cre_generation_intent="explicit_city_selection",
+                        cre_selection_source="main_city_search",
+                    )
+
+                self.assertEqual(status_code, 200)
+                self.assertEqual(payload.get("cre_status"), "success")
+                self.assertIn("Cached CRE success with summary flag disabled.", payload.get("cre_summary", ""))
         finally:
             if original_db_path is None:
                 os.environ.pop("FIRE_METRICS_DB_PATH", None)

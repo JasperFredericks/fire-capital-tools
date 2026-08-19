@@ -338,7 +338,7 @@ def _cre_payload_for_city(
         }
 
     api_key = _summary_api_key()
-    if not _summary_enabled() or not api_key:
+    if not api_key:
         return {
             "cre_status": "failure",
             "cre_summary": "",
