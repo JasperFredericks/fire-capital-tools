@@ -403,6 +403,27 @@ Consequence, verified: **Site DD capex does not reach Underwriting**, so
 the rate bug never touched equity, IRR or equity multiple. It wants a
 cleanup pass, or an implementation.
 
+**The Railway token in `~/.railway/config.json` expires roughly hourly,
+and a stale one looks exactly like a permissions problem.** Every
+GraphQL query returns `Not Authorized` -- not `401`, not `expired`, just
+Not Authorized on every field including `me`. This cost real time: it
+presents as "our token lacks the scope for this", and the natural next
+move is to go hunting for a permissions fix that does not exist.
+`railway status` refreshes it. Check expiry before concluding anything
+about access:
+
+    python -c "import json,pathlib,datetime as d; u=json.loads((pathlib.Path.home()/'.railway'/'config.json').read_text())['user']; print(d.datetime.fromtimestamp(int(u['tokenExpiresAt'])))"
+
+**Push safety is `git merge-base --is-ancestor origin/master master`, not
+`local == origin`.** After committing, local is *supposed* to be ahead of
+origin, so an equality check fails every time and reads as "master moved,
+do not push". The ancestor check asks the real question: has origin moved
+somewhere my commit is not built on? This is not academic -- **Beckett
+pushes to master directly**, and did so three times inside a single run
+on 2026-08-18. Fetch and re-check before every merge; do not trust a
+local head.
+
+
 **The acquisition and refinance sides now disagree about origination, on
 purpose.** `refi_costs_pct` means third-party closing costs ONLY -- title,
 appraisal, legal, recording -- because Michelle chose to split the
