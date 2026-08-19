@@ -195,9 +195,18 @@
         <div class="stat-box">
           <div class="stat-box-label">Subject Property</div>
           <div class="stat-box-value" style="font-size:14px;">{{ rentcast.property.property_type or '—' }}</div>
+          {#
+            `or '—'` swallows a studio: bedrooms is 0, which is falsy, so a
+            studio rendered identically to "RentCast told us nothing". That
+            is the exact case a tester hit on 1029 S Jackson St -- a real
+            studio shown as unknown -- so zero is tested for explicitly.
+          #}
           <div class="stat-box-sub">
-            {{ rentcast.property.bedrooms or '—' }}bd / {{ rentcast.property.bathrooms or '—' }}ba,
-            {{ rentcast.property.square_footage or '—' }} sqft{% if rentcast.property.year_built %}, built {{ rentcast.property.year_built }}{% endif %}
+            {% if rentcast.property.bedrooms is none %}—bd
+            {%- elif rentcast.property.bedrooms == 0 %}Studio
+            {%- else %}{{ rentcast.property.bedrooms }}bd{% endif %} /
+            {{ rentcast.property.bathrooms if rentcast.property.bathrooms is not none else '—' }}ba,
+            {{ rentcast.property.square_footage if rentcast.property.square_footage is not none else '—' }} sqft{% if rentcast.property.year_built %}, built {{ rentcast.property.year_built }}{% endif %}
           </div>
         </div>
       {% endif %}
@@ -244,6 +253,54 @@
         </div>
         <div class="stat-box-sub" id="rc-filter-note" style="padding-bottom:10px;"></div>
       </div>
+
+      {#
+        WHAT RENTCAST DECIDED THIS ADDRESS IS, SAID OUT LOUD
+
+        RentCast resolves an address to ONE unit and returns comparables
+        matched to that unit's size. On a multi-unit building it picks one
+        -- 1029 S Jackson St came back as a studio, 433 sqft -- and every
+        comparable then came back a studio too.
+
+        Two things follow, and neither was visible on this page before:
+
+          * changing the bedroom filter can appear to do nothing, because
+            all fifteen rows are already that size. A tester lost real
+            time to exactly this and concluded the control was broken. It
+            is not: there is nothing to filter out.
+          * the rent estimate is an estimate FOR THAT SIZE. If RentCast
+            picked a smaller unit than the one being underwritten, the
+            number is correct about the wrong apartment.
+
+        Stated rather than corrected, deliberately. Correcting it means
+        either re-requesting against a chosen size or fetching the
+        building's real floorplans, and both spend RentCast quota against
+        a 50/month cap. Those are Michelle's calls, queued. This is the
+        honest minimum: the assumption stops being silent.
+      #}
+      {% if rentcast.property and rentcast.property.bedrooms is not none %}
+        {% set _b = rentcast.property.bedrooms %}
+        <div class="stat-box-sub"
+             style="margin:-4px 0 12px; padding:8px 10px; border-left:3px solid #b45309;
+                    background:#fffbeb; line-height:1.5;">
+          <strong>RentCast matched this address to
+            {% if _b == 0 %}a studio{% elif _b == 1 %}a 1-bedroom{% else %}a {{ _b }}-bedroom{% endif %}
+            unit{% if rentcast.property.square_footage %}, {{ rentcast.property.square_footage }} sqft{% endif %}{% if rentcast.property.property_type %} ({{ rentcast.property.property_type }}){% endif %}.</strong>
+          For a building with more than one floorplan it picks one, and the
+          comparables below are matched to that size — which is why changing
+          the bedroom filter may not change the rows.
+          <strong>The rent estimate is for that size.</strong> If the unit you
+          are underwriting is larger, expect the estimate to read low.
+        </div>
+      {% elif rentcast.property %}
+        <div class="stat-box-sub"
+             style="margin:-4px 0 12px; padding:8px 10px; border-left:3px solid #6b7280;
+                    background:#f9fafb; line-height:1.5;">
+          <strong>RentCast returned no size for this address.</strong>
+          The comparables below are unfiltered by size, and the estimate is
+          not tied to a particular floorplan.
+        </div>
+      {% endif %}
     {% endif %}
     <div class="table-wrap" style="margin-bottom:10px;">
       <table class="rent-comps-table">
