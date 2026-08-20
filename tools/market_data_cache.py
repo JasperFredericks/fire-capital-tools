@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -112,10 +113,74 @@ def get_connection(db_path: Path | None = None):
         conn.close()
 
 
+# A ZIP+4 is the same address as its ZIP5, and nothing else here is
+# normalised
+#
+# 94941-1604 and 94941 are the same postal code; the +4 names a delivery
+# point WITHIN it. Deal 1 stored the ZIP+4 while its cached row had been
+# written from a ZIP5 entry, so its key could never hit its own data:
+#
+#     deal 1 key   '19 bay vista drive mill valley ca 94941-1604'
+#     cached row   '19 bay vista drive mill valley ca 94941'      -> MISS
+#
+# That is a paid RentCast call spent on data already held, against a
+# 50/month budget.
+#
+# THIS IS NOT THE STREET-SUFFIX CASE AND THE DIFFERENCE IS THE WHOLE POINT
+#
+# Dropping street types was ruled out and STAYS ruled out: `100 Main St`,
+# `100 Main Ave` and `100 Main Blvd` all collapse to `100 main`, they
+# coexist in real cities, and serving one street's comps for another is
+# far worse than a wasted call. That rule was then applied to the zip by
+# association, which is where it was overbroad -- the two cases differ on
+# both counts that matter:
+#
+#   COLLISION   Dropping a suffix merges addresses that DIFFER. Truncating
+#               a +4 merges only inputs identical in address, city, state
+#               and all five zip digits -- which is one address. The +4
+#               carries nothing the address line does not: a unit lives in
+#               the address line, so two units differ there and their keys
+#               still differ. Verified against six adversarial pairs in
+#               tests, including all three Main St/Ave/Blvd forms.
+#
+#   ORPHANING   Changing the key function strands every existing row under
+#               the old function, so every lookup misses and triggers a
+#               fresh paid call. Measured before this change: ZERO of the
+#               twelve cached rows carries a ZIP+4, and market_data_cache
+#               is the only table in /data holding an address_key at all.
+#               So this orphans nothing. It merges exactly one key -- deal
+#               1's -- onto the row it should have been hitting all along.
+#
+# Nothing else is touched. No suffix handling, no punctuation stripping,
+# no city or state rewriting. Those need a human looking at the result
+# (see docs/address-normalize-at-entry.md); this one does not, because
+# there is no judgement in it.
+_ZIP_PLUS_FOUR = re.compile(r"^(\d{5})-\d{4}$")
+
+
+def zip5(zip_code: str | None) -> str:
+    """The five-digit form of a zip, or the input unchanged.
+
+    Deliberately conservative: anything that is not exactly five digits,
+    a hyphen and four digits is returned as-is rather than guessed at. A
+    foreign postcode, a truncated entry or a typo keeps whatever it is
+    and simply goes on producing its own key, which is the behaviour it
+    has today.
+    """
+    z = (zip_code or "").strip()
+    m = _ZIP_PLUS_FOUR.match(z)
+    return m.group(1) if m else z
+
+
 def normalize_address_key(address: str, city: str, state: str, zip_code: str | None = None) -> str:
     """Case/whitespace-insensitive key so the same address always hits the
-    same cache row regardless of minor formatting differences."""
-    parts = [address or "", city or "", state or "", zip_code or ""]
+    same cache row regardless of minor formatting differences.
+
+    The zip is reduced to its five-digit form first -- see the note above
+    for why that is safe here and why street suffixes are NOT treated the
+    same way.
+    """
+    parts = [address or "", city or "", state or "", zip5(zip_code)]
     return " ".join(" ".join(parts).strip().lower().split())
 
 
