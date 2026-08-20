@@ -573,7 +573,8 @@ OXPT carried "Prospect Source Summary", Maple Valley "Cash Flow", Canyon
 "Work Order Summary", ERA nothing. **The selected-tab state varies per
 uploaded file**, so a new source workbook can present as a new bug.
 
-### The address-duplicate decision: do NOT change normalize_address_key
+### The address-duplicate decision: do not change the SUFFIX handling
+### (the zip half of this rule was changed in Part 39, deliberately)
 
 > **Part 38 Step B investigated this and the plan below does not survive
 > the data.** The four duplicate rows came from the **Rent Comps
@@ -604,6 +605,42 @@ saves, immediately.
 **Decision: normalize at ENTRY instead** -- canonicalise the address when a
 deal is created or edited, one address at a time with a human present.
 Approved, not yet built. Plus a one-off merge of the four duplicate rows.
+
+---
+
+**PART 39 CHANGED THE ZIP HALF OF THIS, AND THE HEADING ABOVE USED TO SAY
+"do NOT change normalize_address_key".**
+
+Both arguments above are about **street suffixes**, and both are still
+right about street suffixes. They were then applied to the **zip** by
+association, and there they were overbroad. `normalize_address_key` now
+truncates a ZIP+4 to its ZIP5, because both objections evaluate the other
+way for that case:
+
+| | dropping a suffix | truncating a +4 |
+|---|---|---|
+| **collides?** | yes -- `100 Main St/Ave/Blvd` are three real streets | no -- merges only inputs identical in address, city, state and all five zip digits, which is one address |
+| **orphans?** | yes -- every existing row is keyed under the old function | no -- **zero** of the twelve cached rows carries a ZIP+4, and `market_data_cache` is the only table on the volume holding an `address_key` |
+
+It fixed a live cost: deal 1 stores `94941-1604` while its cached row was
+written from a ZIP5 entry, so its key **missed its own data** and every
+Rent Comps open spent a paid call on a row already in the table.
+
+Only the key is truncated -- the `zip` column still stores whatever the
+user typed, so a deliberate ZIP+4 is not discarded.
+
+**The suffix rule stands and is now pinned by
+`tests/test_address_key.py`**, which fails if anyone tries to merge
+`24 Steiner` with `24 Steiner Street` that way. That is the safe place for
+this decision to live: a test that fires, rather than a heading that has
+to be read and believed.
+
+**The lesson is the heading itself.** "Do NOT change
+`normalize_address_key`" was a true conclusion generalised one step past
+its evidence, and it then blocked an unrelated and safe fix for several
+runs. A rule recorded at the level of *the function* rather than *the
+transformation* forbids more than its argument supports. Write down what
+the reasoning actually covers.
 
 ### Jackson's GPR does not parse, and the blast radius is not the chart
 
