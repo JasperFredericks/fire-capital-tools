@@ -361,8 +361,12 @@ Assessment 11 — Michelle's live walk at Nabob Hill — has **23 findings**
 So the entire migration question reduces to one row, and its answer is the
 fallback: `for_item("walls_ceiling", None)` → $5.75/sqft, the same
 `ReferenceCost` object it resolves to today. **Same price, same unit, same
-sources, same "needs a measured floor area" message.** The line does not
-move.
+sources, same message.** The line does not move.
+
+> **As of 2026-08-20 that message is the "priced by scope" wording**, not
+> "needs a measured floor area" — see Part 38 Step A. The equivalence
+> claimed here is unaffected: both sides of it resolve to the same
+> `ReferenceCost`, whatever the line then says about it.
 
 **The rule is that absent scope detail means "the default job for this
 item at this condition", and the reference table's item-level entry is
