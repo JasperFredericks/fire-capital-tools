@@ -73,7 +73,27 @@ def chart_trend(df, scale=1.0):
     # unchanged, and scaling text to match the height factor made
     # adjacent months' labels wide enough to collide horizontally (e.g.
     # Mar/Apr 2026's tall Income bars sit close together on the x-axis).
-    has_data = df["OccupancyStatus"] != "missing_gpr"
+    # WHAT THIS SKIPS, AND WHY IT IS NOT THE OCCUPANCY STATUS
+    #
+    # The intent above is right: a month where Income, Expenses and NOI
+    # are all genuinely $0 gets three stacked "$0" labels that add no
+    # information. The implementation used OccupancyStatus != "missing_gpr"
+    # as a stand-in for that, and the stand-in is wrong.
+    #
+    # "missing_gpr" means Gross Potential Rent parsed as 0 (kpis.py: `if
+    # gpr == 0`). It says nothing about Income, Expenses or NOI, which are
+    # summed from entirely different lines. A property whose P&L carries
+    # real income but no recognisable GPR line therefore had EVERY dollar
+    # label suppressed on this chart -- reported as "Jackson renders
+    # without labels", though nothing about it is Jackson-specific: any
+    # upload with GPR of zero behaves the same way.
+    #
+    # So the gate now tests the thing the comment describes. Occupancy is
+    # still legitimately absent when GPR is missing, and no occupancy
+    # figure is invented from a zero denominator -- but that belongs to
+    # the occupancy chart, which is a different function. This chart plots
+    # dollars, and the dollars exist.
+    has_data = ~((df["Income"] == 0) & (df["Expenses"] == 0) & (df["NOI"] == 0))
     ax.bar_label(income_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Income"])], padding=3 * scale, fontsize=9 * scale)
     ax.bar_label(expense_bars, labels=[money_label(v) if keep else "" for keep, v in zip(has_data, df["Expenses"])], padding=3 * scale, fontsize=9 * scale)
     for xi, yi, keep in zip(x, df["NOI"], has_data):
