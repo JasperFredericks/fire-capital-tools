@@ -117,11 +117,12 @@ BANK_ITEMS: tuple[dict[str, Any], ...] = (
     # across two headings.
     _bank("washer_dryer", "In-unit washer / dryer", SCOPE_UNIT, "interior_units",
           None, uc.KIND_CHOICE, uc.PRESENCE),
+    # The option set is named in site_dd_unit_checklist beside PRESENCE,
+    # which this file already imports from there. An inline tuple here
+    # would be an option set that uc.WORK_OPTIONS could not name, and an
+    # unnamed set is one the completeness test cannot check.
     _bank("wd_hookups", "W/D hookups only", SCOPE_UNIT, "mep", None,
-          uc.KIND_CHOICE,
-          (("complete", "Drain, vent and power"),
-           ("partial", "Incomplete"),
-           ("absent", "None")),
+          uc.KIND_CHOICE, uc.WD_HOOKUP_STATES,
           hint="The hookups themselves, where no machines are installed."),
     _bank("ceiling_fan", "Ceiling fan", SCOPE_ROOM, "mep"),
     _bank("window_ac", "Window AC unit", SCOPE_ROOM, "mep"),
@@ -254,6 +255,58 @@ def grouped_for_scope(scope: str, room_type: str | None = None,
                 "items": members,
             })
     return groups
+
+
+def every_item() -> dict[str, dict[str, Any]]:
+    """Every catalogue item an inspector can record against, by key.
+
+    Three sources, and this is the only module that imports all of them:
+    the room checklists, the unit-wide checklist, and the bank. A caller
+    that needs an item's OPTION SET -- to ask uc.needs_work() whether a
+    recorded value costs money -- needs all three, and assembling them at
+    each call site is how one source gets forgotten.
+
+    Bank items are shaped like checklist items for exactly this reason:
+    they carry `options`, so a bank washer/dryer recorded as "Not there"
+    is judged by the same rule as the laundry checklist's.
+
+    The property checklist is NOT here. Its items are all conditions --
+    it has no option sets to consult -- so an unresolved key falls
+    through to needs_work()'s condition-only path, which is correct for
+    them and is also the right answer for a stale key from an older
+    checklist version.
+
+    Keys repeat across room types on purpose (`flooring` is the same
+    question everywhere), so the first definition wins; they are the same
+    item.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for room_type, _ in uc.ROOM_TYPES:
+        for item in uc.items_for_room(room_type):
+            out.setdefault(item["key"], item)
+    for item in uc.items_for_unit():
+        out.setdefault(item["key"], item)
+    for item in BANK_ITEMS:
+        out.setdefault(item["key"], item)
+    return out
+
+
+def detail_labels() -> dict[tuple[str, str], str]:
+    """(item_key, option value) -> the words the inspector actually saw.
+
+    The capex export needs this because a choice finding has no condition
+    to print. Before the work-options fix such a finding never reached a
+    budget line at all; now that it does, the line has to be able to say
+    WHY the money is needed, and "Missing" is what the form called it.
+
+    Reading the label back rather than title-casing the stored value is
+    the difference between "Present, not working" and "Not_Working".
+    """
+    out: dict[tuple[str, str], str] = {}
+    for key, item in every_item().items():
+        for value, label in item.get("options") or ():
+            out.setdefault((key, value), label)
+    return out
 
 
 def search(query: str, scope: str, room_type: str | None = None,

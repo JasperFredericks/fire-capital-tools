@@ -537,7 +537,18 @@ def area_detail(assessment_id, area_id):
         add_scope="unit",
         summary=summary, room_summaries={r["room"]["id"]: r for r in summary["rooms"]},
         conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
-        work_conditions=cond.WORK_CONDITIONS,
+        # The SAME predicate the capex filter uses, so the screen that
+        # invites a cost and the export that spends it cannot disagree
+        # about what counts as work. They did: the box stayed collapsed
+        # on a missing smoke alarm, so even the manual override was
+        # hidden behind the assumption that only conditions cost money.
+        #
+        # This replaced `work_conditions=cond.WORK_CONDITIONS`, which
+        # both templates used to test `row.condition in work_conditions`
+        # and which nothing reads now. Leaving it passed would be a dead
+        # value handed to a template -- the shape of the bug this change
+        # exists to fix.
+        needs_work=uc.needs_work, catalogue=bank.every_item(),
         cost_describe=costs.describe,
         # Display only. See site_dd_costs.reference_hint(): it returns a
         # figure and words, never a provenance value, so the capture
@@ -706,7 +717,18 @@ def room_detail(assessment_id, area_id, room_id):
         add_scope="room",
         room_type_labels=uc.ROOM_TYPE_LABELS,
         conditions=cond.CONDITIONS, condition_labels=cond.CONDITION_LABELS,
-        work_conditions=cond.WORK_CONDITIONS,
+        # The SAME predicate the capex filter uses, so the screen that
+        # invites a cost and the export that spends it cannot disagree
+        # about what counts as work. They did: the box stayed collapsed
+        # on a missing smoke alarm, so even the manual override was
+        # hidden behind the assumption that only conditions cost money.
+        #
+        # This replaced `work_conditions=cond.WORK_CONDITIONS`, which
+        # both templates used to test `row.condition in work_conditions`
+        # and which nothing reads now. Leaving it passed would be a dead
+        # value handed to a template -- the shape of the bug this change
+        # exists to fix.
+        needs_work=uc.needs_work, catalogue=bank.every_item(),
         cost_describe=costs.describe,
         # Display only. See site_dd_costs.reference_hint(): it returns a
         # figure and words, never a provenance value, so the capture
@@ -1124,12 +1146,29 @@ def capex_budget(assessment_id, fmt):
     labels.update({i["key"]: i["label"] for i in uc.items_for_unit()})
     labels.update({b["key"]: b["label"] for b in bank.BANK_ITEMS})
 
+    # The catalogue itself, not just its labels, because needs_work() has
+    # to see the item's OPTION SET to know which of its values mean work.
+    # Same three sources in the same order as the labels above, so an item
+    # that can be labelled can also be judged.
+    catalogue = bank.every_item()
+
     # Only findings that actually record a problem reach the budget. A
     # water heater in good order is not a capital line.
-    work = [f for f in findings if f.get("condition") in cond.WORK_CONDITIONS]
+    #
+    # This used to read `f["condition"] in WORK_CONDITIONS` and nothing
+    # else, which meant it and this comment disagreed: a choice item
+    # answers in `detail`, so a MISSING water heater -- the example the
+    # comment reaches for, and a $1,725 item -- recorded a problem and was
+    # dropped anyway. Alarms, GFCIs and every absent appliance went the
+    # same way. uc.needs_work() is now the single definition of "records a
+    # problem", and the capture screen's cost box opens on the same call.
+    work = [f for f in findings
+            if uc.needs_work(catalogue.get(f.get("item_key")),
+                             f.get("condition"), f.get("detail"))]
     priced = [costs.apply_reference(f, flooring_by_room.get(f.get("room_id")))
               for f in work]
-    lines = capex_export.build_lines(priced, labels)
+    lines = capex_export.build_lines(priced, labels,
+                                     detail_labels=bank.detail_labels())
     summary = capex_export.summarize(lines)
 
     import tempfile

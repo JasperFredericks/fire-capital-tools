@@ -244,7 +244,7 @@
         {% set est = cost_describe(row) %}
         {% set ref = reference_hint(row or {'item_key': item.key}) %}
         <details class="sdd-cost"
-                 {{ 'open' if est.has_cost or (row and row.condition in work_conditions) else '' }}>
+                 {{ 'open' if est.has_cost or (row and needs_work(catalogue.get(item.key), row.condition, row.detail)) else '' }}>
           <summary class="sdd-cost-open">
             {%- if est.has_cost %}Est. {{ '${:,.0f}'.format(est.cost) }} · {{ est.short }}
             {%- elif ref %}Researched {{ '${:,.0f}'.format(ref.unit_cost) }} · tap to change

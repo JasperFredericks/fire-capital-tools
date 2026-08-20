@@ -40,6 +40,7 @@ import matplotlib.pyplot as plt                       # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages   # noqa: E402
 
 from tools import site_dd_checklist as cl              # noqa: E402
+from tools import site_dd_conditions as cond           # noqa: E402
 from tools import site_dd_costs as costs               # noqa: E402
 from tools import site_dd_reference_costs as refcosts  # noqa: E402
 from tools import underwriting_capex as ucx            # noqa: E402
@@ -59,7 +60,8 @@ SOURCE_COLUMN = {
 }
 
 
-def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = None
+def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = None,
+                detail_labels: dict[tuple[str, str], str] | None = None
                 ) -> list[dict[str, Any]]:
     """Budget rows, with quantity as the instance count.
 
@@ -78,8 +80,8 @@ def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = 
     $450 and $600 would become "Toilet x2" at whichever price came first,
     and $300 would leave the budget without a trace.
 
-    So condition, unit cost and provenance join the key. Instances that
-    are genuinely the same collapse into one line with a quantity;
+    So condition, detail, unit cost and provenance join the key. Instances
+    that are genuinely the same collapse into one line with a quantity;
     instances that differ in what is wrong with them or what they cost
     stay visible as separate lines. Nothing can be absorbed into a
     quantity unless it is interchangeable with the rows beside it.
@@ -90,13 +92,24 @@ def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = 
     multiplication here would create two numbers that can disagree.
     """
     labels = labels or {}
+    detail_labels = detail_labels or {}
     groups: dict[tuple, dict[str, Any]] = {}
     order: list[tuple] = []
 
     for f in findings or []:
         described = costs.describe(f)
+        # DETAIL JOINS THE KEY FOR THE SAME REASON CONDITION DID
+        #
+        # Since the work-options fix, a choice finding can reach the
+        # budget, and for those the detail IS what is wrong: a smoke alarm
+        # that is missing and one that needs replacing are the same item,
+        # the same room and the same $260, so without this they would
+        # collapse into "Smoke alarm x2" and one of the two states would
+        # leave no trace. Admitting these findings without widening the
+        # key would have replaced a silent drop with a silent merge.
         key = (f.get("area_id"), f.get("room_id"), f.get("item_key"),
-               f.get("condition"), described["cost"], described["source"],
+               f.get("condition"), f.get("detail"),
+               described["cost"], described["source"],
                (f.get("instance_label") or "").strip())
         if key not in groups:
             groups[key] = {"rows": [], "first": f, "described": described}
@@ -205,6 +218,26 @@ def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = 
             "category": cat,
             "category_name": cl.CATEGORY_NAMES.get(cat, "Uncategorised"),
             "condition": f.get("condition"),
+            "detail": f.get("detail"),
+            # WHAT IS WRONG, IN ONE COLUMN, WHICHEVER KIND OF ITEM IT IS
+            #
+            # The exports have always printed `condition` here. A choice
+            # item has none -- its answer is in `detail` -- so once those
+            # findings started reaching the budget the column would have
+            # read "—" on every missing alarm and absent appliance: a
+            # line asking for $260 without saying what for.
+            #
+            # The stored value is not shown raw. `not_working` is not a
+            # word anybody typed; "Present, not working" is what the form
+            # said, and echoing the inspector's own wording back is the
+            # difference between reporting and paraphrasing. Falls back to
+            # the raw value only when the option is not in the catalogue,
+            # which means a stale key rather than a normal reading.
+            "state": (cond.label(f.get("condition"))
+                      if cond.is_valid(f.get("condition"))
+                      else (detail_labels.get((f.get("item_key"),
+                                               f.get("detail")))
+                            or f.get("detail") or "")),
             "scope": f.get("scope"),
             "unit_cost": described["cost"],
             "unit": unit,
@@ -448,7 +481,7 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
                 fig.text(cols[1], y, textwrap.shorten(row["category_name"], 26,
                                                       placeholder="…"),
                          fontsize=8, color=MUTED)
-                fig.text(cols[2], y, (row["condition"] or "—").title(),
+                fig.text(cols[2], y, row["state"] or "—",
                          fontsize=8, color=MUTED)
                 fig.text(cols[3], y, row["source_label"], fontsize=8,
                          color=WARN if row["source"] == costs.SOURCE_REFERENCE
@@ -531,7 +564,7 @@ def build_xlsx(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
 
     for l in lines:
         ws.append([l["label"], l["category_name"], l["scope"],
-                   (l["condition"] or ""), l["source_label"],
+                   l["state"], l["source_label"],
                    l["unit_cost"], l["unit_label"], l["quantity"],
                    l["total"], l["reason"]])
 
