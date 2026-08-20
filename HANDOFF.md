@@ -385,11 +385,154 @@ the code.**
    "deal_analyzer_math.py is not imported here." The only live caller of
    `analyze_noi_series()` is `underwriting_math.py`.
 
-2. *"Site DD has PDF export only; no XLSX path exists anywhere."*
+2. *"The bedroom filter refetches and recency filters client-side, which
+   is why one works and the other doesn't."*  Both are client-side and
+   wired identically -- `bedsSel.addEventListener("change", apply)` and
+   the same line for recency. The differential a tester observed was
+   **comp-set composition**: RentCast returns comparables matched to the
+   subject's size, so when it resolves the subject as a studio, all
+   fifteen comps are studios and "studio" versus "all sizes" show the
+   same rows. Plausible, survived the reporter's own description of the
+   symptom, and died on the cached data.
+
+3. *"Site DD has PDF export only; no XLSX path exists anywhere."*
    `site_dd_capex_export.build_xlsx()` had been live the whole time,
    wired to `/tools/site-dd/assessment/<id>/capex.<fmt>`, already
    satisfying every requirement that was being specified as if new. The
    real defect was that nothing linked to it.
+
+---
+
+## The falsy-zero audit: one member, and the convention it implies
+
+`{{ rentcast.property.bedrooms or '—' }}` rendered a **studio as unknown**,
+because 0 is falsy. That looked like a class of bug, so all 53 `or`-fallback
+idioms in templates plus 6 in Python were audited.
+
+**The class has exactly one member.** Everything else is safe, and for
+reasons worth recording so nobody re-runs the audit:
+
+  * `gp.rating`, `review.rating` -- Google ratings are 1.0-5.0; absent is None
+  * `crime_rating`, `climate_risk_rating` -- these are LABELS; the numerics
+    are separate fields (`crime_index_score`, `climate_risk_score`)
+  * `hold_years` -- `_validate()` rejects `< 1`
+  * OM `property[k]` / `asking_terms[k]` -- the schema declares **every
+    field `{"type": "string"}"`, deliberately, because they are verbatim
+    quotes. Empty string is the real "not stated" case.
+  * everything else is a date, name, note, caption, label or address
+
+`bedrooms` was the only member because it is the one field here where
+**zero is a common, real, user-facing value** -- a studio.
+
+**THE HOUSE CONVENTION: guard the container, not the number.**
+
+    {{ money(x) if obj else '—' }}     right -- asks "does the object exist"
+    {{ x or '—' }}                     wrong for anything numeric
+
+Every ternary in the codebase already guards the container, which is why a
+genuine zero NOI still renders as `0`. Keep it that way.
+
+
+---
+
+## Four things about specific bugs, kept because each will recur
+
+### "Fails on one property" has been wrong four times. Check all properties first.
+
+**Standing rule: before accepting a property-specific premise, test the
+other properties.** Four instances now, all in one testing cycle:
+
+  1. *Bedroom filter doesn't refresh* -- comp-set composition, any address
+     whose comps are uniform behaves the same.
+  2. *MMR prints 33 pages, "all but oxford work"* -- the stray selected tab
+     differed per SOURCE FILE, not per property. ERA was clean by luck of
+     how its workbook was saved. Fixing "the Oxford bug" would have fixed
+     nothing.
+  3. *Scorecard trend chart unlabelled for Jackson* -- any upload whose GPR
+     parses as zero behaves identically.
+  4. The GPR parsing bug below, same shape.
+
+The framing is seductive because it sounds like a narrowed, tractable
+problem. It usually means "this is the one the tester happened to open".
+
+### The MMR print mechanism, because a new source workbook will hit it again
+
+The download is the source MMR with a Summary sheet prepended, and it
+inherits **whatever tabs were selected when somebody last saved the source
+file**. Excel's default print option is "Print Active Sheets" -- PLURAL --
+so a stray selected tab prints alongside Summary, and source sheets are
+raw exports with no print area (General Ledger is 1,168 rows on OXPT).
+
+`scope_workbook_for_print()` deselects everything but Summary and gives
+each content-bearing source sheet a print area. Measured before the fix:
+OXPT carried "Prospect Source Summary", Maple Valley "Cash Flow", Canyon
+"Work Order Summary", ERA nothing. **The selected-tab state varies per
+uploaded file**, so a new source workbook can present as a new bug.
+
+### The address-duplicate decision: do NOT change normalize_address_key
+
+The cache holds separate paid rows for `24 steiner` / `24 steiner street`
+and `598 belvedere` / `598 belvedere street`, because the key function only
+lowercases and collapses whitespace.
+
+**Merging them requires dropping the street-type suffix, and that collides
+real addresses**: `100 Main St`, `100 Main Ave` and `100 Main Blvd` all
+become `100 main`. Those coexist in real cities, and serving one street's
+comps for another is far worse than four wasted calls.
+
+Changing the key function also **orphans every existing cached row** --
+they carry keys under the old function, so every lookup misses and triggers
+a fresh paid call. Re-warming 12 rows to prevent 4 costs more than it
+saves, immediately.
+
+**Decision: normalize at ENTRY instead** -- canonicalise the address when a
+deal is created or edited, one address at a time with a human present.
+Approved, not yet built. Plus a one-off merge of the four duplicate rows.
+
+### Jackson's GPR does not parse, and the blast radius is not the chart
+
+`kpis.py:271` reads Gross Potential Rent from **one hardcoded account
+code**:
+
+    gpr = self.get_val("4110", month)
+
+The parser already carries multiple chart-of-accounts dialects --
+`parsing.py` maps `"Gross potential rent"`, `"Gross Potential Rent"`,
+`"Gross Potential Rent (Scheduled)"`, a Paresh code map (`40210 -> 4110`),
+and `detected_format` values including `Canyon`, `Paresh` and `Cash Flow
+(Generic)`. **A GPR code that varies by source is a known shape here, not
+a surprise.** So the likely cause is that Jackson's dialect is unmapped,
+not that its data is missing.
+
+**When GPR parses as zero, the consequence is not cosmetic:**
+
+  * `phys_occ` and `econ_occ` are set to `None` -- that property shows **no
+    physical occupancy and no economic occupancy**
+  * NRI reconstruction is skipped -- `if "4000" not in self.accounts and
+    gpr != 0` -- so if code 4000 is also absent, **NRI is not rebuilt either**
+  * it previously blanked every dollar label on the trend chart (fixed)
+
+**Any upload whose GPR parses as zero behaves identically.** Jackson is the
+one that was tried.
+
+**Not fixed. It needs Jackson's actual upload** to see which account codes
+and `detected_format` it produces. That single fact picks the fix.
+
+**On the honest-incompleteness question: the state already exists, and it
+is confidently wrong about the cause.** `scorecard_pro.html` already
+renders a warning listing the affected months:
+
+> "Occupancy could not be worked out for N months. **This file does not
+> state Gross Potential Rent** ... Those months are left out of the average
+> occupancy figure; **every other number is unaffected**."
+
+Two problems with that wording, both worth fixing when the dialect fix is
+written. It asserts *the file does not state GPR*, which the code cannot
+know -- what it knows is that **no line matched code 4110**. And "every
+other number is unaffected" is false: NRI reconstruction is skipped, and
+until recently the chart labels were affected too. The pattern is right;
+the claim is stronger than the evidence.
+
 
 ---
 
