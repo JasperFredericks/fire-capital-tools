@@ -280,17 +280,30 @@
       #}
       {% if rentcast.property and rentcast.property.bedrooms is not none %}
         {% set _b = rentcast.property.bedrooms %}
+        {% set _same = candidates | selectattr('bedrooms', 'equalto', _b) | list | length %}
+        {% set _n = candidates | length %}
         <div class="stat-box-sub"
              style="margin:-4px 0 12px; padding:8px 10px; border-left:3px solid #b45309;
                     background:#fffbeb; line-height:1.5;">
           <strong>RentCast matched this address to
             {% if _b == 0 %}a studio{% elif _b == 1 %}a 1-bedroom{% else %}a {{ _b }}-bedroom{% endif %}
             unit{% if rentcast.property.square_footage %}, {{ rentcast.property.square_footage }} sqft{% endif %}{% if rentcast.property.property_type %} ({{ rentcast.property.property_type }}){% endif %}.</strong>
-          For a building with more than one floorplan it picks one, and the
-          comparables below are matched to that size — which is why changing
-          the bedroom filter may not change the rows.
-          <strong>The rent estimate is for that size.</strong> If the unit you
-          are underwriting is larger, expect the estimate to read low.
+          For a building with more than one floorplan it picks one, and
+          <strong>the rent estimate is for that size</strong> — if the unit you are
+          underwriting is larger, expect the estimate to read low.
+          {% if _n %}
+            {% if _same == _n %}
+              All {{ _n }} comparables below are that size too, so changing the
+              bedroom filter will not change the rows.
+            {% elif _same == 0 %}
+              None of the {{ _n }} comparables below are that size, so the size
+              filter starts on a set that excludes every row.
+            {% else %}
+              {{ _same }} of the {{ _n }} comparables below are that size and the
+              rest are not, so changing the bedroom filter will change which rows
+              you see.
+            {% endif %}
+          {% endif %}
         </div>
       {% elif rentcast.property %}
         <div class="stat-box-sub"

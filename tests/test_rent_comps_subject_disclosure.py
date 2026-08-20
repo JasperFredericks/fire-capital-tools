@@ -50,13 +50,15 @@ TPL = ROOT / "templates" / "tools" / "rent_comps.html"
 from jinja2 import Environment, FileSystemLoader, select_autoescape  # noqa: E402
 
 
-def render_block(prop):
+def render_block(prop, comps=None):
     """Render just the disclosure, with the surrounding page stubbed out."""
     src = TPL.read_text(encoding="utf-8")
     start = src.index("{% if rentcast.property and rentcast.property.bedrooms is not none %}")
     end = src.index("{% endif %}", src.index("no size for this address")) + len("{% endif %}")
     env = Environment(autoescape=select_autoescape(["html"]))
-    return env.from_string(src[start:end]).render(rentcast={"property": prop})
+    return env.from_string(src[start:end]).render(
+        rentcast={"property": prop},
+        candidates=[{"bedrooms": b} for b in (comps or [])])
 
 
 class TheDisclosureTests(unittest.TestCase):
@@ -74,10 +76,18 @@ class TheDisclosureTests(unittest.TestCase):
     def test_larger_units_read_naturally(self):
         self.assertIn("a 3-bedroom", render_block({"bedrooms": 3}))
 
-    def test_it_explains_why_the_filter_may_not_change_the_rows(self):
-        """The thing the tester lost time to."""
-        html = render_block({"bedrooms": 0}).lower()
-        self.assertIn("may not change the rows", html)
+    def test_it_explains_what_the_filter_will_do(self):
+        """The thing the tester lost time to.
+
+        The wording moved from an unconditional "may not change the rows"
+        to a statement computed from the comparables actually present --
+        the unconditional form was false on three of seven cached
+        addresses. tests/test_rentcast_disclosure_honesty.py covers the
+        three cases against every real shape; this asserts only that the
+        page still answers the question at all.
+        """
+        html = render_block({"bedrooms": 0}, comps=[0, 0, 0]).lower()
+        self.assertIn("change the rows", html)
 
     def test_it_warns_the_estimate_is_for_that_size(self):
         html = render_block({"bedrooms": 1}).lower()
