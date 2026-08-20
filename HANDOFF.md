@@ -471,6 +471,40 @@ A claim that travels from a report into a prompt and back has been
 states one of our own findings back as settled, that is the moment it is
 least likely to be re-checked and most likely to be wrong.
 
+### 6. An APPROVAL can outlive its premise, and nothing expires it
+
+*"Normalize at entry — canonicalise the address when a deal is created or
+edited."* Approved in Part 23, restated in prompts, **unbuilt for fifteen
+runs**, and investigated properly for the first time in Part 38. It is
+aimed at a code path the problem does not use.
+
+The duplicate rows came from the **Rent Comps standalone search box**,
+which takes a free-text address whenever no `deal_id` is supplied.
+Production has two deals; neither is Steiner or Belvedere, and **ten of
+twelve cached rows correspond to no deal at all**. A canonicaliser on
+`new_deal()` / `edit_deal()` would have run **zero times** against the
+addresses that actually collided — and could not have merged them anyway,
+since they differ by the street-type suffix that the same decision
+correctly ruled out.
+
+**This is a different failure from the five above.** Those are false
+*claims*, and the fix is to run the mechanism. This is a false *plan*: the
+reasoning that produced it was sound, the constraint it protects is still
+right, and the decision was never wrong when made — it was aimed using a
+premise about where the data comes from that nobody had checked.
+
+An approval is the most durable thing in a handoff. It reads as settled,
+it carries the authority of having been decided, and unlike a claim it
+invites no re-examination at all — the question feels closed. It sat
+through fifteen runs precisely *because* it was approved.
+
+**The rule: when an approved-but-unbuilt item finally comes up to build,
+re-derive what it is aimed at before building it.** Not whether it is a
+good idea — that was settled — but whether the thing it targets is the
+thing that is broken. The check here was one query against the deals
+table, and it retired most of a plan that had been carried for fifteen
+runs.
+
 ---
 
 ## The falsy-zero audit: one member, and the convention it implies
@@ -643,6 +677,42 @@ that prompted it.** Seven addresses were sitting in the cache the whole
 time; looking at four of them is what shipped a false statement to a real
 user.
 
+### A proxy that looks decisive: comp-set identity is NOT same-address
+
+Part 38, deciding whether two cached rows were genuine duplicates. The
+obvious test is whether they carry the same comparables. It is worthless:
+
+```
+22 Steiner St  VS  24 Steiner   ->  same comp set: True, overlap 15 of 15
+                                    same rent estimate, same range
+                                    same distances to FOUR decimals
+```
+
+**Two different buildings, indistinguishable in the cache.** RentCast
+resolved no subject property for either, so both got the same area-level
+sample — and where it resolves no subject, comparables are not matched to
+the subject at all. Every address on that block gets the same fifteen.
+
+So an identical comp set is evidence of *proximity*, not identity, and it
+is exactly the kind of proxy worth distrusting: high-dimensional
+(15 addresses, prices, distances), expensive-looking, and intuitively
+conclusive — fifteen identical records *feels* like proof. The real
+discriminators are the **subject resolution** and the **rent estimate**.
+
+**It was caught only by a positive control, and the control fired on the
+second try.** The first comparator keyed comparables on `id`; there is no
+`id` field in a cached comparable, so every `.get("id")` returned `None`
+and the check compared `[None] * 15` against itself. It would have called
+two unrelated comp sets identical. Re-keyed on `address` it ran correctly
+— and then the control against a known-different address *failed*, which
+is what exposed the proxy.
+
+Two lessons, and the second is the one that generalises: **a comparator
+keyed on a field that does not exist reports agreement, not an error** —
+so assert the key is present before trusting the comparison. And a
+positive control is not only a test of the instrument; **when it fails it
+is sometimes telling you the signal itself is not discriminative.**
+
 The corollary for messages specifically: **a page may only state what it
 can count.** If the composition is in the DOM or the payload, compute the
 sentence from it. If the cause is genuinely unknown, say what is missing
@@ -772,6 +842,40 @@ here. `openai` already ships an `httpx2` extra, so the fragility is real
 rather than hypothetical. Reconcile counts by **unique test ID**, never
 by line-grep — a line-grep tally produced a phantom 14-test discrepancy.
 
+**Assessment 11's fingerprint: `11fdd001f2fca08e` is RETIRED.** Its
+algorithm was never written down and it cannot be reproduced, so it could
+never have detected a change — an unreproducible fingerprint is not a
+check, it is a number that gets copied forward. Two replacements, each
+with its algorithm stated, because they answer different questions:
+
+**The DATA fingerprint — has the assessment itself changed?**
+
+```
+sqlite3, mode=ro, /data/site_dd.db
+rows = SELECT * FROM site_dd_findings WHERE assessment_id=11 ORDER BY id
+blob = json.dumps([dict(r) for r in rows], sort_keys=True, default=str)
+fp   = hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+2026-08-20  ->  f6451ecb366f6ab4   (23 findings)
+```
+
+**The EXPORT CONTENT hash — has what Michelle READS changed?**
+
+Hashes rendered content, never file bytes: a PDF carries timestamps and a
+XLSX carries zip metadata, and neither says anything about the budget. It
+replicates the export route exactly — `needs_work()` filter,
+`apply_reference()`, `build_lines()`, `summarize()`, `build_xlsx()` — then
+hashes the summary, each line's visible fields, and every XLSX cell.
+
+```
+2026-08-20  ce25f0d9ad5de0e8  -> d0b8436a3998f63b   (Part 39 Step B)
+```
+
+The two are independent on purpose. The data hash held steady across that
+change while the export hash moved, which is the correct signature for a
+wording change: her walk did not change, what the budget says about it
+did.
+
 **Assessment 11 is Michelle's live work.** Nabob Hill, inspector MJ,
 2026-08-16, one unit, one kitchen, 23 findings. Read-only, always. Its
 `property_label` created a 12th entry in the notetaker property registry
@@ -796,6 +900,21 @@ it" was a claim about our own code that one grep settles, which is
 false-premise shape #4 exactly. Whether Michelle has confirmed the two are
 the same property is a separate question and is still open; what is
 settled is that the column is written and this one is set.
+
+**The propagation on this one is worse than the usual shape, and it is
+worth being blunt about it.** The link was not discovered — *it was
+ordered*. The user asked for assessment 11 to be linked to deal 2, it was
+done, and the false sentence went on standing in HANDOFF and was repeated
+across several prompts afterwards **by the person who had ordered the
+link**. So this is not "a plausible claim nobody re-checked". It is a
+claim contradicted by an action the author took themselves, which the
+written record outlived.
+
+The other false premises argue for *checking the code*. This one argues
+for something the code cannot supply: **when you have changed the world,
+go back and correct what the document says about it.** A handoff is not
+just a place claims go stale — it is a place your own completed work can
+be overwritten by an older sentence.
 
 ---
 
