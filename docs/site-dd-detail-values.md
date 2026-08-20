@@ -353,6 +353,13 @@ today's behaviour.
 Assessment 11 — Michelle's live walk at Nabob Hill — has **23 findings**
 (read read-only; content fingerprint `11fdd001f2fca08e`). Of those:
 
+> **That fingerprint is RETIRED as of 2026-08-20.** Its algorithm was
+> never recorded, so it cannot be reproduced and could never have
+> detected a change. The replacements, with their algorithms stated,
+> are in HANDOFF: data fingerprint `f6451ecb366f6ab4`, export content
+> hash `d0b8436a3998f63b`. The 23-finding breakdown below is unchanged
+> and was re-confirmed against production on 2026-08-20.
+
 - **1** has a detail: `flooring_type` = `carpet`. Presence detail. Untouched.
 - **2** have a condition: `flooring` = `good`, `walls_ceiling` = `repair`.
 - **20** have neither.
