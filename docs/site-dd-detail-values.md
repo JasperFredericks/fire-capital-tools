@@ -3,6 +3,20 @@
 **Design only. No schema change, no migration, no code. Written 2026-08-19
 against master at `805bb9d`.**
 
+> **Still open, and unaffected by what has shipped since.** `8b8ba17`
+> closed the *choice-item* budget gap this document flagged in section 3
+> — a missing alarm now produces a line. It did nothing for the problem
+> this design addresses, which is *condition* items whose condition does
+> not say which job. The two populations were always disjoint, and the
+> shipped fix drew exactly that line: `WORK_OPTIONS` answers "does this
+> option value mean work", never "which job".
+>
+> Two corrections to the text below, both marked in place: section 3's
+> "one thing still open" is closed, and section 6's grouping-key
+> recommendation has already shipped. Section 4's reasoning about
+> `closet` and `dryer_vent` was re-checked against the code after the
+> merge and holds unchanged.
+
 The problem this solves, in one line: **our five conditions say how bad a
 thing is, and never say which job fixes it** — so `closet` and
 `dryer_vent` sit in `UNPRICED` not because nobody researched them but
@@ -77,6 +91,17 @@ Two of the nine — `closet` and `dryer_vent` — are **already in
 skipped for lack of research. They were skipped because the reference
 table's shape demands one canonical job per item and neither item has
 one. Scope detail is the missing thing, not a missing price.
+
+> **Re-checked after `8b8ba17`, and it holds unchanged.** Both are still
+> `KIND_CONDITION`, still carry no options, and are still `UNPRICED` with
+> their reasons untouched: *"no source separates them"* for `closet`,
+> *"the checklist item does not distinguish them"* for `dryer_vent`. The
+> work-options fix admitted **choice** findings to the budget and left
+> condition items exactly as they were — so it could not have helped
+> these two, and did not. If anything the merge sharpens the argument:
+> the choice-item gap is closed, and what remains unpriced is precisely
+> the set of items whose *condition* cannot say which job. That is this
+> design's whole subject.
 
 ### Direct evidence that Paresh wanted this and his tool would not give it to him
 
@@ -191,6 +216,20 @@ themselves work — `missing`, `absent`, `not_working`, `active` — and
 letting them into `work` alongside the two conditions. I am flagging it
 rather than designing it, because it changes what reaches Underwriting
 and deserves its own decision. Nothing in sections 4–6 depends on it.
+
+> **CLOSED — `8b8ba17`, 2026-08-19.** Investigated in
+> `docs/site-dd-work-options-gap.md` and fixed as described there. The
+> rule landed close to the guess above but keyed by **option set** rather
+> than by value, because the same string means opposite things in
+> different sets: `present` is work on `mold` and not on an appliance,
+> `none` is work on `egress_window` and not on `visible_leaks`. A flat
+> list of `missing / absent / not_working / active` would have been wrong
+> on four items.
+>
+> Verified on production: `gfci` recorded `not_working` produces one line
+> at $195.00 under Mechanical, Electrical & Plumbing. It reaches
+> Underwriting no differently than before, because `to_capex_lines()`
+> still has no live callers — that is a separate open item.
 
 ---
 
@@ -387,6 +426,23 @@ argument the existing docstring already makes for putting cost and
 condition in the key — "nothing can be absorbed into a quantity unless it
 is interchangeable with the rows beside it" — and two different jobs are
 not interchangeable.
+
+> **DONE — `8b8ba17`.** Shipped with the work-options fix rather than
+> with this design, because it became load-bearing there first: admitting
+> choice findings without it would have merged a missing alarm and one
+> needing replacement into "Smoke alarm ×2", swapping a silent drop for a
+> silent merge. The step remains correct for scope details and is now
+> already in place for them. **Step 3 of section 7 is therefore half
+> done** — the key is widened; the label suffix is not.
+>
+> A related piece also shipped and is worth knowing before implementing
+> the suffix: lines now carry a **`state`** field, and both exports render
+> it in the column that used to print `condition`. It resolves to the
+> condition's label for a condition item and to the *option* label for a
+> choice item. A scope-detail suffix has to compose with that field
+> rather than around it — `state` answers "what is wrong", the suffix
+> answers "which job", and those must not end up saying the same thing
+> twice on one row.
 
 ### Composing the label, not adding a column
 
