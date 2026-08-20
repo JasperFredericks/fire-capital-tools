@@ -51,7 +51,18 @@ MUTED = "#6b7280"
 BODY = "#111827"
 WARN = "#b45309"
 
-ROWS_PER_PAGE = 26
+# PDF layout. Rows are no longer a uniform height -- a line with no total
+# carries its explanation underneath -- so pages are filled by measured
+# height rather than by a fixed row count. ROWS_PER_PAGE is gone with it:
+# it could not describe a page whose rows differ in size, and keeping it as
+# a second opinion about how much fits would just be a number to disagree
+# with _paginate().
+SUMMARY_TOP = 0.865      # where the summary block starts on page 1
+ROW_H = 0.026            # one table row
+NOTE_H = 0.0185          # one wrapped line of a per-row explanation
+HEAD_GAP = 0.024         # column headings to first row
+FOOTER_TOP = 0.085       # nothing is drawn below this; footer sits at 0.05
+NOTE_WRAP = 120          # characters per note line at fontsize 7.5
 
 SOURCE_COLUMN = {
     costs.SOURCE_MANUAL: "Inspector estimate",
@@ -302,7 +313,7 @@ def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = 
             # capex line, where an explicit total legitimately overrides
             # quantity x unit cost.
             "total_cost": None,
-            "reason": (refcosts.reason(f.get("item_key"))
+            "reason": (_unpriced_reason(f.get("item_key"))
                        if described["cost"] is None else needs),
         }
         # None, not 0.0, when it cannot be computed honestly. A zero would
@@ -314,6 +325,38 @@ def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = 
                          else None)
         out.append(line)
     return out
+
+
+def _unpriced_reason(item_key: str | None) -> str:
+    """Why this line has no figure -- never the empty string.
+
+    `refcosts.reason()` answers for the items somebody has written a
+    reason for, and returns "" for anything else. A freeform item nobody
+    has researched therefore reached both exports with an empty "why" cell
+    beside an empty total: a line asking to be included in a capital
+    budget while saying nothing at all about itself.
+
+    That is the silent-gap shape this module has closed four times over,
+    and it was still open here -- found when the PDF started rendering
+    reasons and some came back blank.
+
+    The fallback states only what the code has established: no figure was
+    recorded on the finding, and the reference table has no entry for the
+    item. It does NOT say the work is unpriceable or that no figure
+    exists in the world -- neither is known.
+    """
+    written = refcosts.reason(item_key)
+    if written:
+        return written
+    known = refcosts.for_item(item_key)
+    if known is not None:
+        # In the table, but no cost reached this line -- so the gap is the
+        # finding, not the research.
+        return ("No cost was recorded on this finding, so it is listed "
+                "but not included in the total.")
+    return ("No cost was recorded on this finding and the reference table "
+            "has no researched figure for this item, so it is listed but "
+            "not included in the total.")
 
 
 def summarize(lines: list[dict[str, Any]]) -> dict[str, Any]:
@@ -446,12 +489,123 @@ def _qty(value: Any) -> str:
     return f"{number:,.0f}" if number == int(number) else f"{number:,.2f}"
 
 
+def _summary_ops(summary: dict[str, Any]) -> list[tuple[float, str, dict, float]]:
+    """The "where these numbers come from" block, as positioned draw ops.
+
+    MEASURED AND DRAWN FROM ONE LIST, ON PURPOSE
+
+    The table below it starts wherever this block ends, and pagination now
+    needs that height BEFORE anything is drawn. Computing the height in one
+    place and drawing in another is how two numbers that must agree stop
+    agreeing -- the same failure the bucket-name constant was created to
+    prevent, one layer up. So this returns the ops and the caller both
+    measures and renders them.
+
+    Each op is (x, text, text_kwargs, dy_consumed_after).
+    """
+    ops: list[tuple[float, str, dict, float]] = []
+    ops.append((0.06, "Where these numbers come from",
+                {"fontsize": 10, "fontweight": "bold", "color": INK}, 0.028))
+
+    have_total = summary["total"] is not None
+    # Three buckets, three rows. The last two used to share a line reading
+    # "N item(s), not costed", which said the same thing about an item
+    # priced at $5.75/sqft and an item nobody has ever researched.
+    rows = [
+        (SOURCE_COLUMN[costs.SOURCE_MANUAL],
+         _money(summary["by_source"][costs.SOURCE_MANUAL]) if have_total else "—",
+         BODY),
+        (SOURCE_COLUMN[costs.SOURCE_REFERENCE],
+         _money(summary["by_source"][costs.SOURCE_REFERENCE]) if have_total else "—",
+         BODY),
+        (BUCKET_PRICED_BY_SCOPE, f"{summary['unmeasured_count']} item(s)", WARN),
+        (BUCKET_NO_FIGURE, f"{summary['unresearched_count']} item(s)", MUTED),
+    ]
+    for name, value, colour in rows:
+        ops.append((0.06, name, {"fontsize": 9, "color": BODY}, 0.0))
+        ops.append((0.42, value, {"fontsize": 9, "color": colour}, 0.024))
+
+    ops.append((0.06, "", {}, 0.012))
+    for text in textwrap.wrap(summary["coverage_sentence"], 108):
+        ops.append((0.06, text, {"fontsize": 8.5, "color": WARN}, 0.020))
+
+    if summary["researched_pct"] is not None:
+        tail = (f"{summary['researched_pct']:.0f}% of the priced subtotal is "
+                f"researched national averages ({summary['researched_on']}), "
+                f"not quotes.")
+    else:
+        tail = (f"Researched national averages ({summary['researched_on']}) are "
+                f"used where a figure exists; none could be applied here.")
+    ops.append((0.06, tail, {"fontsize": 8.5, "color": MUTED}, 0.020))
+    return ops
+
+
+def _note_lines(row: dict[str, Any]) -> list[str]:
+    """The per-line explanation, wrapped, or nothing.
+
+    WHY A LINE WITH NO TOTAL EXPLAINS ITSELF ON THE PAGE
+
+    The PDF printed an em dash in the Total column and left it at that.
+    `reason` was rendered only by build_xlsx, so someone reading the budget
+    on paper saw "Walls & ceiling ... $5.75 ... per sq ft ... —" with no
+    statement of why, while the same budget in Excel carried a full
+    sentence. The summary paragraph at the top named the bucket, but a
+    reader working down a table does not carry a paragraph three inches up
+    with them, and on page two it is not even present.
+
+    An empty Total with no explanation beside it is exactly the silent-gap
+    shape this module has closed four times.
+
+    The string is `row["reason"]` VERBATIM -- the same value build_xlsx
+    writes into its "Why no estimate" column. It is not re-worded for the
+    PDF, because two documents describing one budget in two different
+    sentences is the divergence this file keeps designing against.
+    """
+    if row["total"] is not None:
+        return []
+    return textwrap.wrap(row["reason"], NOTE_WRAP) if row["reason"] else []
+
+
+def _paginate(lines: list[dict[str, Any]], first_top: float,
+              later_top: float) -> list[list[dict[str, Any]]]:
+    """Flow rows into pages by HEIGHT, because rows are no longer uniform.
+
+    A row carrying a three-line explanation is four times the height of a
+    priced one, so the old fixed 26-per-page would have run the last rows
+    off the bottom of the page as soon as notes appeared. Nothing warns
+    about that: matplotlib draws happily at negative coordinates and the
+    text simply is not on the paper.
+
+    A block never splits across pages -- a note belongs on the page its row
+    is on, which is the entire point of the change.
+    """
+    pages: list[list[dict[str, Any]]] = []
+    page: list[dict[str, Any]] = []
+    top = first_top
+    used = 0.0
+    for row in lines:
+        height = ROW_H + len(_note_lines(row)) * NOTE_H
+        available = (top - HEAD_GAP) - FOOTER_TOP
+        if page and used + height > available:
+            pages.append(page)
+            page, used, top = [], 0.0, later_top
+            available = (top - HEAD_GAP) - FOOTER_TOP
+        page.append(row)
+        used += height
+    if page or not pages:
+        pages.append(page)
+    return pages
+
+
 def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
               summary: dict[str, Any]) -> Path:
     path = Path(path)
     label = assessment.get("property_label") or "Property"
-    pages = [lines[i:i + ROWS_PER_PAGE]
-             for i in range(0, len(lines), ROWS_PER_PAGE)] or [[]]
+
+    ops = _summary_ops(summary)
+    summary_height = sum(op[3] for op in ops)
+    first_top = SUMMARY_TOP - summary_height - 0.035
+    pages = _paginate(lines, first_top, SUMMARY_TOP)
 
     with PdfPages(str(path)) as pdf:
         for page_no, page in enumerate(pages, start=1):
@@ -472,51 +626,14 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
                      ha="right", fontsize=9, color=MUTED)
 
             if page_no == 1:
-                y = 0.865
-                fig.text(0.06, y, "Where these numbers come from",
-                         fontsize=10, fontweight="bold", color=INK)
-                y -= 0.028
-                # Three buckets, three rows. The last two used to share a
-                # line reading "N item(s), not costed", which said the same
-                # thing about an item priced at $5.75/sqft and an item
-                # nobody has ever researched.
-                have_total = summary["total"] is not None
-                rows = [
-                    (SOURCE_COLUMN[costs.SOURCE_MANUAL],
-                     _money(summary["by_source"][costs.SOURCE_MANUAL])
-                     if have_total else "—", BODY),
-                    (SOURCE_COLUMN[costs.SOURCE_REFERENCE],
-                     _money(summary["by_source"][costs.SOURCE_REFERENCE])
-                     if have_total else "—", BODY),
-                    (BUCKET_PRICED_BY_SCOPE,
-                     f"{summary['unmeasured_count']} item(s)", WARN),
-                    (BUCKET_NO_FIGURE,
-                     f"{summary['unresearched_count']} item(s)", MUTED),
-                ]
-                for name, value, colour in rows:
-                    fig.text(0.06, y, name, fontsize=9, color=BODY)
-                    fig.text(0.42, y, value, fontsize=9, color=colour)
-                    y -= 0.024
-                y -= 0.012
-                for text in textwrap.wrap(summary["coverage_sentence"], 108):
-                    fig.text(0.06, y, text, fontsize=8.5, color=WARN)
-                    y -= 0.020
-                if summary["researched_pct"] is not None:
-                    fig.text(0.06, y,
-                             f"{summary['researched_pct']:.0f}% of the priced "
-                             f"subtotal is researched national averages "
-                             f"({summary['researched_on']}), not quotes.",
-                             fontsize=8.5, color=MUTED)
-                else:
-                    fig.text(0.06, y,
-                             f"Researched national averages "
-                             f"({summary['researched_on']}) are used where a "
-                             f"figure exists; none could be applied here.",
-                             fontsize=8.5, color=MUTED)
-                y -= 0.020
-                top = y - 0.035
+                y = SUMMARY_TOP
+                for x, text, kwargs, dy in ops:
+                    if text:
+                        fig.text(x, y, text, **kwargs)
+                    y -= dy
+                top = first_top
             else:
-                top = 0.865
+                top = SUMMARY_TOP
 
             # Quantity earns a column now that it can be more than 1: a
             # $600 unit cost beside a $24,000 total is unreadable without
@@ -532,7 +649,7 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
                                       ("left",) * 7 + ("right",)):
                 fig.text(x, top, head, fontsize=8.5, fontweight="bold",
                          color=MUTED, ha=align)
-            y = top - 0.024
+            y = top - HEAD_GAP
 
             for row in page:
                 fig.text(cols[0], y, textwrap.shorten(str(row["label"]), 30,
@@ -556,7 +673,19 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
                 fig.text(cols[7], y,
                          _money(row["total"]) if row["total"] is not None else "—",
                          fontsize=8.5, color=BODY, ha="right")
-                y -= 0.026
+                y -= ROW_H
+
+                # The explanation, directly under its own row. Indented so
+                # it reads as belonging to the line above rather than as a
+                # new line item, and coloured by which bucket it is in --
+                # a researched rate held back for want of a measurement is
+                # a different situation from an item nobody has priced.
+                for note in _note_lines(row):
+                    fig.text(cols[0] + 0.012, y, note, fontsize=7.5,
+                             color=WARN if (row["is_rate"]
+                                            and row["unit_cost"] is not None)
+                             else MUTED)
+                    y -= NOTE_H
 
             fig.text(0.06, 0.05,
                      "Researched averages are national figures for budgeting, "

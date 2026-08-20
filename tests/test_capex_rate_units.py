@@ -578,3 +578,181 @@ class TheTwoExportsCannotDescribeTheBudgetDifferentlyTests(unittest.TestCase):
         body = src.split("BUCKET_NO_FIGURE = ", 1)[1]
         self.assertNotIn('"%s"' % capex.BUCKET_PRICED_BY_SCOPE, body,
                          "build_pdf/build_xlsx must use the constant")
+
+
+class TheReasonIsOnThePageWithTheLineTests(unittest.TestCase):
+    """An empty Total with no explanation beside it is a silent gap.
+
+    build_pdf rendered `reason` nowhere -- three uses in build_xlsx, none in
+    build_pdf -- so a budget read on paper showed "Walls & ceiling ... $5.75
+    ... per sq ft ... dash" and said nothing about why. The summary
+    paragraph named the bucket, but only on page one, and a reader working
+    down a table does not carry a paragraph up the page with them.
+
+    The requirement: a line with no total says why WHERE THE LINE IS.
+    """
+
+    def lines(self):
+        rows = [finding("walls_ceiling", 5.75, unit=refcosts.UNIT_SQFT, room_id=1),
+                finding("appliance_range", 1150.0, unit=refcosts.UNIT_EACH, room_id=2),
+                finding("foundation", None, source="none", room_id=3)]
+        return capex.build_lines(rows, LABELS)
+
+    def rendered(self):
+        import tempfile
+        from pathlib import Path
+        from pypdf import PdfReader
+        lines = self.lines()
+        summary = capex.summarize(lines)
+        d = Path(tempfile.mkdtemp())
+        capex.build_pdf(d / "b.pdf", {"property_label": "X"}, lines, summary)
+        text = "\n".join(p.extract_text() for p in PdfReader(str(d / "b.pdf")).pages)
+        return lines, text
+
+    def test_every_line_without_a_total_explains_itself(self):
+        lines, text = self.rendered()
+        unpriced = [l for l in lines if l["total"] is None]
+        self.assertTrue(unpriced, "fixture must contain unpriced lines")
+        for l in unpriced:
+            first = textwrap.wrap(l["reason"], capex.NOTE_WRAP)[0]
+            self.assertIn(first, text,
+                          f"{l['label']} has no total and no explanation on the page")
+
+    def test_a_priced_line_carries_no_note(self):
+        """The note answers "why no total". A line with a total has no why."""
+        priced = [l for l in self.lines() if l["total"] is not None]
+        self.assertTrue(priced)
+        for l in priced:
+            self.assertEqual(capex._note_lines(l), [])
+
+    def test_the_pdf_uses_the_xlsx_string_not_its_own_wording(self):
+        """Two documents, one sentence.
+
+        Re-wording the reason for the PDF is precisely the divergence the
+        bucket constant was created to prevent, one layer down.
+        """
+        import tempfile
+        from pathlib import Path
+        from openpyxl import load_workbook
+        lines = self.lines()
+        summary = capex.summarize(lines)
+        d = Path(tempfile.mkdtemp())
+        capex.build_xlsx(d / "b.xlsx", {"property_label": "X"}, lines, summary)
+        cells = {str(c.value) for row in load_workbook(d / "b.xlsx").active
+                 for c in row if c.value is not None}
+        _, pdf_text = self.rendered()
+        for l in lines:
+            if l["total"] is None and l["reason"]:
+                self.assertIn(l["reason"], cells, "xlsx must carry the reason")
+                for frag in textwrap.wrap(l["reason"], capex.NOTE_WRAP):
+                    self.assertIn(frag, pdf_text,
+                                  "pdf must carry the SAME string, wrapped")
+
+
+class AnUnpricedLineAlwaysSaysWhyTests(unittest.TestCase):
+    """refcosts.reason() returns "" for anything nobody has written up.
+
+    So a freeform item with no cost reached both exports with an empty
+    "why" beside an empty total -- a line asking to be in a capital budget
+    while saying nothing about itself. Found when the PDF started
+    rendering reasons and some came back blank.
+    """
+
+    def unknown_item_line(self):
+        f = finding("some_freeform_thing", None, source="none")
+        return capex.build_lines([f], {"some_freeform_thing": "Custom item"})[0]
+
+    def test_the_gap_was_real(self):
+        """The bare accessor still returns nothing for this key."""
+        self.assertEqual(refcosts.reason("some_freeform_thing"), "")
+        self.assertIsNone(refcosts.for_item("some_freeform_thing"))
+
+    def test_but_the_line_is_never_silent(self):
+        line = self.unknown_item_line()
+        self.assertIsNone(line["total"])
+        self.assertTrue(line["reason"], "an unpriced line must say why")
+
+    def test_it_claims_only_what_the_code_established(self):
+        """Part 28 standard.
+
+        Established: no cost on the finding, and no entry in the table.
+        NOT established, and so not said: that the work cannot be priced,
+        or that no figure exists in the world.
+        """
+        reason = self.unknown_item_line()["reason"]
+        self.assertIn("No cost was recorded on this finding", reason)
+        self.assertIn("no researched figure for this item", reason)
+        self.assertIn("not included in the total", reason)
+        for overclaim in ("cannot be priced", "does not exist", "no figure exists",
+                          "unpriceable", "every other"):
+            self.assertNotIn(overclaim, reason.lower())
+
+    def test_a_known_item_does_not_claim_the_table_is_empty(self):
+        """It IS in the table; the gap is the finding, not the research."""
+        reason = capex._unpriced_reason("appliance_range")
+        self.assertIn("No cost was recorded on this finding", reason)
+        self.assertNotIn("no researched figure", reason)
+
+    def test_a_written_reason_still_wins(self):
+        self.assertEqual(capex._unpriced_reason("foundation"),
+                         refcosts.reason("foundation"))
+
+
+class ThePdfPaginatesByHeightTests(unittest.TestCase):
+    """Rows stopped being a uniform height when notes arrived.
+
+    A fixed 26-per-page would have run the last rows off the bottom as soon
+    as a page filled with three-line explanations, and nothing warns about
+    it: matplotlib draws happily at negative coordinates and the text
+    simply is not on the paper.
+    """
+
+    def many(self, key, cost, unit, n=60):
+        rows = [finding(key, cost, unit=unit, room_id=i, ident=i) for i in range(n)]
+        return capex.build_lines(rows, LABELS)
+
+    def render(self, lines, name):
+        import tempfile
+        from pathlib import Path
+        summary = capex.summarize(lines)
+        d = Path(tempfile.mkdtemp())
+        capex.build_pdf(d / f"{name}.pdf", {"property_label": "X"}, lines, summary)
+        return d / f"{name}.pdf"
+
+    def test_notes_change_how_many_rows_fit(self):
+        """The positive control: a paginator that ignored notes would give
+        the same page count for both."""
+        from pypdf import PdfReader
+        noted = len(PdfReader(str(self.render(
+            self.many("walls_ceiling", 5.75, refcosts.UNIT_SQFT), "n"))).pages)
+        plain = len(PdfReader(str(self.render(
+            self.many("appliance_range", 1150.0, refcosts.UNIT_EACH), "p"))).pages)
+        self.assertGreater(noted, plain, "note height must consume page space")
+
+    def test_nothing_is_drawn_below_the_footer(self):
+        """Measured on the real draw calls, not inferred from the maths."""
+        import matplotlib.figure as mfig
+        seen = []
+        original = mfig.Figure.text
+
+        def spy(self, x, y, s, *a, **k):
+            seen.append(y)
+            return original(self, x, y, s, *a, **k)
+
+        mfig.Figure.text = spy
+        try:
+            self.render(self.many("walls_ceiling", 5.75, refcosts.UNIT_SQFT), "y")
+        finally:
+            mfig.Figure.text = original
+        self.assertTrue(seen)
+        self.assertGreaterEqual(min(seen), 0.05,
+                                "content ran off the bottom of the page")
+
+    def test_no_note_is_lost(self):
+        from pypdf import PdfReader
+        lines = self.many("walls_ceiling", 5.75, refcosts.UNIT_SQFT)
+        path = self.render(lines, "z")
+        text = "\n".join(p.extract_text() for p in PdfReader(str(path)).pages)
+        for l in lines:
+            for frag in textwrap.wrap(l["reason"], capex.NOTE_WRAP):
+                self.assertIn(frag, text)
