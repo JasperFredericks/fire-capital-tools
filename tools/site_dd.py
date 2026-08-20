@@ -119,6 +119,9 @@ def index():
     return render_template(
         "tools/site_dd.html",
         assessments=rows,
+        # The index is the one screen that shows an ASSESSMENT status,
+        # which is a separate vocabulary from an area's.
+        assessment_status_label=db.assessment_status_label,
         deal=deal,
         deal_id=deal_id,
         today=datetime.date.today().isoformat(),
@@ -205,8 +208,21 @@ def detail(assessment_id):
         summary=summary,
         areas=areas, area_rollups=area_rollups,
         area_kinds=db.AREA_KINDS, area_statuses=db.AREA_STATUSES,
-        # Labels, not the stored keys. See AREA_STATUS_LABELS.
-        area_status_labels=db.AREA_STATUS_LABELS,
+        # The ACCESSORS, not the raw maps.
+        #
+        # A template that subscripts a label dict does NOT raise on a
+        # missing key -- this app runs Jinja's default Undefined, so
+        # `area_status_labels[x]` renders as the EMPTY STRING. Verified,
+        # after an earlier note here claimed it raised. Silent is the
+        # worse half of the trade: a value from an older vocabulary
+        # produces "Unit &middot;" with nothing after it, and the fact
+        # that it was unrecognised leaves no trace at all.
+        #
+        # The accessor says "Not stated", which is a statement rather
+        # than a gap. It also gives area_status_label() the caller it
+        # never had -- it shipped in 5cde052 reached only by its test.
+        area_status_label=db.area_status_label,
+        assessment_status_label=db.assessment_status_label,
         conditions=cond.CONDITIONS,
         condition_labels=cond.CONDITION_LABELS,
         condition_hints=cond.CONDITION_HINTS,
@@ -560,7 +576,8 @@ def area_detail(assessment_id, area_id):
         manual_cost_label=costs.SOURCE_LABELS[costs.SOURCE_MANUAL],
         condition_colours=cond.CONDITION_COLOURS,
         statuses=db.AREA_STATUSES,
-        area_status_labels=db.AREA_STATUS_LABELS, copy_sources=others,
+        # See detail() above for why this is the accessor, not the map.
+        area_status_label=db.area_status_label, copy_sources=others,
         finding_count=finding_count,
         feedback_tool=FEEDBACK_TOOL_NAME,
     )

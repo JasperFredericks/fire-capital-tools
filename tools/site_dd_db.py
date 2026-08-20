@@ -46,6 +46,35 @@ STATUS_DRAFT = "draft"
 STATUS_COMPLETE = "complete"
 STATUSES = (STATUS_DRAFT, STATUS_COMPLETE)
 
+# An assessment's status as it is CALLED, which is a different fact from
+# what it is stored as. Fourth map of this shape, after CONDITION_LABELS,
+# ROOM_TYPE_LABELS and AREA_STATUS_LABELS.
+#
+# Nothing is broken today: `draft` and `complete` are single lowercase
+# words, so `{{ a.status|title }}` happened to be right. That is an
+# accident of the two values chosen, exactly as it was for the area
+# statuses before one of them needed to become "vacant, needs turn" --
+# and this map exists so the accident never has to hold. A third status
+# ("in review", "signed off") would otherwise ship to a screen as
+# "In_Review".
+ASSESSMENT_STATUS_LABELS = {
+    STATUS_DRAFT: "Draft",
+    STATUS_COMPLETE: "Complete",
+}
+
+
+def assessment_status_label(value: Any) -> str:
+    """What to show for a stored assessment status.
+
+    "Draft" rather than "Not stated" for an unrecognised value, because
+    unlike an area's status this column is NOT NULL with a default of
+    `draft` -- create_assessment() writes `fields.get("status") or
+    STATUS_DRAFT`. An assessment always has a status, so there is no
+    unstated state to report, and a value from an older vocabulary is
+    most honestly read as "not finished" rather than as blank.
+    """
+    return ASSESSMENT_STATUS_LABELS.get(value, ASSESSMENT_STATUS_LABELS[STATUS_DRAFT])
+
 MAX_LABEL_LEN = 255
 MAX_NOTE_LEN = 4000
 
