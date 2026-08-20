@@ -146,7 +146,7 @@
             <span style="font-weight:600; color:#111827;">{{ r.area.label }}</span>
             <span class="stat-box-sub" style="display:block;">
               {{ 'Unit' if r.area.kind == 'unit' else 'Common area' }}
-              {%- if r.area.status %} &middot; {{ r.area.status|title }}{% endif %}
+              {%- if r.area.status %} &middot; {{ area_status_labels[r.area.status] }}{% endif %}
               &middot; {{ r.room_count }} room{{ '' if r.room_count == 1 else 's' }}
               &middot; {{ '%.0f%%'|format(r.summary.completion_pct) }} complete
               {%- if r.summary.work_count %} &middot; <span style="color:#b45309;">{{ r.summary.work_count }} need work</span>{% endif %}
@@ -178,7 +178,7 @@
       <label class="form-label" for="area_status">Status</label>
       <select class="form-input sdd-touch" id="area_status" name="status">
         <option value="">Not stated</option>
-        {% for st in area_statuses %}<option value="{{ st }}">{{ st|title }}</option>{% endfor %}
+        {% for st in area_statuses %}<option value="{{ st }}">{{ area_status_labels[st] }}</option>{% endfor %}
       </select>
     </div>
     <button type="submit" class="btn btn-primary sdd-touch">Add</button>
