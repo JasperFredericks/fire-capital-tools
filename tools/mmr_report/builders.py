@@ -1,4 +1,5 @@
 from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 from datetime import datetime
 import re
 
@@ -587,6 +588,51 @@ def build_summary(wb, data):
 
     # Open directly to this sheet instead of whatever sheet was active before.
     wb.active = wb.sheetnames.index("Summary")
-    ws.sheet_view.tabSelected = True
+    scope_workbook_for_print(wb, ws)
 
     return ws
+
+
+def scope_workbook_for_print(wb, summary_ws):
+    """Make Ctrl-P print the Summary, and nothing else.
+
+    THE BUG THIS FIXES
+
+    The download is the source MMR with a Summary sheet prepended, and the
+    source workbook arrives with whatever tabs were selected when somebody
+    last saved it. Setting Summary active did not deselect those, and
+    Excel's default print option is "Print Active Sheets" -- PLURAL. With
+    two tabs selected it prints both, and the second one is a raw export
+    sheet with no print area: General Ledger is 1,168 rows on OXPT.
+
+    That is where "it tries to print all 33 pages" comes from.
+
+    Measured across four real MMRs before the fix, the stray tab differed
+    per source file rather than per property -- OXPT carried "Prospect
+    Source Summary", Maple Valley "Cash Flow", Canyon "Work Order
+    Summary", and ERA happened to be clean. So this was never the
+    property-specific bug it was reported as; ERA was simply the one whose
+    source workbook had a tidy selection.
+
+    WHY SOURCE SHEETS ALSO GET A PRINT AREA
+
+    Not defence in depth -- a different need. Someone who deliberately
+    selects Rent Roll to print should get its used range rather than 685
+    rows sprawling across whatever Excel decides.
+
+    Deliberately nothing else. No fit-to-page, no column widths, no
+    reformatting, no reordering. These are somebody else's export and a
+    print area is the one setting that is additive and reversible;
+    everything else would edit an artifact we did not author.
+    """
+    for sheet in wb.worksheets:
+        selected = sheet is summary_ws
+        sheet.sheet_view.tabSelected = selected
+        if selected or sheet.print_area:
+            continue
+        # Only scope a sheet that actually has content; openpyxl reports
+        # "A1:A1" for an empty sheet and pinning that would hide the fact
+        # that it is empty.
+        if sheet.max_row and sheet.max_column and (sheet.max_row > 1 or sheet.max_column > 1):
+            sheet.print_area = (
+                f"A1:{get_column_letter(sheet.max_column)}{sheet.max_row}")
