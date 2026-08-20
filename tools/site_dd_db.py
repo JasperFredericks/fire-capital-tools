@@ -934,6 +934,48 @@ AREA_VACANT = "vacant"
 AREA_DOWN = "down"
 AREA_STATUSES = (AREA_OCCUPIED, AREA_VACANT, AREA_DOWN)
 
+# What each status is CALLED on screen, which is a different fact from
+# what it is stored as. Declared beside the vocabulary it describes, the
+# way CONDITION_LABELS sits beside CONDITIONS and ROOM_TYPE_LABELS beside
+# ROOM_TYPES.
+#
+# WHY THIS EXISTS BEFORE IT IS NEEDED
+#
+# Every render site was `{{ area.status|title }}` -- the stored value,
+# title-cased. That works only while every value is a single lowercase
+# word, which is true of these three and is an accident of them being the
+# first three. The moment the vocabulary gains a value like
+# `vacant_not_ready` -- and it is under discussion, because a unit that is
+# vacant and needs a turn is neither `vacant` nor `down` -- the screen
+# would read "Vacant_Not_Ready". A stored key leaking into an
+# inspector-facing screen is the same class of defect as `not_working`
+# appearing in a capital budget, which the work-options fix had to correct
+# at the same time it was admitting those findings.
+#
+# So the map lands first, on its own. It is display-neutral today by
+# construction: every label here is byte-identical to what `|title`
+# already produced, which a test pins. That makes a later vocabulary
+# change a data change, not a data change plus a display fix.
+AREA_STATUS_LABELS = {
+    AREA_OCCUPIED: "Occupied",
+    AREA_VACANT: "Vacant",
+    AREA_DOWN: "Down",
+}
+
+
+def area_status_label(value: Any) -> str:
+    """What to show for a stored area status.
+
+    "Not stated" for NULL and for anything unrecognised, matching the
+    empty option both pickers already offer. `status` is nullable and
+    create_area() writes NULL for any value outside AREA_STATUSES, so an
+    unset status is a normal state rather than an error -- and a value
+    left behind by an older vocabulary reads as unstated rather than as a
+    raw key, which is the same tolerance cond.label() gives a stale
+    condition.
+    """
+    return AREA_STATUS_LABELS.get(value, "Not stated")
+
 
 def create_area(conn: sqlite3.Connection, assessment_id: int,
                 fields: dict[str, Any]) -> int:

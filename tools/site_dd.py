@@ -205,6 +205,8 @@ def detail(assessment_id):
         summary=summary,
         areas=areas, area_rollups=area_rollups,
         area_kinds=db.AREA_KINDS, area_statuses=db.AREA_STATUSES,
+        # Labels, not the stored keys. See AREA_STATUS_LABELS.
+        area_status_labels=db.AREA_STATUS_LABELS,
         conditions=cond.CONDITIONS,
         condition_labels=cond.CONDITION_LABELS,
         condition_hints=cond.CONDITION_HINTS,
@@ -557,7 +559,8 @@ def area_detail(assessment_id, area_id):
         reference_hint=costs.reference_hint,
         manual_cost_label=costs.SOURCE_LABELS[costs.SOURCE_MANUAL],
         condition_colours=cond.CONDITION_COLOURS,
-        statuses=db.AREA_STATUSES, copy_sources=others,
+        statuses=db.AREA_STATUSES,
+        area_status_labels=db.AREA_STATUS_LABELS, copy_sources=others,
         finding_count=finding_count,
         feedback_tool=FEEDBACK_TOOL_NAME,
     )
