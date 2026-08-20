@@ -375,9 +375,10 @@ something is not being done.
 
 ## Premises that turned out to be false
 
-Both came from confident statements in the previous handoff or in
-briefing text, and both cost investigation time. **Check premises against
-the code.**
+These came from confident statements in a previous handoff, in briefing
+text, or -- in the fourth case -- from one of our own reports. Every one
+cost investigation time. **Check premises against the code**, and where
+the premise is about a checker we wrote, run the checker.
 
 1. *"Quick Deal Analyzer shares `deal_analyzer_math`."* It does not.
    `quick_analyzer_math.py` imports only stdlib; every mention of
@@ -400,6 +401,35 @@ the code.**
    wired to `/tools/site-dd/assessment/<id>/capex.<fmt>`, already
    satisfying every requirement that was being specified as if new. The
    real defect was that nothing linked to it.
+
+4. *"Widening the dead-reader sweep's `tools/*_db.py` glob would have
+   caught `to_capex_lines()`."* **It would not.** The sweep is gated on
+   **two** things and only one of them is the glob:
+
+   ```
+   READER_PREFIXES = ('list_', 'get_', 'fetch_', 'find_', 'count_',
+                      'search_', 'load_', 'read_')
+   ```
+
+   `to_capex_lines` begins with `to_`, so it fails the prefix gate
+   wherever it lives. Catching it needs the prefix list widened too,
+   which is a different and much noisier instrument -- measured in
+   `docs/site-dd-to-capex-lines.md` at 81 hits, 54 of them
+   framework-dispatched routes.
+
+   **This one is worth more than the other three, because of how it
+   propagated.** It was asserted in a Part 31 report, repeated back in
+   the Part 35 prompt as settled, and acted on as the premise for a
+   piece of work. Neither side checked the mechanism. A claim that
+   travels from a report into a prompt and back has been *confirmed by
+   repetition*, which is not confirmation at all -- and it is the same
+   failure as the RentCast disclosure, where four cached addresses
+   agreeing stood in for checking all seven.
+
+   The rule that catches this one is narrower than "check premises
+   against the code", because the premise here was about **our own
+   instrument**: *before claiming a checker would or would not have
+   caught something, run it.* It takes one command.
 
 ---
 
