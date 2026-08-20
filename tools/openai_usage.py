@@ -231,16 +231,6 @@ def record(feature: str, response: Any = None, *,
         pass
 
 
-def get_usage(conn: sqlite3.Connection, feature: str,
-              year_month: str | None = None) -> int:
-    """Calls made by one feature this month. Mirrors
-    market_data_cache.get_rentcast_usage."""
-    row = conn.execute(
-        "SELECT calls FROM openai_usage WHERE year_month = ? AND feature = ?",
-        (year_month or current_year_month(), clean_feature(feature))).fetchone()
-    return row["calls"] if row else 0
-
-
 def usage_for_month(conn: sqlite3.Connection,
                     year_month: str | None = None) -> dict[str, Any]:
     """The per-feature breakdown for one month, plus its totals.

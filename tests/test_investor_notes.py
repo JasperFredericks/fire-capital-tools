@@ -120,8 +120,16 @@ class MatchTests(unittest.TestCase):
         self.assertGreater(aliased, plain)
 
     def test_a_word_boundary_is_respected(self):
-        self.assertEqual(matching.count_mentions(
-            matching.normalize("jacksonville is elsewhere"), "jackson"), 0)
+        """Kept when count_mentions() was deleted, and rerouted through
+        score() -- the live path, using the same _pattern() helper.
+
+        The property is real and this app has a deal called Jackson, so
+        "jacksonville" matching it would put roof work on the wrong
+        building."""
+        self.assertEqual(
+            matching.score("jacksonville is elsewhere", [JACKSON])[0]["mentions"], 0)
+        self.assertEqual(
+            matching.score("1120 jackson street reroof", [JACKSON])[0]["mentions"], 1)
 
 
 class PropertyRegistryTests(unittest.TestCase):

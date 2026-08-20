@@ -591,20 +591,3 @@ def unpriced_report(labels: dict[str, str] | None = None) -> list[dict[str, Any]
         key=lambda r: r["label"].lower())
 
 
-def coverage(all_keys) -> dict[str, Any]:
-    """How much of the checklist has a number, for the report header."""
-    keys = list(dict.fromkeys(all_keys))
-    by = {"priced": [], "unpriced": [], "not_a_cost_item": [], "unknown": []}
-    for k in keys:
-        by[status(k)].append(k)
-    priceable = len(by["priced"]) + len(by["unpriced"])
-    return {
-        "total": len(keys),
-        "priced": len(by["priced"]),
-        "unpriced": len(by["unpriced"]),
-        "not_a_cost_item": len(by["not_a_cost_item"]),
-        "unknown": len(by["unknown"]),
-        "priceable": priceable,
-        "pct_of_priceable": (len(by["priced"]) / priceable * 100) if priceable else 0.0,
-        "keys": by,
-    }

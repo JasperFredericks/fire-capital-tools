@@ -682,13 +682,137 @@ committed.
 
 ## Things that are true and easy to lose
 
-**`SOURCE_SITE_DD` is dead code.** `underwriting_capex.py` defines it and
-`summarize()` counts it, and **nothing writes it**. Its own comment says
-it is "the reserved value for rows Site DD's repair list will one day
-write". Production holds 4 capex lines, all `source='manual'`.
-Consequence, verified: **Site DD capex does not reach Underwriting**, so
-the rate bug never touched equity, IRR or equity multiple. It wants a
-cleanup pass, or an implementation.
+**`SOURCE_SITE_DD` is dead code, and it is the model for how to leave
+one.** `underwriting_capex.py` defines it and `summarize()` counts it,
+and **nothing writes it**. Its own comment says it is "the reserved value
+for rows Site DD's repair list will one day write" -- and that sentence is
+the entire reason its status was recoverable. Production holds 4 capex
+lines, all `source='manual'`. Consequence, verified: **Site DD capex does
+not reach Underwriting**, so the rate bug never touched equity, IRR or
+equity multiple. It wants an implementation, not a cleanup: see the
+waiting-half convention below.
+
+---
+
+## Dead paths: five found, four different ways, and the convention that follows
+
+**Five features have shipped correct, tested and unreachable:**
+
+| | found by |
+|---|---|
+| `feedback_db.list_feedback()` | the dead-reader sweep |
+| `notes_db.list_updates()` | the dead-reader sweep |
+| the notetaker itself | a navigation check -- the sweep cannot see a self-referential cluster |
+| the Site DD capex exports | looking for links from the detail page |
+| `site_dd_costs.to_capex_lines()` | an investigation, Part 35 |
+
+**Four different means. A sixth instrument is not the lesson.**
+
+That was measured rather than assumed. The candidate sweep -- *a public
+module-level function called nowhere in production, not even by its own
+module* -- yields **81 hits**, of which **54 are Flask route handlers**
+the framework dispatches and `test_route_reachability` already covers,
+leaving **27** real candidates. Triaged:
+
+| | |
+|---|---|
+| legitimate public API, uncalled today | 11 |
+| symmetric CRUD accessors | 4 |
+| internal helpers of one large module | 7 |
+| genuinely superseded leftovers | 3 -- **deleted** |
+| real unfinished work | 1 -- `to_capex_lines` |
+
+**None of the 27 concealed a feature.** That is the number that decides
+it. `list_feedback` and `list_updates` were different in kind: each was a
+working feature with no way in, so a person lost something every day.
+Nothing in the 27 is costing anyone anything. A sweep producing 27
+entries needing 27 written reasons, 26 of which say "this is fine", is
+permanent maintenance for a yield already in hand.
+
+### The waiting-half convention
+
+**When a feature is built in halves and one half ships alone, that half
+carries a comment saying what it is waiting for.** A convention, not an
+instrument, and it costs nothing.
+
+The comment states three things:
+
+1. **That nothing calls it**, so a reader is not left inferring it.
+2. **What the other half is** -- the route, the writer, the screen.
+3. **Whether it is safe to wire as-is.** This is the part `SOURCE_SITE_DD`
+   did not need and `to_capex_lines` badly did: it has drifted three
+   correctness fixes behind `build_lines()`, and connecting it would put
+   the `b613a76` rate bug into equity and IRR. Someone finding it in six
+   months needs that warning **in the file**, not only in a doc.
+
+Both live examples are worth reading: `underwriting_capex.SOURCE_SITE_DD`
+for the short form, `site_dd_costs.to_capex_lines()` for the form that
+also has to say "do not connect this yet".
+
+### The three that were deleted, and why they were not waiting halves
+
+`investor_notes_match.count_mentions`, `openai_usage.get_usage`,
+`site_dd_reference_costs.coverage`. The test that separates a leftover
+from a waiting half: **does anything else now do the job?**
+
+* `count_mentions` -- superseded *inside its own module* by
+  `_distinct_spans`, which counts DISTINCT mentions because summing
+  per-phrase counts was wrong. Its word-boundary test was **kept** and
+  rerouted through `score()`; the property is real and this app has a
+  deal called Jackson, so "jacksonville" must not match it.
+* `get_usage` -- a single-feature slice of what the live
+  `usage_for_month()` already returns in full.
+* `coverage` -- its docstring said "for the report header", which reads
+  like a waiting half. It is not: that header exists and was built
+  differently, from budget *lines* rather than catalogue keys, as
+  `summarize()`'s three buckets plus `researched_pct`, with the reference
+  table and the unpriced list printed in full on their own sheets.
+
+`to_capex_lines` fails that test and so survives: nothing else writes
+Site DD findings into Underwriting.
+
+---
+
+## The ten label-map subscripts, and where each guard actually sits
+
+Recorded for whoever widens a vocabulary next. `AREA_STATUS_LABELS` and
+`ASSESSMENT_STATUS_LABELS` are now read through accessors and a test
+forbids subscripting them. **Ten other subscripts remain, all safe today,
+but not all safe for the same reason** -- and the difference is what
+matters when a vocabulary grows.
+
+Jinja here runs the **default `Undefined`**, so a missing key renders as
+the **empty string**. A subscript that misses is therefore silent, not
+loud (see false premise #5).
+
+| site | expression | guarded by |
+|---|---|---|
+| `site_dd_area.html:19` | `condition_labels[c]` | **construction** -- `c` iterates `CONDITIONS` |
+| `site_dd_area.html:76` | `room_type_labels[r.room_type]` | **a route check** -- `site_dd.py:622` |
+| `site_dd_detail.html:242` | `condition_labels[c]` | **construction** |
+| `site_dd_room.html:3` | `room_type_labels[room.room_type]` | **a route check** |
+| `site_dd_room.html:24` | `condition_labels[c]` | **construction** |
+| `site_dd_room.html:48` | `room_type_labels[room.room_type]` | **a route check** |
+| `site_dd_room.html:310` | `room_type_labels[prev_room.room_type]` | **a route check** |
+| `site_dd_room.html:346` | `room_type_labels[r.room_type]` | **a route check** |
+| `investor_notes.html:105` | `source_labels[s]` | **construction** -- `s` iterates `sources` |
+| `underwriting_detail.html:392` | `capex_scope_labels[s]` | **construction** -- `s` iterates `capex_scopes` |
+
+**Five are guarded by construction** and cannot break: the loop supplies
+the key. **Five are guarded by a route check** --
+`if room_type not in uc.ROOM_TYPE_LABELS` at `site_dd.py:622`, before
+`create_room()` is reached. `create_room()` itself does not validate.
+
+That is the fragile half. The guard sits one layer away from the read, so
+a second writer -- a bulk import, a copy-layout variant, a fixture, a
+future rent-roll seeder creating rooms directly -- writes an unvalidated
+`room_type` and five templates go quietly blank. Nothing fails; a room
+simply loses its name.
+
+**This is the same reasoning that made the status maps worth doing before
+the widening rather than after.** The cheap version of the protection is
+this table; the real version is an accessor at each read. If room types
+are ever widened, do the accessor first.
 
 **The Railway token in `~/.railway/config.json` expires roughly hourly,
 and a stale one looks exactly like a permissions problem.** Every
