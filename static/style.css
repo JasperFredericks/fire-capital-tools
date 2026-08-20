@@ -2389,13 +2389,24 @@ hr.divider {
   border-radius: 50%;
 }
 
+/* `from -90deg` is load-bearing, not decoration.
+   A conic-gradient starts at 12 o'clock and sweeps clockwise, so a plain
+   0deg-180deg sweep paints the RIGHT half of the circle. The visible box
+   is 100x54 with overflow hidden -- the TOP half. The two overlap only in
+   the top-right quadrant, so the track rendered as a quarter arc and the
+   fill stopped moving at 50%: every property at or above half occupancy
+   drew an identical full quarter. That is the "static gauge that doesn't
+   match the percentage".
+   Starting at -90deg puts 0deg at 9 o'clock, so the 180deg sweep runs
+   left -> top -> right and lands exactly on the visible semicircle. */
 .occ-gauge-bg {
-  background: conic-gradient(#e5e7eb 0deg 180deg, transparent 180deg 360deg);
+  background: conic-gradient(from -90deg, #e5e7eb 0deg 180deg, transparent 180deg 360deg);
 }
 
 /* --occ-deg is set via JS; default 0 */
 .occ-gauge-fill {
   background: conic-gradient(
+    from -90deg,
     var(--fire-orange) 0deg var(--occ-deg, 0deg),
     transparent var(--occ-deg, 0deg) 180deg,
     transparent 180deg 360deg
