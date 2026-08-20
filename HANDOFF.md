@@ -536,6 +536,80 @@ the claim is stronger than the evidence.
 
 ---
 
+## A claim that holds across the sample you have is not established
+
+Three instances this session, all the same shape: someone reasons to a
+plausible mechanism, checks it against the cases that prompted the
+question, finds agreement, and ships it as fact.
+
+  1. **The refetch-versus-filter hypothesis.** Both rent-comp selects are
+     client-side and wired identically. The hypothesis survived the
+     reporter's own description of the symptom and died on the cached data.
+  2. **Scorecard Pro's warnings card** asserts *"this file does not state
+     Gross Potential Rent"*. What the code knows is that **nothing matched
+     account code 4110** -- and the parser carries several account
+     dialects, so those are different claims. It also promises "every
+     other number is unaffected" while NRI reconstruction is skipped.
+  3. **The RentCast subject disclosure**, which we wrote ourselves *one
+     step after* flagging (2). It asserted comparables are matched to the
+     subject's size, inferred from four cached addresses where it held.
+     False on three of the seven we had: Lubbock 2 of 15, both Belvedere
+     rows 3 of 15.
+
+**The rule: check the claim against every case you have, not the ones
+that prompted it.** Seven addresses were sitting in the cache the whole
+time; looking at four of them is what shipped a false statement to a real
+user.
+
+The corollary for messages specifically: **a page may only state what it
+can count.** If the composition is in the DOM or the payload, compute the
+sentence from it. If the cause is genuinely unknown, say what is missing
+rather than why.
+
+### The audit that found it
+
+Five honest-incompleteness messages were checked against what the code
+establishes. Four are sound: the capex three-bucket sentence (it counts
+`is_rate and unit_cost is not None` versus `unit_cost is None`), "cost
+entered, unit not specified" (cost exists, unit is None, and the
+magnitude hint is explicitly labelled a hint), the unpriced-item reasons
+(human-authored claims about the world that do not pretend to be derived),
+and the capex "whole **recorded** budget" phrasing, which is carefully
+qualified.
+
+The fifth was the RentCast disclosure, now fixed.
+
+One message is sound but **prescribes an action nobody will take**:
+"Needs a measured floor area before it can be totalled." Michelle's answer
+-- *"don't worry about calculating paint, we just need to determine the
+conditions"* -- means no measurement will ever be recorded. The
+"condition-only, priced by scope" rewording is queued and now has two
+reasons.
+
+---
+
+## Uncommitted work reported as a branch, twice
+
+**Before reporting a branch as ready, verify it exists at the claimed SHA:
+`git log -1 <branch>` plus `git status --porcelain` for a clean tree.**
+
+Twice this session a report said "built and verified on branch X" when the
+work was sitting **uncommitted in the working tree** and the branch pointed
+at master's head:
+
+  * `sitedd-checklist-gaps` (Part 21) -- caught at the start of the next
+    run, which opened by committing it.
+  * `scorecard-trend-labels` (Part 26) -- caught only when `git merge`
+    answered "Already up to date."
+
+Nothing was lost either time, but the reports claimed a durability they
+did not have, and a context-limited session ending on that claim is
+exactly how work does get lost. Tests passing is not evidence the work is
+committed.
+
+
+---
+
 ## Things that are true and easy to lose
 
 **`SOURCE_SITE_DD` is dead code.** `underwriting_capex.py` defines it and
