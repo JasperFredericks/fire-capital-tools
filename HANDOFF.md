@@ -541,6 +541,18 @@ uploaded file**, so a new source workbook can present as a new bug.
 
 ### The address-duplicate decision: do NOT change normalize_address_key
 
+> **Part 38 Step B investigated this and the plan below does not survive
+> the data.** The four duplicate rows came from the **Rent Comps
+> standalone search box**, not from deal entry — production has two deals,
+> neither of them Steiner or Belvedere, and ten of twelve cached rows
+> match no deal. So "canonicalise when a deal is created or edited" would
+> have run zero times against the addresses that collided, and could not
+> have merged them anyway, since they differ by the street-type suffix
+> that is ruled out just below. Both pairs were confirmed to hold
+> equivalent data; nothing was deleted. Full write-up, including a live
+> ZIP+4 cache-miss defect on deal 1, in
+> `docs/address-normalize-at-entry.md`.
+
 The cache holds separate paid rows for `24 steiner` / `24 steiner street`
 and `598 belvedere` / `598 belvedere street`, because the key function only
 lowercases and collapses whitespace.
@@ -763,11 +775,27 @@ by line-grep — a line-grep tally produced a phantom 14-test discrepancy.
 **Assessment 11 is Michelle's live work.** Nabob Hill, inspector MJ,
 2026-08-16, one unit, one kitchen, 23 findings. Read-only, always. Its
 `property_label` created a 12th entry in the notetaker property registry
-and **does not resolve to Deal Dive deal 2 (1120 Jackson Street)**, which
-is plausibly the same building. One alias row would merge them —
-`site_dd_assessments.deal_id` is `None` on all three assessments and
-nothing populates it. Blocked on her confirming they are the same
-property.
+and does not resolve to Deal Dive deal 2 (1120 Jackson Street) *by label*,
+which is plausibly the same building.
+
+**CORRECTED 2026-08-20.** The sentence that stood here — "`deal_id` is
+`None` on all three assessments and nothing populates it" — was wrong on
+both counts, and read read-only to check:
+
+```
+assessment  2 | '19 bay vista drive' | deal_id = None
+assessment  6 | '19 bay vista drive' | deal_id = None
+assessment 11 | 'Nabob Hill'         | deal_id = 2      <- set
+assessment 12 | 'Nabob Hill'         | deal_id = None
+```
+
+There are **four** assessments, not three, and **assessment 11 is already
+linked to deal 2**. `create_assessment()` takes `deal_id` in its INSERT
+(`site_dd_db.py:537`), so it is populated at creation — "nothing populates
+it" was a claim about our own code that one grep settles, which is
+false-premise shape #4 exactly. Whether Michelle has confirmed the two are
+the same property is a separate question and is still open; what is
+settled is that the column is written and this one is set.
 
 ---
 
