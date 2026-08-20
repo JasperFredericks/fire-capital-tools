@@ -222,6 +222,41 @@ EQUIPMENT_STATES = (
     ("replace", "Needs replacing"),
 )
 
+# GFCI, egress and leaks were written inline at their use sites. They are
+# named here because an option set has to be a nameable thing before
+# WORK_OPTIONS below can say anything about it -- and because the gfci
+# tuple was written out TWICE, once in KITCHEN and once in BATHROOM, which
+# is a live drift risk: changing one and not the other would give the same
+# question two different answer sets depending on which room you were
+# standing in.
+GFCI_STATES = (
+    ("present", "Present & working"),
+    ("not_working", "Present, not working"),
+    ("absent", "None"),
+)
+
+EGRESS_STATES = (
+    ("compliant", "Opens, meets egress"),
+    ("restricted", "Opens, restricted"),
+    ("none", "No egress window"),
+)
+
+LEAK_STATES = (
+    ("none", "None seen"),
+    ("minor", "Minor / staining"),
+    ("active", "Active leak"),
+)
+
+# Used only by the item bank, defined here because this module owns the
+# option-set vocabulary -- the bank already imports PRESENCE from here for
+# washer_dryer and disposal. Keeping it inline in the bank would leave one
+# option set that WORK_OPTIONS could not name.
+WD_HOOKUP_STATES = (
+    ("complete", "Drain, vent and power"),
+    ("partial", "Incomplete"),
+    ("absent", "None"),
+)
+
 
 # ── States taken from Paresh's v7 form ───────────────────────────────────
 #
@@ -276,11 +311,132 @@ EXTINGUISHER_STATES = (
 # it once per unit; per wet room is the better question and we already
 # ask it.
 #
-# There IS a real difference, and it is a `detail` question rather than a
-# new item: ours records presence (present / hookup only / not there),
-# his records whether it TRIPS (Working / Not Working / Missing). An
-# outlet that is present and does not trip is the dangerous case and
-# neither set catches it alone. Carried into the detail proposal.
+# The real difference his form exposed -- ours recorded presence, his
+# recorded whether the outlet TRIPS -- is closed: GFCI_STATES above
+# carries `not_working`, "Present, not working", which is the dangerous
+# case neither set caught alone. It did NOT need to be a `detail`
+# question on top of a condition, as an earlier note here claimed; it is
+# a third option value on a choice item, which is what the item already
+# was.
+
+
+# ── Which option values mean work is needed ──────────────────────────────
+#
+# WORK_CONDITIONS says which positions on the WEAR SCALE cost money. This
+# is the same statement for choice items, and it is deliberately the same
+# shape: declared once, beside the thing it describes, in the module that
+# owns it. It is NOT a per-item map, because a per-item map is twenty-one
+# entries that each have to be remembered when an item is added, and
+# forgetting one is exactly how a missing smoke alarm stopped reaching a
+# capital budget.
+#
+# IT CANNOT BE A GLOBAL SET OF VALUES, AND THAT IS NOT A STYLE CHOICE
+#
+# Two values mean OPPOSITE things depending on which set they belong to:
+#
+#   present   work on `mold` (there is mold), no work on the eight
+#             PRESENCE appliances (the appliance is there)
+#   none      work on `egress_window` ("No egress window"), no work on
+#             `mold`, `pest_evidence` and `visible_leaks` ("None seen")
+#
+# So WORK_OPTIONS = {"missing", "absent", "present", ...} would be wrong
+# on at least four items. The set a value belongs to is what gives it its
+# meaning, so the set is what carries the answer.
+#
+# Keyed by the option tuple itself. Tuples hash by value, so every item
+# sharing a set inherits one answer and cannot drift from its siblings --
+# PRESENCE alone covers eight appliances plus two bank items.
+#
+# ALARM_STATES and EQUIPMENT_STATES are EQUAL TUPLES, so they collapse to
+# one entry here. That is correct today -- working/missing/replace means
+# the same for an alarm and for a water heater -- but it means the two
+# can never be given different answers while their values match. If they
+# ever need to differ, they have to stop being equal first.
+#
+# A set that is absent from this table is a FAILURE, not a default of "no
+# work": tests/test_work_options.py requires every option set reachable
+# from the catalogue or the bank to appear here. Silence is how the last
+# gap was built.
+WORK_OPTIONS: dict[tuple[tuple[str, str], ...], frozenset[str]] = {
+    # A hookup with no machine in it needs a machine bought; nothing
+    # there needs the same. Both are work; `present` defers to the
+    # condition recorded beside it.
+    PRESENCE: frozenset({"hookup_only", "absent"}),
+    # ALARM_STATES == EQUIPMENT_STATES, so this is one entry covering
+    # smoke_alarm, smoke_alarm_unit, co_alarm, water_heater and hvac.
+    ALARM_STATES: frozenset({"missing", "replace"}),
+    # An outlet that is present and does not trip is the dangerous case,
+    # and it costs the same electrician as one that is not there at all.
+    GFCI_STATES: frozenset({"not_working", "absent"}),
+    # A restricted egress window is a code problem with a cost; no egress
+    # window at all is a bigger one. `compliant` is the only clean state.
+    EGRESS_STATES: frozenset({"restricted", "none"}),
+    # Staining is evidence of a leak that has happened. Both need a
+    # plumber; neither is priced yet, which is a separate question.
+    LEAK_STATES: frozenset({"minor", "active"}),
+    # An expired inspection is work -- somebody has to service the
+    # extinguisher -- and a missing one is work twice over.
+    EXTINGUISHER_STATES: frozenset({"expired", "missing"}),
+    # "Suspected" is work: it triggers a specialist. That is the whole
+    # reason the third state exists rather than a yes/no.
+    MOLD_STATES: frozenset({"suspected", "present"}),
+    # Evidence of any kind means a treatment. Species does not change
+    # that, which is why PEST_TYPE below is empty.
+    PEST_EVIDENCE: frozenset({"droppings", "live", "damage"}),
+    # Hookups that are incomplete need finishing; none at all need
+    # installing. `complete` is the only state with nothing to do.
+    WD_HOOKUP_STATES: frozenset({"partial", "absent"}),
+    # ── Sets where NO value implies work, stated rather than omitted ────
+    # Both are NOT_A_COST_ITEM in the reference table. They record what a
+    # thing IS, and no answer to "what is it" is by itself a repair. They
+    # are present with an empty set so the completeness test can tell
+    # "considered, and the answer is none" from "nobody looked".
+    FLOORING_TYPES: frozenset(),
+    PEST_TYPE: frozenset(),
+}
+
+
+def needs_work(item: dict[str, Any] | None, condition: Any,
+               detail: Any) -> bool:
+    """True when this finding records something that costs money.
+
+    THE ONE DEFINITION. site_dd.capex_export() filters on this, and the
+    capture screen opens its cost box on it, so the form and the budget
+    cannot disagree about what counts -- which is the disagreement that
+    produced the gap this function closes.
+
+    Three ways a finding can be work, in order:
+
+    1. Its CONDITION is repair or replace. Unchanged, and the only rule
+       there was before this.
+    2. Its DETAIL is a work-implying value for this item's option set.
+       A missing smoke alarm, a dead GFCI, a range that is not there.
+    3. Its DETAIL is itself a work condition string.
+
+    Rule 3 is belt and braces and it earns its place. ALARM_STATES
+    carries the literal value `replace` -- a string that IS in
+    WORK_CONDITIONS -- in the `detail` column, and the old filter read
+    `condition`, so "Needs replacing" on a smoke alarm was discarded by a
+    filter that would have admitted the identical string one column over.
+    Rule 2 already catches that particular case; rule 3 means no future
+    option set can reintroduce it by being added and not registered.
+    Checked: no option set anywhere uses `repair` or `replace` to mean
+    anything other than work, so this cannot fire wrongly.
+
+    `item` may be None -- a stale key from an older checklist, or a
+    property-scope finding whose catalogue lives elsewhere. Then only
+    rules 1 and 3 apply, which is the same tolerance is_known_item()
+    already gives an unrecognised key: ignore what cannot be resolved
+    rather than guessing at it.
+    """
+    if cond.needs_work(condition):
+        return True
+    if detail in cond.WORK_CONDITIONS:
+        return True
+    if not item:
+        return False
+    return detail in WORK_OPTIONS.get(tuple(item.get("options") or ()),
+                                      frozenset())
 
 
 # ── Items in every room ──────────────────────────────────────────────────
@@ -314,9 +470,7 @@ KITCHEN = (
     _item("cabinets", "Cabinets"),
     _item("countertops", "Countertops"),
     _item("sink_faucet", "Sink & faucet"),
-    _item("gfci", "GFCI outlets", KIND_CHOICE,
-          (("present", "Present & working"), ("not_working", "Present, not working"),
-           ("absent", "None")),
+    _item("gfci", "GFCI outlets", KIND_CHOICE, GFCI_STATES,
           hint="Required within reach of the sink.", with_condition=False),
 )
 
@@ -325,20 +479,14 @@ BATHROOM = (
     _item("toilet", "Toilet"),
     _item("vanity_sink", "Vanity & sink"),
     _item("exhaust_fan", "Exhaust fan", KIND_CHOICE, PRESENCE),
-    _item("gfci", "GFCI outlets", KIND_CHOICE,
-          (("present", "Present & working"), ("not_working", "Present, not working"),
-           ("absent", "None")),
-          with_condition=False),
-    _item("visible_leaks", "Visible leaks", KIND_CHOICE,
-          (("none", "None seen"), ("minor", "Minor / staining"), ("active", "Active leak")),
+    _item("gfci", "GFCI outlets", KIND_CHOICE, GFCI_STATES, with_condition=False),
+    _item("visible_leaks", "Visible leaks", KIND_CHOICE, LEAK_STATES,
           with_condition=False),
 )
 
 BEDROOM = (
     _item("closet", "Closet"),
-    _item("egress_window", "Egress window", KIND_CHOICE,
-          (("compliant", "Opens, meets egress"), ("restricted", "Opens, restricted"),
-           ("none", "No egress window")),
+    _item("egress_window", "Egress window", KIND_CHOICE, EGRESS_STATES,
           with_condition=False),
     _item("smoke_alarm", "Smoke alarm", KIND_CHOICE, ALARM_STATES,
           with_condition=False),
