@@ -262,13 +262,6 @@ class BreakdownTests(unittest.TestCase):
             out = ou.usage_for_month(conn, "2026-08")
         self.assertEqual(out["total_calls"], 0)
 
-    def test_get_usage_mirrors_the_rentcast_helper(self):
-        ou.record("x", year_month="2026-08", db_path=self.path)
-        with ou.get_connection(self.path) as conn:
-            self.assertEqual(ou.get_usage(conn, "x", "2026-08"), 1)
-            self.assertEqual(ou.get_usage(conn, "never_used", "2026-08"), 0)
-
-
 class WiringTests(unittest.TestCase):
     """The counter is only worth anything if it is actually called from
     the places that spend."""

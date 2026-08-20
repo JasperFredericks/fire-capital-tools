@@ -279,6 +279,46 @@ def to_capex_lines(findings: list[dict[str, Any]],
                    labels: dict[str, str] | None = None) -> list[dict[str, Any]]:
     """Map findings onto underwriting_capex_lines rows.
 
+    ── A HALF THAT SHIPPED ALONE. DO NOT WIRE THIS AS IT STANDS. ────────
+
+    NOTHING CALLS THIS. It is the Site DD -> Underwriting hand-off, built
+    and tested in c39bbce, whose other half -- the route or button that
+    would turn an assessment into underwriting capex lines -- was never
+    written. `underwriting_capex.SOURCE_SITE_DD` is the matching reserved
+    value, also written by nothing.
+
+    It is kept rather than deleted because the design in it is real: the
+    SCOPE_MAP translation below (underwriting_capex_lines accepts only
+    exterior|interior and silently rewrites anything else), and the
+    source_ref back-link to the originating finding. Both would have to
+    be rediscovered.
+
+    **It has drifted three correctness fixes behind
+    site_dd_capex_export.build_lines(), and wiring it would put a known
+    bug into equity and IRR.** Measured on identical findings:
+
+      1. RATES. A $5.75 PER SQUARE FOOT repaint becomes quantity=1 and
+         line_total() multiplies it to $5.75. This is exactly the bug
+         b613a76 fixed in the export -- seven of thirty-six researched
+         figures are rates and they are the expensive ones. build_lines()
+         refuses to total a rate without a measured quantity.
+      2. FIRST COST WINS. Two toilets at $450 and $600 in one room become
+         "Toilet x2 @ $450"; $300 leaves the budget without a trace.
+         build_lines() puts cost in the grouping key so they stay apart.
+      3. NO DETAIL IN THE KEY. A missing smoke alarm and one needing
+         replacement merge into one line. Closed in build_lines() by
+         8b8ba17; still open here.
+
+    So the shape when the hand-off is finally wired is NOT "call this
+    function". It is: **map build_lines()' output onto
+    underwriting_capex_lines**, keeping only the scope translation and
+    the source_ref from here. One grouping, two destinations. Two
+    independent groupings of the same findings is how these two drifted
+    apart three times already.
+
+    Full evidence in docs/site-dd-to-capex-lines.md.
+    ─────────────────────────────────────────────────────────────────────
+
     Grouped by (assessment scope, item), because quantity is the INSTANCE
     COUNT: two sinks needing replacement are one budget line of quantity
     2, not two lines that a reader has to add up.

@@ -82,13 +82,6 @@ def _pattern(alias: str) -> re.Pattern | None:
     return re.compile(r"(?<![a-z0-9])" + re.escape(norm) + r"(?![a-z0-9])")
 
 
-def count_mentions(body_norm: str, alias: str) -> int:
-    pat = _pattern(alias)
-    if pat is None:
-        return 0
-    return len(pat.findall(body_norm))
-
-
 # Street types and property-type words, stripped when deriving the short
 # form of a name. "1120 Jackson Street" -> "Jackson"; "Eagle Rock
 # Apartments" -> "Eagle Rock".
