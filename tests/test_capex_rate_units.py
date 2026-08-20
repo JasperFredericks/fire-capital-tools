@@ -36,6 +36,7 @@ the other direction: this change must not make per-item pricing stop
 working, which is most of the table.
 """
 
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -112,8 +113,42 @@ class ARateIsNeverTotalledByInstanceCountTests(unittest.TestCase):
         self.assertEqual(line["unit_label"], "per sq ft")
         self.assertTrue(line["is_rate"])
 
-    def test_it_says_what_it_needs(self):
-        self.assertIn("square feet", self.line()["reason"])
+    def test_it_states_a_permanent_arrangement_not_a_to_do(self):
+        """The message used to prescribe an action nobody can take.
+
+        "Needs a measured floor area in square feet before it can be
+        totalled" is a to-do, and there is no route that does it:
+        site_dd.py:898 stores `quantity` only for a KIND_NUMBER item, and
+        no rate-priced item is one. Michelle settled the question --
+        conditions, not paint quantities -- so the line states the
+        arrangement instead of asking for a measurement.
+        """
+        reason = self.line()["reason"]
+        self.assertIn("Priced by scope, not by this walk", reason)
+        self.assertNotIn("Needs", reason)
+        self.assertNotIn("before it can be totalled", reason)
+
+    def test_the_rate_is_shown_as_reference_and_disclaimed_as_a_total(self):
+        """Keeping the rate is the point; claiming it is a total is the bug.
+
+        Deleting it would discard real researched data Michelle wants when
+        scoping a bid, so it stays -- labelled reference information and
+        explicitly not a total.
+        """
+        reason = self.line()["reason"]
+        self.assertIn("$5.75 per sq ft", reason)
+        self.assertIn("reference information", reason)
+        self.assertIn("not a total", reason)
+
+    def test_it_does_not_flatten_provenance(self):
+        """A national average and an inspector's own rate are different
+        claims, and this module exists to keep them apart."""
+        self.assertIn("Researched reference rate", self.line()["reason"])
+        manual = capex.build_lines(
+            [finding("walls_ceiling", 4.00, unit=refcosts.UNIT_SQFT,
+                     source="manual")], LABELS)[0]
+        self.assertIn("Inspector's rate", manual["reason"])
+        self.assertNotIn("Researched", manual["reason"])
 
     def test_three_instances_do_not_become_a_quantity_of_three(self):
         """The instance count is not an area, however many there are."""
@@ -228,12 +263,23 @@ class TheCoverageSentenceNamesAllThreeBucketsTests(unittest.TestCase):
     def test_nothing_priced_says_there_is_no_total(self):
         s = self.sentence(0, 1, 1, 0)
         self.assertIn("NO total", s)
-        self.assertIn("researched rate", s)
+        self.assertIn("priced by scope", s)
 
     def test_it_distinguishes_unmeasured_from_unresearched(self):
         s = self.sentence(1, 3, 1, 1)
-        self.assertIn("researched rate but nothing measured", s)
+        self.assertIn("priced by scope", s)
         self.assertIn("no researched figure at all", s)
+
+    def test_the_sentence_does_not_promise_a_measurement(self):
+        """The bucket is a settled state, not a queue.
+
+        No route writes a measured area for a rate-priced item, so a
+        sentence saying the line is waiting on one describes work nobody
+        can do. "yet" is the specific word that made it a schedule.
+        """
+        for s in (self.sentence(0, 1, 1, 0), self.sentence(1, 3, 1, 0)):
+            self.assertNotIn("yet", s)
+            self.assertNotIn("nothing measured", s)
 
     def test_a_fully_priced_budget_says_so_plainly(self):
         s = self.sentence(4, 4, 0, 0)
@@ -469,3 +515,66 @@ class TheManualPathIsClosedTooTests(unittest.TestCase):
         self.assertIsNone(l["total"],
                           "a genuine $12 job price is refused; the trade is "
                           "that no capital job costs twelve dollars")
+
+
+class TheTwoExportsCannotDescribeTheBudgetDifferentlyTests(unittest.TestCase):
+    """The single-source property, checked by rendering both.
+
+    The bucket name and the coverage sentence are what a reader uses to
+    decide whether a number is a finished budget. They were duplicated
+    string literals in build_pdf() and build_xlsx(), so nothing stopped one
+    export being reworded and the other not -- two documents about the same
+    money, disagreeing. The name is now one constant and the sentence one
+    function, and this test renders both files and reads the text back
+    rather than trusting that.
+    """
+
+    def budget(self):
+        lines = capex.build_lines(
+            [finding("walls_ceiling", 5.75, unit=refcosts.UNIT_SQFT,
+                     room_id=1),
+             finding("foundation", None, source="none", room_id=2)], LABELS)
+        return lines, capex.summarize(lines)
+
+    def rendered(self):
+        import tempfile
+        from pathlib import Path
+        from openpyxl import load_workbook
+        from pypdf import PdfReader
+        lines, summary = self.budget()
+        d = Path(tempfile.mkdtemp())
+        capex.build_xlsx(d / "b.xlsx", {"property_label": "X"}, lines, summary)
+        capex.build_pdf(d / "b.pdf", {"property_label": "X"}, lines, summary)
+        xlsx = "\n".join(str(c.value) for row in load_workbook(d / "b.xlsx").active
+                         for c in row if c.value is not None)
+        pdf = "\n".join(p.extract_text() for p in PdfReader(str(d / "b.pdf")).pages)
+        return xlsx, pdf, summary
+
+    def test_both_name_the_bucket_the_same_way(self):
+        xlsx, pdf, _ = self.rendered()
+        self.assertIn(capex.BUCKET_PRICED_BY_SCOPE, xlsx)
+        self.assertIn(capex.BUCKET_PRICED_BY_SCOPE, pdf)
+
+    def test_neither_still_calls_it_pending(self):
+        """"Researched rate, not yet measured" promised a measurement."""
+        xlsx, pdf, _ = self.rendered()
+        for text in (xlsx, pdf):
+            self.assertNotIn("not yet measured", text)
+            self.assertNotIn("need measuring", text)
+
+    def test_both_carry_the_one_coverage_sentence(self):
+        xlsx, pdf, summary = self.rendered()
+        sentence = summary["coverage_sentence"]
+        self.assertIn(sentence, xlsx)
+        # The PDF wraps at 108 characters, so it carries the sentence in
+        # pieces. Every piece must still come from the same string.
+        for chunk in textwrap.wrap(sentence, 108):
+            self.assertIn(chunk, pdf)
+
+    def test_the_bucket_name_is_defined_once(self):
+        """A literal in either builder is how the two drifted apart."""
+        src = (ROOT / "tools" / "site_dd_capex_export.py").read_text(
+            encoding="utf-8")
+        body = src.split("BUCKET_NO_FIGURE = ", 1)[1]
+        self.assertNotIn('"%s"' % capex.BUCKET_PRICED_BY_SCOPE, body,
+                         "build_pdf/build_xlsx must use the constant")

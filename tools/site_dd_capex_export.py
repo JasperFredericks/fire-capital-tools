@@ -59,6 +59,27 @@ SOURCE_COLUMN = {
     costs.SOURCE_NONE: "No estimate",
 }
 
+# THIS BUCKET NAMES A PERMANENT STATE, NOT A PENDING ONE
+#
+# It used to read "Researched rate, not yet measured", which described a
+# to-do: go and measure, then this line will total. Nobody will. Michelle
+# was explicit -- "DON'T WORRY ABOUT CALCULATING PAINT. WE JUST NEED TO
+# DETERMINE THE CONDITIONS OF THE WALLS/CEILINGS" -- so the walk records
+# condition and the quantity stays NULL forever.
+#
+# That is not a matter of habit, it is structural: site_dd.py:898 stores
+# `quantity` only for a KIND_NUMBER item, and the three KIND_NUMBER items
+# are readings (gallons, years), none of them priced by a rate. No route
+# anywhere writes a measured area. A rate-priced line therefore CANNOT
+# acquire a quantity through this app, and a bucket name promising it will
+# is a message describing an action nobody can take.
+#
+# Defined here, once, because the PDF and the XLSX both print it and a
+# budget that named this bucket two different ways would be two different
+# claims about the same money.
+BUCKET_PRICED_BY_SCOPE = "Priced by scope, not by this walk"
+BUCKET_NO_FIGURE = "No researched figure"
+
 
 def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = None,
                 detail_labels: dict[tuple[str, str], str] | None = None
@@ -203,12 +224,41 @@ def build_lines(findings: list[dict[str, Any]], labels: dict[str, str] | None = 
         elif refcosts.is_rate(unit) and quantity is None:
             # A whole sentence, because this lands in a "Why no estimate"
             # cell that has to be readable on its own: it must say what
-            # the figure is, that it is a rate, and what to go and
-            # measure.
-            needs = (f"Priced at ${described['cost']:,.2f} "
-                     f"{refcosts.UNIT_LABELS.get(unit, unit)}. Needs "
-                     f"{refcosts.measurement_needed(unit)} before it can be "
-                     f"totalled; an instance count is not a measurement.")
+            # the figure is, that it is a rate, and why no total follows.
+            #
+            # IT USED TO PRESCRIBE AN ACTION NOBODY CAN TAKE
+            #
+            # "Needs a measured floor area in square feet before it can be
+            # totalled" is a to-do, and there is no way to do it: no route
+            # writes a measured area for a rate-priced item (see
+            # BUCKET_PRICED_BY_SCOPE above), and Michelle asked for
+            # conditions rather than paint quantities. So the line now
+            # states the permanent arrangement -- condition here, rate kept
+            # as reference for whoever scopes the bid -- instead of asking
+            # for a measurement that will never arrive.
+            #
+            # The RATE STAYS ON THE LINE. It is real researched data and
+            # deleting it would throw away the figure Michelle most wants
+            # when she scopes this work. It is labelled reference
+            # information and explicitly not a total, which is the whole
+            # difference between showing a number and claiming one.
+            #
+            # The provenance is not flattened. A researched national
+            # average and an inspector's own rate are different kinds of
+            # claim, and this module exists to keep them apart, so the
+            # phrase names which one it is.
+            if described["source"] == costs.SOURCE_REFERENCE:
+                rate_phrase = (f"Researched reference rate "
+                               f"${described['cost']:,.2f} "
+                               f"{refcosts.UNIT_LABELS.get(unit, unit)} "
+                               f"(national average, {refcosts.RESEARCHED_ON})")
+            else:
+                rate_phrase = (f"Inspector's rate ${described['cost']:,.2f} "
+                               f"{refcosts.UNIT_LABELS.get(unit, unit)}")
+            needs = (f"Priced by scope, not by this walk: the walk records "
+                     f"this item's condition, not its area. {rate_phrase}, "
+                     f"kept as reference information for scoping the work — "
+                     f"not a total, and not included in the budget total.")
 
         line = {
             "item_key": f.get("item_key"),
@@ -360,15 +410,25 @@ def coverage_sentence(priced: int, total_lines: int, unmeasured: int,
                 f"recorded budget.")
     bits = []
     if unmeasured:
+        # "a researched rate but nothing measured to apply it to" described
+        # a gap waiting to be filled. It is not waiting: no route records a
+        # measured area, so this is the settled state of these lines and the
+        # sentence says so. The rate is still shown -- it is reference
+        # information for scoping, not a total.
         bits.append(f"{lines_(unmeasured)} "
-                    f"{'has' if unmeasured == 1 else 'have'} a researched rate "
-                    f"but nothing measured to apply it to")
+                    f"{'is' if unmeasured == 1 else 'are'} priced by scope "
+                    f"rather than by this walk, with the rate shown for "
+                    f"reference and not totalled")
     if unresearched:
         bits.append(f"{lines_(unresearched)} "
                     f"{'has' if unresearched == 1 else 'have'} no researched "
                     f"figure at all")
     if not priced:
-        return ("Nothing here can be priced yet, so there is NO total: "
+        # Not "can be priced YET". Where every unpriced line is priced by
+        # scope, there is nothing pending -- and where a line is genuinely
+        # unresearched there is, so the sentence states the fact common to
+        # both rather than a schedule that is only true of one.
+        return ("Nothing here could be totalled, so there is NO total: "
                 + " and ".join(bits) + ".")
     return (f"This total covers {priced} of {lines_(total_lines)} and is NOT "
             f"the full budget: " + " and ".join(bits) + ".")
@@ -407,7 +467,7 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
             fig.text(0.94, 0.915,
                      (f"{summary['line_count']} items · "
                       f"{summary['priced_count']} priced · "
-                      f"{summary['unmeasured_count']} need measuring · "
+                      f"{summary['unmeasured_count']} priced by scope · "
                       f"{summary['unresearched_count']} unresearched"),
                      ha="right", fontsize=9, color=MUTED)
 
@@ -428,9 +488,9 @@ def build_pdf(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
                     (SOURCE_COLUMN[costs.SOURCE_REFERENCE],
                      _money(summary["by_source"][costs.SOURCE_REFERENCE])
                      if have_total else "—", BODY),
-                    ("Researched rate, not yet measured",
+                    (BUCKET_PRICED_BY_SCOPE,
                      f"{summary['unmeasured_count']} item(s)", WARN),
-                    ("No researched figure",
+                    (BUCKET_NO_FIGURE,
                      f"{summary['unresearched_count']} item(s)", MUTED),
                 ]
                 for name, value, colour in rows:
@@ -542,9 +602,9 @@ def build_xlsx(path, assessment: dict[str, Any], lines: list[dict[str, Any]],
         ws.append([SOURCE_COLUMN[key],
                    summary["by_source"][key] if summary["total"] is not None
                    else "—"])
-    ws.append(["Researched rate, not yet measured",
+    ws.append([BUCKET_PRICED_BY_SCOPE,
                f"{summary['unmeasured_count']} item(s)"])
-    ws.append(["No researched figure",
+    ws.append([BUCKET_NO_FIGURE,
                f"{summary['unresearched_count']} item(s)"])
     ws.append([summary["coverage_sentence"]])
     if summary["researched_pct"] is not None:

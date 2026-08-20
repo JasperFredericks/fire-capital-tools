@@ -74,6 +74,12 @@ build_lines     -> qty=None unit=$5.75 per sq ft  total=None
                     area in square feet before it can be totalled..."
 ```
 
+> **The quoted message was reworded on 2026-08-20** (Part 38 Step A). It
+> now reads "Priced by scope, not by this walk...", because the old
+> wording prescribed a measurement no route can record. The comparison
+> above is unchanged in substance -- the point is `qty=1.0` versus
+> `qty=None` -- and is left as it was run.
+
 That is **exactly the bug `b613a76` fixed**, the one HANDOFF calls "the
 most consequential change here" — a rate multiplied by an instance count,
 producing a repaint budget of $5.75. `to_capex_lines()` sets
