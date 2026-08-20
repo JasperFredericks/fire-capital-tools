@@ -431,6 +431,46 @@ the premise is about a checker we wrote, run the checker.
    instrument**: *before claiming a checker would or would not have
    caught something, run it.* It takes one command.
 
+5. *"`area_status_labels[st]` raises on an unknown key."* **It does not.**
+   This app runs Jinja's **default `Undefined`**, so a missing key
+   renders as the **empty string**:
+
+   ```
+   status=occupied           subscript=' &middot; Occupied'
+   status=vacant_not_ready   subscript=' &middot; '          <- dangling
+   status=None               subscript=''
+   ```
+
+   The accessor was still the right change, for a worse reason than the
+   one given: silent, not loud. An unrecognised value produces a dangling
+   separator and leaves no trace that anything was wrong, where
+   `area_status_label()` answers "Not stated". Note the NULL case, which
+   was the one flagged as the live hazard, is **not** the hazard at all --
+   both display sites are guarded by `{% if area.status %}` and render
+   nothing either way. The hazard is a non-NULL value from an older
+   vocabulary, which is exactly what widening AREA_STATUSES would
+   introduce.
+
+   Both behaviours are now pinned in
+   `tests/test_area_status_labels.py`, so configuring Jinja with
+   `StrictUndefined` fails a test rather than silently invalidating a
+   docstring.
+
+   **Same propagation path as #4, one run later.** Asserted in a Part 35
+   report, restated in the Part 36 prompt as the reason to do the work,
+   acted on by both sides. Nobody rendered a template.
+
+**Four of these five share one shape: a claim about a MECHANISM -- a
+parser, a checker, a template engine -- believed rather than executed.**
+The rule from #4 covers all of them and is worth reading as general:
+*before claiming what a mechanism does, run it.* Every one of these cost
+more to discover than the single command that would have settled it.
+
+A claim that travels from a report into a prompt and back has been
+**confirmed by repetition**, which is not confirmation. When a prompt
+states one of our own findings back as settled, that is the moment it is
+least likely to be re-checked and most likely to be wrong.
+
 ---
 
 ## The falsy-zero audit: one member, and the convention it implies

@@ -27,6 +27,7 @@ decision, which is Michelle's.
 """
 
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -176,3 +177,130 @@ class RenderedPageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AssessmentStatusLabelTests(unittest.TestCase):
+    """The same construction, one vocabulary over.
+
+    Nothing was broken: `draft` and `complete` are single lowercase
+    words, so `{{ a.status|title }}` happened to be right. That is an
+    accident of the two values chosen, and this map exists so the
+    accident never has to hold.
+    """
+
+    def test_every_status_has_a_label(self):
+        missing = [s for s in db.STATUSES if s not in db.ASSESSMENT_STATUS_LABELS]
+        self.assertEqual(missing, [], f"STATUSES with no label: {missing}")
+
+    def test_no_stale_labels(self):
+        stale = [k for k in db.ASSESSMENT_STATUS_LABELS if k not in db.STATUSES]
+        self.assertEqual(stale, [], f"labels for unknown statuses: {stale}")
+
+    def test_no_label_changes_what_is_on_screen_today(self):
+        env = jinja2.Environment()
+        for status in db.STATUSES:
+            with self.subTest(status=status):
+                self.assertEqual(db.ASSESSMENT_STATUS_LABELS[status],
+                                 env.filters["title"](status))
+
+    def test_an_unknown_status_reads_as_draft_not_as_blank(self):
+        """Unlike an area's status this column is NOT NULL with a default
+        of `draft`, so there is no unstated state to report. A value from
+        an older vocabulary is most honestly read as "not finished"."""
+        for value in (None, "", "in_review", 0):
+            with self.subTest(value=value):
+                self.assertEqual(db.assessment_status_label(value), "Draft")
+
+    def test_the_two_vocabularies_stay_separate(self):
+        for s in db.STATUSES:
+            self.assertNotIn(s, db.AREA_STATUS_LABELS)
+        for s in db.AREA_STATUSES:
+            self.assertNotIn(s, db.ASSESSMENT_STATUS_LABELS)
+
+
+class TemplatesCallTheAccessorTests(unittest.TestCase):
+    """No template may subscript a label map.
+
+    THE REASON, WHICH IS NOT THE ONE FIRST WRITTEN DOWN
+
+    An earlier note claimed `labels[key]` RAISES on a missing key. It does
+    not. This app runs Jinja's default Undefined, so a missing key renders
+    as the empty string -- verified below rather than asserted.
+
+    Silent is the worse half of the trade. A display site guarded by
+    `{% if area.status %}` emits "&middot; " with nothing after it when
+    the value is unrecognised: a dangling separator, and no trace that
+    anything was wrong. The accessor answers "Not stated", which is a
+    statement rather than a gap.
+    """
+
+    TEMPLATES = sorted(Path("templates").rglob("*.html"))
+
+    def test_the_subscript_renders_empty_rather_than_raising(self):
+        """The premise, checked. If Jinja is ever configured with
+        StrictUndefined this test fails and the docstring above needs
+        rewriting -- which is the point of pinning it."""
+        from app import app
+        self.assertEqual(app.jinja_env.undefined.__name__, "Undefined")
+        out = app.jinja_env.from_string("[{{ m[k] }}]").render(
+            m=db.AREA_STATUS_LABELS, k="vacant_not_ready")
+        self.assertEqual(out, "[]")
+
+    def test_the_accessor_states_something_where_the_subscript_is_silent(self):
+        from app import app
+        tmpl = "{%- if area.status %} &middot; {{ shown }}{% endif %}"
+        sub = app.jinja_env.from_string(
+            tmpl.replace("shown", "m[area.status]")).render(
+                area={"status": "vacant_not_ready"}, m=db.AREA_STATUS_LABELS)
+        acc = app.jinja_env.from_string(
+            tmpl.replace("shown", "f(area.status)")).render(
+                area={"status": "vacant_not_ready"}, f=db.area_status_label)
+        self.assertEqual(sub, " &middot; ")          # dangling separator
+        self.assertEqual(acc, " &middot; Not stated")
+
+    # Scoped to the STATUS maps deliberately.
+    #
+    # Written broad first, over every `*_labels[` in templates/, and it
+    # found ten pre-existing subscripts. All ten are safe, for a reason
+    # worth writing down rather than allowlisting:
+    #
+    #   condition_labels[c]   `c` iterates the CONDITIONS tuple, so the
+    #                         key is present by construction
+    #   room_type_labels[...] reads a stored value, but site_dd.py:622
+    #                         rejects anything outside ROOM_TYPE_LABELS
+    #                         before create_room() is reached
+    #   source_labels[s]      loops over known keys
+    #
+    # So they are guarded at the loop or at the route rather than at the
+    # read. That is a weaker place for a guard to live -- a second writer
+    # has to remember it -- but it is not a live hazard, and widening
+    # this test to force ten unrelated edits is scope this run did not
+    # ask for. Recorded so it reads as a decision, not an omission.
+    STATUS_MAPS = re.compile(r"\b((?:area|assessment)_status_labels)\s*\[")
+
+    def test_no_template_subscripts_a_status_label_map(self):
+        offenders = []
+        for path in self.TEMPLATES:
+            text = path.read_text(encoding="utf-8")
+            for match in self.STATUS_MAPS.finditer(text):
+                line = text[:match.start()].count("\n") + 1
+                offenders.append(f"{path.as_posix()}:{line} {match.group(1)}[")
+        self.assertEqual(offenders, [],
+                         "call the accessor instead:\n  " + "\n  ".join(offenders))
+
+    def test_the_subscript_guard_is_not_vacuous(self):
+        """It has to match something, or it certifies nothing."""
+        self.assertTrue(self.STATUS_MAPS.search("{{ area_status_labels[st] }}"))
+        self.assertTrue(self.STATUS_MAPS.search("{{ assessment_status_labels[s] }}"))
+        self.assertIsNone(self.STATUS_MAPS.search("{{ area_status_label(st) }}"))
+
+    def test_no_status_is_rendered_by_bare_title_casing(self):
+        offenders = []
+        for path in self.TEMPLATES:
+            text = path.read_text(encoding="utf-8")
+            for match in re.finditer(r"\bstatus\s*\|\s*title\b", text):
+                line = text[:match.start()].count("\n") + 1
+                offenders.append(f"{path.as_posix()}:{line}")
+        self.assertEqual(offenders, [],
+                         "a stored key title-cased is not a label:\n  "
+                         + "\n  ".join(offenders))

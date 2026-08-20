@@ -101,7 +101,7 @@
               <td>{{ worst_chip(s.worst, s.worst_label) }}</td>
               <td{% if s.work_count %} style="color:#b45309; font-weight:700;"{% endif %}>{{ s.work_count }}</td>
               <td>{{ '%.0f%%'|format(s.completion_pct) }}</td>
-              <td>{{ a.status|title }}</td>
+              <td>{{ assessment_status_label(a.status) }}</td>
               <td><a href="{{ url_for('site_dd.detail', assessment_id=a.id) }}" class="btn btn-ghost" style="padding:4px 10px; font-size:12px;">Open</a></td>
             </tr>
           {% endfor %}
