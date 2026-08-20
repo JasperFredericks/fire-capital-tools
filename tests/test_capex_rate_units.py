@@ -580,6 +580,45 @@ class TheTwoExportsCannotDescribeTheBudgetDifferentlyTests(unittest.TestCase):
                          "build_pdf/build_xlsx must use the constant")
 
 
+def draw_calls(build, *args, **kwargs):
+    """Every string build_pdf actually draws, captured at the draw call.
+
+    WHY NOT pypdf's extract_text()
+
+    Because it is not reliable for this content, measured rather than
+    assumed. A note reading
+
+        'Lighting' spans a $40 lamp replacement and a $900 fixture install.
+
+    comes back from extract_text() as
+
+        'Lighting' spans a 40lampreplacementanda900 fixture install.
+
+    -- the dollar glyphs dropped and the surrounding spaces collapsed. A
+    capital budget is mostly dollar amounts, so an assertion that a
+    sentence "appears in the PDF" via extraction can fail on text that
+    renders perfectly. It found 24 such phantom absences in the Part 41
+    stress run.
+
+    The draw call is the authoritative record of what went onto the page,
+    and it is what pagination can actually get wrong.
+    """
+    import matplotlib.figure as mfig
+    seen = []
+    original = mfig.Figure.text
+
+    def spy(self, x, y, string, *a, **k):
+        seen.append(str(string))
+        return original(self, x, y, string, *a, **k)
+
+    mfig.Figure.text = spy
+    try:
+        build(*args, **kwargs)
+    finally:
+        mfig.Figure.text = original
+    return seen
+
+
 class TheReasonIsOnThePageWithTheLineTests(unittest.TestCase):
     """An empty Total with no explanation beside it is a silent gap.
 
@@ -601,21 +640,20 @@ class TheReasonIsOnThePageWithTheLineTests(unittest.TestCase):
     def rendered(self):
         import tempfile
         from pathlib import Path
-        from pypdf import PdfReader
         lines = self.lines()
         summary = capex.summarize(lines)
         d = Path(tempfile.mkdtemp())
-        capex.build_pdf(d / "b.pdf", {"property_label": "X"}, lines, summary)
-        text = "\n".join(p.extract_text() for p in PdfReader(str(d / "b.pdf")).pages)
-        return lines, text
+        drawn = draw_calls(capex.build_pdf, d / "b.pdf",
+                           {"property_label": "X"}, lines, summary)
+        return lines, drawn
 
     def test_every_line_without_a_total_explains_itself(self):
-        lines, text = self.rendered()
+        lines, drawn = self.rendered()
         unpriced = [l for l in lines if l["total"] is None]
         self.assertTrue(unpriced, "fixture must contain unpriced lines")
         for l in unpriced:
             first = textwrap.wrap(l["reason"], capex.NOTE_WRAP)[0]
-            self.assertIn(first, text,
+            self.assertIn(first, drawn,
                           f"{l['label']} has no total and no explanation on the page")
 
     def test_a_priced_line_carries_no_note(self):
@@ -640,12 +678,12 @@ class TheReasonIsOnThePageWithTheLineTests(unittest.TestCase):
         capex.build_xlsx(d / "b.xlsx", {"property_label": "X"}, lines, summary)
         cells = {str(c.value) for row in load_workbook(d / "b.xlsx").active
                  for c in row if c.value is not None}
-        _, pdf_text = self.rendered()
+        _, drawn = self.rendered()
         for l in lines:
             if l["total"] is None and l["reason"]:
                 self.assertIn(l["reason"], cells, "xlsx must carry the reason")
                 for frag in textwrap.wrap(l["reason"], capex.NOTE_WRAP):
-                    self.assertIn(frag, pdf_text,
+                    self.assertIn(frag, drawn,
                                   "pdf must carry the SAME string, wrapped")
 
 
@@ -749,10 +787,20 @@ class ThePdfPaginatesByHeightTests(unittest.TestCase):
                                 "content ran off the bottom of the page")
 
     def test_no_note_is_lost(self):
-        from pypdf import PdfReader
+        """Checked on the draw calls, because extraction is not reliable here.
+
+        pypdf returns "$40 lamp replacement and a $900" as
+        "40lampreplacementanda900". A capital budget is mostly dollar
+        amounts, so extraction produces phantom absences on text that
+        renders correctly -- 24 of them in the Part 41 stress run.
+        """
+        import tempfile
+        from pathlib import Path
         lines = self.many("walls_ceiling", 5.75, refcosts.UNIT_SQFT)
-        path = self.render(lines, "z")
-        text = "\n".join(p.extract_text() for p in PdfReader(str(path)).pages)
+        summary = capex.summarize(lines)
+        d = Path(tempfile.mkdtemp())
+        drawn = draw_calls(capex.build_pdf, d / "z.pdf",
+                           {"property_label": "X"}, lines, summary)
         for l in lines:
             for frag in textwrap.wrap(l["reason"], capex.NOTE_WRAP):
-                self.assertIn(frag, text)
+                self.assertIn(frag, drawn)

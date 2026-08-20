@@ -287,8 +287,45 @@ when the content is identical. Routes that rewrite whole collections
 
 **Money.** OpenAI calls spend against a shared **$60/month** budget. Make
 exactly the number authorised — this was overspent once (2 calls instead
-of 1). Michelle explicitly does not want scraping; reference costs are a
-one-time manual research pass.
+of 1).
+
+**No scraping — and here is what that does and does not cover.** *Narrowed
+in Part 41; it previously read "Michelle explicitly does not want
+scraping" with no domain, which is broader than anything it was ever
+argued from.*
+
+**What it forbids:** building the reference cost table by scraping
+contractor-pricing or listing sites. That is Michelle's explicit
+instruction, and `site_dd_reference_costs.py` is built to make it
+structurally impossible — "no client, no scheduled fetch, and no retailer
+is queried at runtime or at any other time … it has no imports that could
+reach a network." The 36 figures are a one-time manual research pass over
+published contractor-estimate sources (Angi, HomeGuide, HomeAdvisor, Fixr,
+Homewyse, This Old House).
+
+There is a second, separate finding of the same shape, about a different
+site: **city-data.com** was the originally suggested source for market
+demographics and its terms exclude *"any use of data mining, robots,
+spiders, or similar data gathering and extraction tools"* for commercial
+or derivative use. `underwriting_market.py` records that scraping it would
+be "both fragile and a term we would be breaking", and FIRE Metrics
+already covers the same ground from documented government sources.
+
+**What it does NOT forbid: licensed data APIs.** This app already makes
+routine automated external calls — RentCast and Google Places — and
+nobody has ever treated them as violations, because they are not
+violations. `market_data_service.py` draws the line in as many words:
+RentCast is a *"real public REST API, sourced from public
+records/listings — not scraping"*, and Google Places is the official API.
+
+**So a paid cost-data API is the direct answer to the reference-cost
+problem, not a breach of her instruction.** RSMeans is the named
+candidate — not in this file until now, but in the code, at
+`site_dd_costs.py:11` and `site_dd_db.py:124`, both of which record the
+reference table as "gated on the decision between Michelle's numbers,
+RSMeans and disclaimed placeholders". Reading the old one-line rule as
+"no automated external cost data, ever" would have ruled out the one
+option most likely to solve the problem.
 
 **Units differ by layer, and this produced a wrong run.**
 `analyze_noi_series` takes `interest_rate_pct=6.5` (**percent**);
@@ -504,6 +541,108 @@ good idea — that was settled — but whether the thing it targets is the
 thing that is broken. The check here was one query against the deals
 table, and it retired most of a plan that had been carried for fifteen
 runs.
+
+---
+
+## A rule stated twice loses its condition in the shorter statement
+
+Part 40 audited every standing rule in this file against one question: *is
+it recorded at the scope its argument actually supports, or at a broader
+scope that happens to contain it?* That question came from
+`normalize_address_key`, where a conclusion about **street suffixes** was
+written down as a prohibition on **the whole function** and blocked a safe,
+unrelated fix for fifteen runs.
+
+The audit found one more instance, and it turned out to be a sharper
+pattern than "rules drift broad".
+
+**Entrata was in this file twice, at two different scopes.** *Revised cost
+estimates* said: "Do not scope it until a sample exists — the Oxford
+Pointe experience is the argument." *Open operational items* said: "Do not
+start the Entrata parser seam." Same file, same decision. The long version
+carried the condition, the reason and the exit criterion. The short version
+carried none of them.
+
+**The mechanism is not drift. It is compression.** Nobody rewrote the
+Entrata rule to be stricter. Someone summarised it, and a summary keeps the
+imperative because that is the actionable part — while the condition, the
+reason and the exit criterion are the parts that read as background and get
+dropped for length. What survives compression is the *prohibition*, and
+what is lost is everything that says *when it stops applying*.
+
+That is why this is worse than ordinary staleness. A rule with no exit
+criterion cannot expire, because there is nothing written down that would
+tell you it had. It just keeps being true-looking.
+
+**And the short version is the dangerous one, because of where it lives.**
+*Open operational items* is a list you read when deciding what to do next.
+*Revised cost estimates* is prose you read when you already care about
+Entrata. The stripped statement sits in the higher-traffic place and is the
+one that actually steers a decision. Same for the scraping rule: the
+one-line form under **Money** is where anyone looks, and it had no domain
+at all.
+
+**This is checkable rather than merely rememberable, which is the useful
+part.** The check is mechanical:
+
+> **Where a rule appears in both a discussion and a summary, re-read the
+> summary.** If the summary states a prohibition without its condition,
+> that is the statement to fix — not the discussion, which is already
+> right.
+
+Both narrowings in Part 41 now cross-reference each other, so a future edit
+to one has a pointer to the other.
+
+**How much of this a test can actually carry, measured rather than
+assumed.** `tests/test_handoff_rule_scope.py` guards the Entrata rule and
+fails if either statement of it is re-stripped. It guards **only** that
+one, and the file records why at length:
+
+- **The discovery version does not work.** Three designs were built and
+  measured against a HANDOFF known to be correct; all three produced
+  **100% false positives**, and the first also *failed its positive
+  control* — clustering on the words inside each imperative could not
+  match "Do not start the Entrata parser seam" to "Do not scope it until
+  a sample exists", because the long form says "it". The root cause is
+  linguistic, not tuning: of 16 uses of "never" in this file, **13 are
+  descriptive** ("never shipped", "never exercised"). Separating a rule
+  from a sentence about the past is a judgment, and a regex attempting it
+  flags prose.
+- **Scraping is deliberately not registered.** Entrata's qualifier is a
+  **condition**, and condition words are a closed lexical class, so a
+  missing one is detectable. Scraping's qualifier is a **domain**, and it
+  is not: the original bare rule said "reference costs are a one-time
+  manual research pass", so any pattern loose enough to accept the
+  narrowed rule also accepts the original. Making its control fire would
+  have meant tuning the pattern until two known strings landed right,
+  which is fitting an instrument to its test cases.
+
+So the convention below is the real protection, and the test holds the
+line only where a machine can honestly tell the difference. That is the
+same trade as the dead-reader glob: the noisy half refused, the narrow
+half kept.
+
+**When writing a rule in a summary: carry its condition, or link the full
+statement.** An imperative alone is not a shorter version of a conditional
+rule. It is a different and stricter rule.
+
+### The three that were left broad on purpose
+
+The same audit found three rules stated more broadly than their evidence,
+and **they were deliberately not narrowed**. Recording that is part of the
+result, because otherwise the next audit re-finds them and someone
+"corrects" them:
+
+| rule | evidence | why it stays broad |
+|---|---|---|
+| *"guard the container, not the number"* | the falsy-zero audit found exactly **one** real member in 53 | the broad form costs nothing and prevents the next instance. Prophylaxis at zero cost is a fair trade. |
+| *"verification is by behaviour, not by file hash"* | generalised from one code module under change | a file hash is still right for an uploaded artefact or a vendored dependency, but nothing is being blocked |
+| *"verify by navigating, not by driving URLs"* | four features that passed their own tests while unreachable | the evidence is about **reachability**; the wording reads wider, and in practice it is applied correctly |
+
+**A rule broader than its argument is only a defect when the extra scope
+forbids something valuable.** That is the test that separates these three
+from `normalize_address_key` and Entrata. All three cost nothing today; the
+other two blocked real work.
 
 ---
 
@@ -1108,7 +1247,17 @@ regression of this one. Do not spend further time reconciling it.
   literal paths rather than `url_for`; the route sweep understands this.
   Three routes are allowlisted: `fire_metrics.debug_refresh` and the two
   POST-minted token downloads.
-- **Do not start the Entrata parser seam.**
+- **Do not scope the Entrata parser seam until a real sample export
+  exists.** *Narrowed in Part 41; this line read "Do not start the Entrata
+  parser seam" — the prohibition without the condition or the reason.*
+  We have never seen an Entrata file, so every estimate would be
+  fabricated. **Oxford Pointe is the evidence: the file format decided the
+  answer, not the design** — an upload we assumed needed a new parser
+  turned out to need a loader branch and `xlrd`, and the existing ResMan
+  parser already returned all 152 units correctly. The exit criterion is a
+  sample file, and nothing else. Full statement in *Revised cost
+  estimates* below; **the two must say the same thing — see
+  [Rules stated twice](#a-rule-stated-twice-loses-its-condition-in-the-shorter-statement).**
 
 
 ---
@@ -1153,7 +1302,7 @@ above.
 | **Site DD rent-roll upload** | **Roughly halved.** The original 2–3 session estimate assumed a new parser. The existing ResMan parser already returns all 152 Oxford Pointe units correctly — it needs a **loader branch plus `xlrd`**. Remaining: ~1 session for the parser/Underwriting path, a second for Site DD seeding. The idempotent re-upload reconcile is the expensive part, not the parsing. |
 | **Site DD property header** | **Now small.** The `deals` columns landed in `07e746e`. What remains is a form block and a display block. |
 | **Site DD Lite** | **Small.** `status` exists, is validated, and is displayed in three templates. It is a query filter plus a UI control. It never shipped because nothing consumed the field, not because it was hard. |
-| **Entrata parser seam** | **Deliberately unscoped.** We have never seen an Entrata file, so every estimate would be fabricated. Do not scope it until a sample exists — the Oxford Pointe experience is the argument: the file format decided the answer, not the design. |
+| **Entrata parser seam** | **Deliberately unscoped.** We have never seen an Entrata file, so every estimate would be fabricated. Do not scope it until a sample exists — the Oxford Pointe experience is the argument: the file format decided the answer, not the design. **Also stated in *Open operational items* above; keep the two in step.** |
 | **`SOURCE_SITE_DD` cleanup** | Trivial: delete a constant and a counter branch, or implement the hand-off. |
 | **Manual freeform UI control** | Small, but unrequested. See the provisional threshold above. |
 
