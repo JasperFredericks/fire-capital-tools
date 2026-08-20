@@ -1,7 +1,43 @@
 # Work recorded on a choice item never reaches the budget
 
-**Investigation and proposal. No build. Written 2026-08-19 against master
-at `805bb9d`.**
+**Investigation and proposal. Written 2026-08-19 against master at
+`805bb9d`.**
+
+> ## FIXED — shipped 2026-08-19 in `8b8ba17`
+>
+> **Sections 1 to 4 describe a gap that is closed. Do not re-investigate
+> it.** The rest of this document is kept because the reasoning is still
+> the reason the code looks the way it does, and because sections 2 and 5
+> contain findings that are still open.
+>
+> | section | status |
+> |---|---|
+> | 1 — extent, both populations | fixed. Verified on production: a missing smoke alarm, a GFCI that does not trip and an absent HVAC each produce a priced line. |
+> | 2 — the two false honesty messages | fixed, and confirmed on deployed code rather than assumed repaired by the upstream change. |
+> | 2 — `to_capex_lines()` has no live callers | **STILL OPEN.** The fifth dead path. Queued. |
+> | 3 — GFCI present-but-not-tripping | was already handled; the stale note in the checklist that claimed otherwise is now corrected in the source. |
+> | 3 — presence details cannot reach the budget | fixed. This was the gap. |
+> | 4 — the rule | shipped as proposed: `uc.WORK_OPTIONS` keyed by option set, one `uc.needs_work()`. |
+> | 5 — neither existing sweep can catch this | unchanged, and now has a third sweep beside them: `tests/test_budget_reachability.py`. |
+> | 5 — widening the dead-reader glob | **STILL OPEN.** To be weighed on its own false-positive rate. Queued. |
+>
+> **Three things shipped that this document did not propose**, each a
+> consequence of admitting these findings rather than an extension of
+> scope:
+>
+> 1. **`detail` joined the grouping key.** Without it, a missing alarm and
+>    one needing replacement — same item, same room, same $260 — would
+>    have collapsed into "Smoke alarm ×2". Admitting the findings without
+>    this would have swapped a silent drop for a silent merge.
+> 2. **Lines carry a `state` field.** A choice finding has no condition,
+>    so both exports would have printed "—" beside a $260 request. It
+>    echoes the option label the inspector saw: "Present, not working",
+>    never `not_working`.
+> 3. **The capture screen's cost box opens on the same predicate.** Section
+>    2 noted the box stayed collapsed on a missing alarm, hiding even the
+>    manual override. The screen and the export now share one call, so
+>    they cannot disagree. `work_conditions` was consequently dead
+>    template context and was removed.
 
 `site_dd.py:1129` is the whole defect:
 
@@ -364,6 +400,39 @@ the way the other two sweeps do, and it would have failed on the day
 `0dbd3df` landed. It generalises past this bug: it also catches a future
 item priced but never added to a checklist, an item whose category maps
 to nothing, and a rate item with no route to a measurement.
+
+### The control that could not fail, and how it was caught
+
+*Added after building it.* The sweep shipped as
+`tests/test_budget_reachability.py`, and its positive control took two
+attempts. That is worth recording, because the first attempt is the
+failure mode the standing rule exists to prevent.
+
+The control was written as: **empty `ALARM_STATES`' entry in the registry
+and require the sweep to report `smoke_alarm` by name.** It did not. The
+sweep passed, reporting nothing dead, and a passing positive control is
+indistinguishable from a broken instrument.
+
+The reason was not a bug. `needs_work()` carries a third rule — a
+work-condition string found in `detail` is work whatever the registry
+says — which exists precisely because `ALARM_STATES` stores the literal
+value `replace`. So emptying the registry row did not make the alarm
+unreachable: rule 3 still admitted `replace`. **The instrument was
+correct and the probe was wrong.**
+
+The control now empties `GFCI_STATES` and requires the sweep to name
+`gfci`, which nothing can rescue: `with_condition=False`, so there is no
+condition to fall back on, and none of its values is a work-condition
+string. That is exactly the shape of the original bug.
+
+**The general lesson, which belongs beside "every comparator gets a
+positive control before it is trusted": a positive control has to probe a
+path with no redundant rescue.** A defence-in-depth design will quietly
+absorb a single removed guard, and the control will then certify an
+instrument nobody has actually tested. This one was caught only by
+running it and being surprised. The surviving behaviour was worth keeping
+either way and is now pinned by its own test, so rule 3 cannot be deleted
+later as redundant.
 
 **One extension to the existing dead-reader sweep is worth taking
 separately**, and is unrelated to the rule above: its scope is

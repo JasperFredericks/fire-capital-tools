@@ -330,5 +330,13 @@ Two genuine points of contact:
 
 And one thing that is **not** an interaction, stated because it looks
 like one: the `with_condition=False` capital-budget gap (the companion
-document) is independent of both. It would drop a missing smoke alarm in
-bed C exactly as it drops one in a conventional unit.
+document) was independent of both. It would have dropped a missing smoke
+alarm in bed C exactly as it dropped one in a conventional unit.
+
+*Updated 2026-08-19: that gap is fixed, shipped in `8b8ba17`. It changes
+nothing in this document.* The one place it touches is section 7's
+sequencing point, and it strengthens it: a per-bed turn budget wants
+"bed C: smoke alarm, missing — $260", and the line that produces is now
+reachable. Before the fix it was not, so per-bed budgeting would have
+inherited the gap on exactly the life-safety items a turn inspection
+exists to find.
